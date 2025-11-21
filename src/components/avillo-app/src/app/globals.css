@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+/* Avillo brand theme */
+
+
+/* Avillo Global Theme */
+:root {
+  --background: 214 49% 9%;
+  --foreground: 41 70% 92%;
+  --card: 214 45% 11%;
+  --card-foreground: 41 70% 92%;
+  --muted: 214 34% 16%;
+  --muted-foreground: 214 15% 68%;
+  --primary: 41 80% 85%;
+  --primary-foreground: 214 60% 10%;
+  --border: 214 35% 22%;
+  --input: 214 35% 22%;
+  --radius: 0.75rem;
+}
+
+
+/* Global background + text */
+
+body {
+  background: radial-gradient(
+      circle at top left,
+      rgba(26, 115, 232, 0.32),
+      #050814 60%
+    );
+  color: #ffffff;
+}
+
+/* Optional: make everything a bit smoother */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overscroll-behavior: none;
+}
+html {
+  scroll-behavior: smooth;
+}
+
+/* Very subtle noise texture used in layout.tsx */
+.noise-texture {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='2' numOctaves='1' stitchTiles='noStitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.9'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+

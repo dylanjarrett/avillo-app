@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* AVILLO THEME */
+:root {
+  --brand-bg: #020617;          /* page background */
+  --brand-bg-soft: #020617;     /* used for gradients */
+  --brand-card: #020617;
+  --brand-surface: #020617;
+  --brand-border-subtle: rgba(148, 163, 184, 0.18);
+  --brand-border-strong: rgba(148, 163, 184, 0.35);
+  --brand-text: #f9fafb;
+  --brand-text-muted: #9ca3af;
+  --brand-accent: #4f9fe3;
+  --brand-accent-soft: rgba(79, 159, 227, 0.18);
+}
+
+/* Global body styling */
+body {
+  @apply min-h-screen text-[var(--brand-text)] antialiased;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Inter", sans-serif;
+
+  /* subtle dark gradient */
+  background:
+    radial-gradient(circle at top left, rgba(79, 159, 227, 0.22), transparent 55%),
+    radial-gradient(circle at bottom right, rgba(56, 189, 248, 0.16), transparent 55%),
+    #020617;
+}
+
+/* Scrollbar a bit nicer (desktop only) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.6) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.6);
+  border-radius: 999px;
+}
