@@ -1,15 +1,35 @@
-export async function generateAI(payload: any) {
-  try {
-    const res = await fetch("/api/generate-intelligence", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+// src/lib/intelligence.ts
 
-    if (!res.ok) throw new Error("Failed to generate");
+export type EngineMode = "listing" | "seller" | "buyer";
 
-    return res.json();
-  } catch (err) {
-    console.error(err);
-    return { text: "Error generating output." };
+export interface GenerateAIArgs {
+  mode: EngineMode;
+  propertyNotes: string;
+  clientType: "general" | "buyer" | "seller";
+  tone: string;
+  length: "short" | "medium" | "long";
+  format: "bullets" | "narrative" | "hybrid";
+}
+
+export interface GenerateAIResult {
+  text: string;
+}
+
+export async function generateAI(
+  payload: GenerateAIArgs
+): Promise<GenerateAIResult> {
+  const res = await fetch("/api/generate-intelligence", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    console.error("generateAI error", await res.text());
+    throw new Error("Failed to generate AI output");
   }
+
+  return res.json();
 }

@@ -6,7 +6,6 @@ import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
-  // Get the logged-in user session
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.email) {
@@ -16,22 +15,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Parse request body safely
-  const body = await req.json().catch(() => ({} as any));
-  const { raw, processed, type } = body as {
+  const body = (await req.json().catch(() => ({}))) as {
     raw?: string;
     processed?: string;
     type?: string;
   };
 
+  const { raw, processed, type } = body;
+
   if (!processed) {
     return NextResponse.json(
-      { error: "Missing data to save." },
+      { error: "Missing processed AI text to save." },
       { status: 400 }
     );
   }
 
-  // Find the Prisma user by email
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
   });
@@ -43,7 +41,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Create CRM record tied to this user
+  // Prisma model is CRMRecord -> client accessor is cRMRecord
   const saved = await prisma.cRMRecord.create({
     data: {
       userId: user.id,
@@ -53,8 +51,11 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  return NextResponse.json({
-    success: true,
-    record: saved,
-  });
+  return NextResponse.json(
+    {
+      success: true,
+      record: saved,
+    },
+    { status: 201 }
+  );
 }

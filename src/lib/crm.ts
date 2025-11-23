@@ -1,37 +1,37 @@
 // src/lib/crm.ts
 
-export type CRMRecordType = "listing" | "seller" | "buyer" | "general";
-
-export interface PushToCRMInput {
-  raw: string;        // original notes / prompt
-  processed: string;  // AI output
-  type: CRMRecordType | string;
+export interface CRMRecord {
+  id: string;
+  processed: string;
+  type: string;
+  createdAt: string;
 }
 
-/**
- * Client-side helper to save an AI result into the CRM.
- * Called from the Intelligence page (Core engine / Seller Studio / Buyer Studio).
- */
-export async function pushToCRM(input: PushToCRMInput) {
+export async function saveToCRM(payload: {
+  raw?: string;
+  processed: string;
+  type?: string;
+}): Promise<void> {
   const res = await fetch("/api/crm/save", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(input),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
-    let message = "Failed to save to CRM.";
-    try {
-      const data = await res.json();
-      if (data?.error) message = data.error;
-    } catch {
-      // ignore JSON parse error, keep generic message
-    }
-    throw new Error(message);
+    console.error("saveToCRM error", await res.text());
+    throw new Error("Failed to save to CRM");
   }
-
-  return res.json(); // { success: true, record: ... }
 }
 
+export async function fetchRecentAI(limit = 10): Promise<CRMRecord[]> {
+  const res = await fetch(`/api/crm/recent?limit=${encodeURIComponent(limit)}`);
+
+  if (!res.ok) {
+    console.error("fetchRecentAI error", await res.text());
+    return [];
+  }
+
+  const data = await res.json();
+  return (data.records || []) as CRMRecord[];
+}
