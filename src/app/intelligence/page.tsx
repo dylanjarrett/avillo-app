@@ -1,93 +1,129 @@
 // src/app/intelligence/page.tsx
 "use client";
 
-import React, { useState } from "react";
-import PageHeader from "@/components/layout/page-header";
+import { useState } from "react";
+
 import ListingEngine from "@/components/intelligence/engines/ListingEngine";
 import SellerEngine from "@/components/intelligence/engines/SellerEngine";
 import BuyerEngine from "@/components/intelligence/engines/BuyerEngine";
-import OutputCanvas from "@/components/intelligence/OutputCanvas";
 import CRMHistory from "@/components/intelligence/CRMHistory";
 
-type EngineId = "listing" | "seller" | "buyer";
+type ActiveEngine = "listing" | "seller" | "buyer";
 
 export default function IntelligencePage() {
-  const [activeEngine, setActiveEngine] = useState<EngineId>("listing");
-  const [output, setOutput] = useState<string>(""); // <-- string only
-  const [loading, setLoading] = useState(false);
+  const [activeEngine, setActiveEngine] = useState<ActiveEngine>("listing");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [, setOutput] = useState<any | null>(null); // reserved for future use
 
   return (
-    <div className="space-y-8">
-      <PageHeader
-        eyebrow="INTELLIGENCE"
-        title="Avillo AI Command Center"
-        subtitle="Transform raw notes into listing packs, seller sequences, buyer briefs and CRM-ready intelligence."
-      />
+    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 pb-16 pt-10 lg:px-6">
+      {/* --------- Hero / Header --------- */}
+      <header>
+        <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
+          AI Tools for Real Estate
+        </p>
+        <h1 className="text-balance text-2xl font-semibold text-[var(--avillo-cream)] sm:text-3xl">
+          Avillo AI Command Center
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm text-[var(--avillo-cream-muted)]">
+          Transform raw notes into listing packs, seller scripts, buyer
+          follow-ups, and CRM-ready insights — all in one workspace.
+        </p>
 
-      {/* Engine switcher */}
-      <div className="inline-flex rounded-full border border-slate-700 bg-slate-900/80 p-1 text-xs">
-        {(["listing", "seller", "buyer"] as EngineId[]).map((engine) => {
-          const label =
-            engine === "listing"
-              ? "Listing Engine"
-              : engine === "seller"
-              ? "Seller Engine"
-              : "Buyer Engine";
-
-          const isActive = activeEngine === engine;
-
-          return (
-            <button
-              key={engine}
-              type="button"
-              onClick={() => {
-                setActiveEngine(engine);
-                setOutput(""); // clear when switching engines
-              }}
-              className={[
-                "px-4 py-1.5 rounded-full transition-all",
-                isActive
-                  ? "bg-amber-100 text-slate-900 font-medium shadow"
-                  : "text-slate-300 hover:bg-slate-800",
-              ].join(" ")}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Two-column: engine input + output */}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] items-start">
-        <div>
-          {activeEngine === "listing" && (
-            <ListingEngine
-              loading={loading}
-              setLoading={setLoading}
-              setOutput={setOutput}
-            />
-          )}
-          {activeEngine === "seller" && (
-            <SellerEngine
-              loading={loading}
-              setLoading={setLoading}
-              setOutput={setOutput}
-            />
-          )}
-          {activeEngine === "buyer" && (
-            <BuyerEngine
-              loading={loading}
-              setLoading={setLoading}
-              setOutput={setOutput}
-            />
-          )}
+        {/* Engine selector pills */}
+        <div className="mt-5 inline-flex flex-wrap gap-2 text-xs avillo-pill-group">
+          <EnginePill
+            label="Listing Engine"
+            description="MLS, social, emails, talking points."
+            active={activeEngine === "listing"}
+            onClick={() => setActiveEngine("listing")}
+          />
+          <EnginePill
+            label="Seller Engine"
+            description="Prelistings, presentations, objections."
+            active={activeEngine === "seller"}
+            onClick={() => setActiveEngine("seller")}
+          />
+          <EnginePill
+            label="Buyer Engine"
+            description="Tours, summaries, offers, nurture."
+            active={activeEngine === "buyer"}
+            onClick={() => setActiveEngine("buyer")}
+          />
         </div>
+      </header>
 
-        <OutputCanvas loading={loading} output={output} />
-      </div>
+      {/* --------- Error bar --------- */}
+      {error && (
+        <div className="avillo-error-bar">
+          {error}
+        </div>
+      )}
 
-      {/* CRM history below */}
+      {/* --------- Engines --------- */}
+      <section className="grid gap-7 lg:grid-cols-1">
+        {activeEngine === "listing" && (
+          <ListingEngine
+            isGenerating={isGenerating}
+            setIsGenerating={setIsGenerating}
+            setOutput={setOutput}
+            setError={setError}
+          />
+        )}
+
+        {activeEngine === "seller" && (
+          <SellerEngine
+            isGenerating={isGenerating}
+            setIsGenerating={setIsGenerating}
+            setOutput={setOutput}
+            setError={setError}
+          />
+        )}
+
+        {activeEngine === "buyer" && (
+          <BuyerEngine
+            isGenerating={isGenerating}
+            setIsGenerating={setIsGenerating}
+            setOutput={setOutput}
+            setError={setError}
+          />
+        )}
+      </section>
+
+      {/* --------- CRM History --------- */}
       <CRMHistory />
-    </div>
+    </main>
+  );
+}
+
+/* ----------------------
+ * Small sub-component
+ * ---------------------*/
+
+type EnginePillProps = {
+  label: string;
+  description: string;
+  active?: boolean;
+  onClick: () => void;
+};
+
+function EnginePill({ label, description, active, onClick }: EnginePillProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "avillo-pill min-w-[170px] justify-between sm:justify-start " +
+        (active ? " avillo-pill--active" : "")
+      }
+    >
+      <span className="flex flex-col text-left">
+        <span className="text-[11px] font-medium">{label}</span>
+        <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+          {description}
+        </span>
+      </span>
+    </button>
   );
 }

@@ -1,76 +1,131 @@
 // src/components/intelligence/CRMHistory.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { fetchRecentAI, type CRMRecord } from "@/lib/crm";
+import { useEffect, useState } from "react";
+
+type CrmEntry = {
+  id: string;
+  createdAt: string;
+  engine: "listing" | "seller" | "buyer" | string;
+  title?: string;
+  snippet?: string;
+};
 
 export default function CRMHistory() {
-  const [records, setRecords] = useState<CRMRecord[]>([]);
+  const [entries, setEntries] = useState<CrmEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
-      setLoading(true);
-      const res = await fetchRecentAI(10);
-      if (!cancelled) {
-        setRecords(res);
-        setLoading(false);
+    async function loadRecent() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const res = await fetch("/api/crm/recent", {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+
+        if (!res.ok) {
+          // 401s etc. just show a soft message, don't break the page
+          const data = await res.json().catch(() => null);
+          if (!cancelled) {
+            setError(data?.error || "Could not load recent CRM activity.");
+            setEntries([]);
+          }
+          return;
+        }
+
+        const data = (await res.json()) as { entries?: CrmEntry[] };
+        if (!cancelled) {
+          setEntries(data?.entries ?? []);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          console.error("CRM history error", err);
+          setError("Could not load recent CRM activity.");
+          setEntries([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     }
 
-    load();
-
-    const handleFocus = () => load();
-    window.addEventListener("focus", handleFocus);
-
+    loadRecent();
     return () => {
       cancelled = true;
-      window.removeEventListener("focus", handleFocus);
     };
   }, []);
 
   return (
-    <div className="bg-slate-950/80 rounded-2xl border border-slate-700/70 shadow-xl p-6 mt-4">
-      <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/70 uppercase mb-1">
-        CRM history
-      </p>
-      <h2 className="text-lg font-semibold text-slate-50">Recent AI saves</h2>
-      <p className="mt-1 text-[11px] text-slate-400 max-w-xl">
-        Snapshots of what Avillo has pushed into your CRM recently. This will
-        grow as you run more workflows.
-      </p>
+    <section className="mt-10">
+      <div className="avillo-card p-5">
+        <header className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
+              CRM History
+            </p>
+            <h3 className="text-sm font-semibold text-[var(--avillo-cream)]">
+              Saved Outputs
+            </h3>
+          </div>
+        </header>
 
-      {loading ? (
-        <p className="mt-4 text-xs text-slate-400 animate-pulse">
-          Loading recent entries…
-        </p>
-      ) : records.length === 0 ? (
-        <p className="mt-4 text-xs text-slate-400">
-          Nothing saved yet. Generate an output and hit{" "}
-          <span className="font-semibold">Save to CRM</span> to log it here.
-        </p>
-      ) : (
-        <ul className="mt-4 space-y-3 text-xs text-slate-200">
-          {records.map((r) => (
-            <li
-              key={r.id}
-              className="rounded-lg border border-slate-700 bg-slate-900/60 p-3"
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase tracking-[0.16em] text-amber-100/70">
-                  {r.type || "general"}
+        {loading && (
+          <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+            Loading your recent AI-generated CRM entries…
+          </p>
+        )}
+
+        {!loading && error && (
+          <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+            {error} You can still generate new packs above.
+          </p>
+        )}
+
+        {!loading && !error && entries.length === 0 && (
+          <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+            No recent CRM data. As you save listing packs, seller scripts, and
+            buyer follow-ups, they’ll show up here.
+          </p>
+        )}
+
+        {!loading && !error && entries.length > 0 && (
+          <ul className="mt-2 space-y-3 text-xs">
+            {entries.map((entry) => (
+              <li
+                key={entry.id}
+                className="flex items-start justify-between gap-3 rounded-xl border border-[var(--avillo-border-subtle)] bg-[rgba(7,10,22,0.9)] px-3 py-2.5"
+              >
+                <div>
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-medium text-[var(--avillo-cream)]">
+                      {entry.title || "Saved AI output"}
+                    </span>
+                    <span className="rounded-full border border-[var(--avillo-border-subtle)] px-2 py-[2px] text-[9px] uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                      {entry.engine}
+                    </span>
+                  </div>
+                  {entry.snippet && (
+                    <p className="text-[11px] text-[var(--avillo-cream-muted)] line-clamp-2">
+                      {entry.snippet}
+                    </p>
+                  )}
+                </div>
+                <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+                  {entry.createdAt
+                    ? new Date(entry.createdAt).toLocaleDateString()
+                    : ""}
                 </span>
-                <span className="text-[10px] text-slate-500">
-                  {new Date(r.createdAt).toLocaleString()}
-                </span>
-              </div>
-              <p className="line-clamp-3 whitespace-pre-wrap">{r.processed}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
+

@@ -1,35 +1,98 @@
 // src/lib/intelligence.ts
 
-export type EngineMode = "listing" | "seller" | "buyer";
+// -----------------------------
+// Type Definitions
+// -----------------------------
 
-export interface GenerateAIArgs {
-  mode: EngineMode;
-  propertyNotes: string;
-  clientType: "general" | "buyer" | "seller";
-  tone: string;
-  length: "short" | "medium" | "long";
-  format: "bullets" | "narrative" | "hybrid";
-}
+// Tabs used by the Listing Engine
+export type ListingTabId =
+  | "listing"
+  | "social"
+  | "emails"
+  | "talking"
+  | "insights"
+  | "pitch";
 
-export interface GenerateAIResult {
-  text: string;
-}
+// Listing Intelligence Pack
+export type IntelligencePack = {
+  listing?: {
+    long?: string;
+    short?: string;
+    bullets?: string[];
+  };
+  social?: {
+    instagram_caption?: string;
+    facebook_post?: string;
+    linkedin_post?: string;
+    tiktok_hook?: string;
+    tiktok_script?: string;
+  };
+  emails?: {
+    buyer_email?: string;
+    seller_email?: string;
+  };
+  talking_points?: {
+    highlights?: string[];
+    buyer_concerns?: string[];
+    responses?: string[];
+  };
+  marketability?: {
+    score_1_to_10?: number;
+    summary?: string;
+    improvement_suggestions?: string[];
+  };
+  open_house_pitch?: string;
+};
 
-export async function generateAI(
-  payload: GenerateAIArgs
-): Promise<GenerateAIResult> {
-  const res = await fetch("/api/generate-intelligence", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+// Seller Engine Types
+export type SellerToolId = "prelisting" | "presentation" | "objection";
 
-  if (!res.ok) {
-    console.error("generateAI error", await res.text());
-    throw new Error("Failed to generate AI output");
-  }
+export type SellerPack = {
+  prelisting?: {
+    email1?: string;
+    email2?: string;
+    email3?: string;
+  };
+  presentation?: {
+    opening?: string;
+    questions?: string;
+    story?: string;
+    pricing?: string;
+    marketing?: string;
+    process?: string;
+    value?: string;
+    nextSteps?: string;
+  };
+  objection?: {
+    talkTrack?: string;
+    smsReply?: string;
+    emailFollowUp?: string;
+  };
+};
 
-  return res.json();
-}
+// Buyer Engine Types
+export type BuyerToolId = "search" | "tour" | "offer";
+
+export type BuyerPack = {
+  search?: {
+    summary?: string;
+    nextSteps?: string;
+    smsFollowUp?: string;
+  };
+  tour?: {
+    recapEmail?: string;
+    highlights?: string;
+    concerns?: string;
+  };
+  offer?: {
+    offerEmail?: string;
+    strategySummary?: string;
+    negotiationPoints?: string;
+  };
+};
+
+// Unified Output Type for Any Engine
+export type AvilloEngineOutput =
+  | { engine: "listing"; pack: IntelligencePack }
+  | { engine: "seller"; pack: SellerPack }
+  | { engine: "buyer"; pack: BuyerPack };

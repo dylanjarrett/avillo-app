@@ -1,143 +1,133 @@
-// src/components/intelligence/engines/ListingEngine.tsx
 "use client";
 
-import React, { useState } from "react";
-import { generateAI } from "@/lib/intelligence";
+import { useState } from "react";
+import type { IntelligencePack, ListingTabId } from "@/lib/intelligence";
+import { ListingOutputCanvas } from "@/components/intelligence/OutputCard";
 
-interface ListingEngineProps {
-  loading: boolean;
-  setLoading: (v: boolean) => void;
-  setOutput: (v: string) => void;
-}
+type ListingEngineProps = {
+  isGenerating: boolean;
+  setIsGenerating: (value: boolean) => void;
+  setOutput: (pack: IntelligencePack | null) => void;
+  setError: (message: string | null) => void;
+};
 
 export default function ListingEngine({
-  loading,
-  setLoading,
+  isGenerating,
+  setIsGenerating,
   setOutput,
+  setError,
 }: ListingEngineProps) {
-  const [notes, setNotes] = useState("");
-  const [tone, setTone] = useState("professional");
-  const [length, setLength] = useState<"short" | "medium" | "long">("medium");
-  const [format, setFormat] =
-    useState<"bullets" | "narrative" | "hybrid">("hybrid");
+  const [propertyText, setPropertyText] = useState("");
+  const [activeTab, setActiveTab] = useState<ListingTabId>("listing");
+  const [pack, setPack] = useState<IntelligencePack | null>(null);
+  const [savingCrm, setSavingCrm] = useState(false);
 
+  // -------- Generate listing pack via API --------
   async function handleGenerate() {
-    if (!notes.trim()) {
-      alert("Paste your listing notes first.");
+    if (!propertyText.trim()) {
+      setError("Please add property notes first.");
       return;
     }
 
-    setLoading(true);
-    setOutput("");
+    setIsGenerating(true);
+    setError(null);
 
     try {
-      const res = await generateAI({
-        mode: "listing",
-        propertyNotes: notes,
-        clientType: "general",
-        tone,
-        length,
-        format,
+      const res = await fetch("/api/generate-intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          engine: "listing",
+          notes: propertyText,
+        }),
       });
 
-      setOutput(
-        res.text ||
-          "No output generated. Try tweaking your notes or settings and run again."
-      );
-    } catch (err) {
-      console.error(err);
-      setOutput("Something went wrong generating this listing pack.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to generate listing pack.");
+      }
+
+      const data = await res.json();
+      const nextPack = (data.pack ?? data) as IntelligencePack;
+
+      setPack(nextPack);
+      setOutput(nextPack);
+    } catch (err: any) {
+      console.error("Failed to generate listing pack", err);
+      setError(err?.message || "Something went wrong while generating.");
     } finally {
-      setLoading(false);
+      setIsGenerating(false);
+    }
+  }
+
+  // -------- Save to CRM --------
+  async function handleSaveToCrm() {
+    if (!pack) return;
+
+    setSavingCrm(true);
+    try {
+      await fetch("/api/crm/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          engine: "listing",
+          payload: pack,
+        }),
+      });
+      // In the future you can swap this for a toast
+    } catch (err) {
+      console.error("Failed to save listing pack to CRM", err);
+    } finally {
+      setSavingCrm(false);
     }
   }
 
   return (
-    <div className="space-y-5">
-      <div>
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/70 uppercase">
-          Listing engine
-        </p>
-        <h2 className="text-lg font-semibold text-slate-50">
-          Turn raw property notes into a full listing pack
+    <section className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.5fr)]">
+      {/* ---------- LEFT: INPUT CARD ---------- */}
+      <div className="avillo-card p-5">
+        <h2 className="mb-1 text-sm font-semibold text-[var(--avillo-cream)]">
+          Listing Engine
         </h2>
-        <p className="mt-1 text-xs text-slate-400">
-          Drop in your messy notes or MLS draft. Avillo will generate MLS copy,
-          bullets, social captions, emails, talking points and an open-house
-          pitch.
+        <p className="mb-4 text-xs text-[var(--avillo-cream-muted)]">
+          Turn messy property notes into a full MLS + social + email + insights
+          pack.
         </p>
-      </div>
 
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-slate-200">Property notes</p>
-        <p className="text-[11px] text-slate-400">
-          Address, beds/baths, upgrades, neighborhood, views, floor plan, what
-          makes it special…
-        </p>
+        <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+          Property notes
+        </label>
+
         <textarea
-          rows={7}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          className="w-full rounded-xl border border-slate-700 bg-slate-900/40 p-3 text-sm text-slate-100 shadow-inner focus:outline-none focus:ring-2 focus:ring-amber-200/40 focus:border-amber-100"
+          value={propertyText}
+          onChange={(e) => setPropertyText(e.target.value)}
+          placeholder="3 Bed • 3 Bath • San Diego — upgrades, lot size, schools, neighborhood vibes…"
+          className="avillo-textarea mb-4 h-44 w-full"
         />
+
+        <button
+          type="button"
+          onClick={handleGenerate}
+          disabled={isGenerating}
+          className="avillo-btn mt-2 flex w-full items-center justify-center disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isGenerating ? "Generating listing pack…" : "Generate Listing Pack"}
+        </button>
+
+        <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+          Outputs stay in this session only. Paste them directly into your CRM,
+          emails, and MLS.
+        </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
-        <div>
-          <label className="text-xs text-slate-400">Tone</label>
-          <select
-            value={tone}
-            onChange={(e) => setTone(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/60 p-2 text-sm text-slate-100"
-          >
-            <option value="professional">Professional</option>
-            <option value="luxury">Luxury</option>
-            <option value="friendly">Friendly</option>
-            <option value="casual">Casual</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="text-xs text-slate-400">Depth</label>
-          <select
-            value={length}
-            onChange={(e) =>
-              setLength(e.target.value as "short" | "medium" | "long")
-            }
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/60 p-2 text-sm text-slate-100"
-          >
-            <option value="short">Short</option>
-            <option value="medium">Medium (recommended)</option>
-            <option value="long">Long</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="text-xs text-slate-400">Format</label>
-          <select
-            value={format}
-            onChange={(e) =>
-              setFormat(
-                e.target.value as "bullets" | "narrative" | "hybrid"
-              )
-            }
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900/60 p-2 text-sm text-slate-100"
-          >
-            <option value="bullets">Bullets</option>
-            <option value="narrative">Narrative</option>
-            <option value="hybrid">Hybrid (best)</option>
-          </select>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={handleGenerate}
-        disabled={loading}
-        className="mt-2 inline-flex items-center justify-center rounded-xl border border-amber-200/60 bg-amber-100/90 px-4 py-2 text-sm font-semibold text-slate-900 shadow hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {loading ? "Generating…" : "Generate listing pack"}
-      </button>
-    </div>
+      {/* ---------- RIGHT: OUTPUT CANVAS (moved to OutputCard.tsx) ---------- */}
+      <ListingOutputCanvas
+        pack={pack}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        onSaveToCrm={handleSaveToCrm}
+        savingCrm={savingCrm}
+      />
+    </section>
   );
 }
