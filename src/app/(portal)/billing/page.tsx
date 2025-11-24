@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from "react";
@@ -7,12 +8,15 @@ type BillingPeriod = "monthly" | "annual";
 
 export default function BillingPage() {
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
-  const [loading, setLoading] = useState<boolean>(false);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
+
+  const isAnnual = billingPeriod === "annual";
 
   async function startCheckout() {
-    if (loading) return;
+    if (checkoutLoading) return;
     try {
-      setLoading(true);
+      setCheckoutLoading(true);
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
@@ -31,11 +35,33 @@ export default function BillingPage() {
       console.error("Checkout error", err);
       alert("Unable to start checkout.");
     } finally {
-      setLoading(false);
+      setCheckoutLoading(false);
     }
   }
 
-  const isAnnual = billingPeriod === "annual";
+  async function openBillingPortal() {
+    if (portalLoading) return;
+    try {
+      setPortalLoading(true);
+
+      const res = await fetch("/api/stripe/portal", {
+        method: "POST",
+      });
+
+      const data = await res.json();
+      if (res.ok && data?.url) {
+        window.location.href = data.url;
+        return;
+      }
+
+      alert(data?.error ?? "Unable to open billing portal.");
+    } catch (err) {
+      console.error("Billing portal error", err);
+      alert("Unable to open billing portal.");
+    } finally {
+      setPortalLoading(false);
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -63,14 +89,25 @@ export default function BillingPage() {
               adds all intelligence engines and CRM.
             </p>
           </div>
-          <div className="text-[11px] text-slate-400/90">
-            Need help with billing?{" "}
-            <a
-              href="mailto:billing@avillo.io"
-              className="font-semibold text-amber-100 underline-offset-2 hover:underline"
+
+          <div className="flex flex-col items-start gap-2 text-[11px] md:items-end">
+            <p className="text-slate-400/90">
+              Need help with billing?{" "}
+              <a
+                href="mailto:billing@avillo.io"
+                className="font-semibold text-amber-100 underline-offset-2 hover:underline"
+              >
+                billing@avillo.io
+              </a>
+            </p>
+            <button
+              type="button"
+              onClick={openBillingPortal}
+              disabled={portalLoading}
+              className="inline-flex items-center rounded-full border border-slate-600 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 transition disabled:cursor-not-allowed disabled:opacity-70"
             >
-              billing@avillo.io
-            </a>
+              {portalLoading ? "Opening billing portal…" : "Manage billing"}
+            </button>
           </div>
         </div>
       </div>
@@ -185,10 +222,10 @@ export default function BillingPage() {
 
           <button
             onClick={startCheckout}
-            disabled={loading}
+            disabled={checkoutLoading}
             className="mt-6 w-full rounded-full border border-amber-200/70 bg-amber-50/10 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-50/20 transition disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {loading
+            {checkoutLoading
               ? "Starting checkout…"
               : isAnnual
               ? "Subscribe Yearly (save 2 months)"
@@ -223,7 +260,7 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* FAQ Card */}
+      {/* FAQ Card (unchanged) */}
       <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-6 text-xs text-slate-200/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
         <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
           Billing FAQ

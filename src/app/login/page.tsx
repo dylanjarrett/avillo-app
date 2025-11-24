@@ -10,11 +10,7 @@ function GoogleIcon() {
   // Inline SVG so we don't rely on a /google-logo.png file
   return (
     <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-sm bg-white">
-      <svg
-        viewBox="0 0 48 48"
-        aria-hidden="true"
-        className="h-4 w-4"
-      >
+      <svg viewBox="0 0 48 48" aria-hidden="true" className="h-4 w-4">
         <path
           fill="#EA4335"
           d="M24 9.5c3.54 0 6 1.54 7.38 2.84l5.4-5.28C33.9 3.36 29.47 1.5 24 1.5 14.82 1.5 7.06 6.98 4.08 14.86l6.62 5.14C12.27 14.58 17.62 9.5 24 9.5z"
@@ -117,17 +113,10 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <div className="mb-1 flex items-center justify-between">
-                <label className="text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                  Password
-                </label>
-                <Link
-                  href="/forgot-password"
-                  className="text-[10px] font-medium text-[var(--avillo-cream-soft)] hover:text-[var(--avillo-cream)]"
-                >
-                  Forgot password?
-                </Link>
-              </div>
+              {/* Label + input first so tab goes Email -> Password input */}
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                Password
+              </label>
               <input
                 type="password"
                 autoComplete="current-password"
@@ -135,6 +124,15 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="avillo-input w-full"
               />
+              {/* Forgot password comes AFTER input, but stays visually aligned right */}
+              <div className="mt-1 flex justify-end">
+                <Link
+                  href="/forgot-password"
+                  className="text-[10px] font-medium text-[var(--avillo-cream-soft)] hover:text-[var(--avillo-cream)]"
+                >
+                  Forgot password?
+                </Link>
+              </div>
             </div>
 
             <button
