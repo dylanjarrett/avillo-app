@@ -1,558 +1,283 @@
-// src/app/(portal)/billing/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useState } from "react";
 import PageHeader from "@/components/layout/page-header";
 
 type BillingPeriod = "monthly" | "annual";
 
 export default function BillingPage() {
-  const { data: session, status } = useSession();
-  const router = useRouter();
-  const [billingPeriod, setBillingPeriod] =
-    useState<BillingPeriod>("monthly");
-  const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
+  const [loading, setLoading] = useState<boolean>(false);
 
-  // Redirect unauthenticated users to login
-  useEffect(() => {
-    if (status === "unauthenticated") {
-      router.push("/login");
-    }
-  }, [status, router]);
-
-  if (status === "loading") {
-    return (
-      <div className="flex h-[60vh] items-center justify-center text-sm text-slate-400">
-        Loading billing…
-      </div>
-    );
-  }
-
-  if (!session) return null;
-
-  const firstName =
-    session.user?.name?.split(" ")[0] ??
-    session.user?.email?.split("@")[0] ??
-    "there";
-
-  // --- Pricing model (can tweak later) ---
-  const pricing = {
-    founding: {
-      monthly: "$0",
-      annual: "$0",
-    },
-    pro: {
-      monthly: "$79",
-      annual: "$790", // ~2 months free
-    },
-  };
-
-  const isAnnual = billingPeriod === "annual";
-
-  // --- Stripe checkout handler (Pro plan) ---
-  async function handleCheckout(plan: "pro", period: BillingPeriod) {
+  async function startCheckout() {
+    if (loading) return;
     try {
-      setIsCheckingOut(true);
+      setLoading(true);
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan, period }),
+        body: JSON.stringify({ plan: "pro", period: billingPeriod }),
       });
 
       const data = await res.json();
-
-      if (!res.ok || !data?.url) {
-        console.error("Checkout error:", data);
-        alert("Something went wrong starting checkout. Please try again.");
+      if (data?.url) {
+        window.location.href = data.url;
         return;
       }
 
-      window.location.href = data.url as string;
+      alert(data?.error ?? "Unable to start checkout.");
     } catch (err) {
-      console.error("Checkout failed:", err);
-      alert("Unable to start checkout right now. Please try again.");
+      console.error("Checkout error", err);
+      alert("Unable to start checkout.");
     } finally {
-      setIsCheckingOut(false);
+      setLoading(false);
     }
   }
 
+  const isAnnual = billingPeriod === "annual";
+
   return (
-    <div className="space-y-8 pb-16">
-      {/* Shared Avillo header */}
+    <div className="space-y-8">
       <PageHeader
-        eyebrow="Billing & plans"
-        title={`Hey ${firstName}, here’s your Avillo plan.`}
-        subtitle="Review your current plan, track your usage, and upgrade when you're ready for deeper automation across your listings, clients, and CRM."
-        actions={
-          <div className="flex gap-3">
-            <Link
-              href="/dashboard"
-              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-[var(--brand-text)] hover:bg-white/10"
-            >
-              Back to dashboard
-            </Link>
-            <a
-              href="mailto:sales@avillo.io"
-              className="rounded-full border border-white/15 px-4 py-2 text-xs font-semibold text-[var(--brand-text)] hover:bg-white/5"
-            >
-              Contact Sales
-            </a>
-          </div>
-        }
+        eyebrow="BILLING"
+        title="Choose your Avillo plan"
+        subtitle="Upgrade your plan to unlock more automation, intelligence, and CRM capabilities."
       />
 
-      {/* Top: current plan + usage overview */}
-      <section className="grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)]">
-        {/* Current plan card */}
-        <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-5 shadow-[0_18px_45px_rgba(0,0,0,0.55)]">
-          <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
-            <div className="space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                Current plan
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-semibold text-[var(--brand-text)]">
-                  Founding Agent (Beta)
-                </h2>
-                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300">
-                  Active
-                </span>
-              </div>
-              <p className="text-xs text-slate-300">
-                You’re in the early access cohort shaping Avillo into the AI
-                operating system for real estate. Your rate is locked for this
-                beta phase.
-              </p>
-            </div>
-
-            <div className="text-right text-xs">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                Effective rate
-              </p>
-              <p className="mt-1 text-xl font-semibold text-[var(--brand-text)]">
-                {pricing.founding[billingPeriod]}
-              </p>
-              <p className="mt-1 text-[11px] text-slate-400">
-                {billingPeriod === "monthly"
-                  ? "Founding phase · billed monthly"
-                  : "Founding phase · annual equivalent"}
-              </p>
-              <a
-                href="mailto:billing@avillo.io"
-                className="mt-3 inline-flex items-center justify-center rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-[11px] font-medium text-[var(--brand-text)] hover:bg-white/10"
-              >
-                Contact Billing
-              </a>
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-4 text-[11px] text-slate-200 md:grid-cols-3">
-            <PlanFeatureGroup
-              title="Listing Engine"
-              items={[
-                "AI listing copy tuned for MLS",
-                "Feature bullets + short descriptions",
-                "Open house + talking point prompts",
-              ]}
-            />
-            <PlanFeatureGroup
-              title="Designed for launch"
-              items={[
-                "Perfect for your first Avillo workflows",
-                "Built for solo agents getting started with AI",
-                "Keeps billing simple during beta",
-              ]}
-            />
-            <PlanFeatureGroup
-              title="Founder perks"
-              items={[
-                "Locked founding-agent pricing",
-                "Priority feedback channel",
-                "Early access to new modules",
-              ]}
-            />
-          </div>
-        </div>
-
-        {/* Usage overview */}
-        <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.01] px-6 py-5 shadow-[0_18px_45px_rgba(0,0,0,0.6)]">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-            Usage overview
-          </p>
-          <p className="mt-2 text-xs text-slate-300">
-            These numbers will update automatically as you run Listing,
-            Seller, and Buyer engines and start saving results to your CRM.
-          </p>
-
-          <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            <MetricCard
-              label="Workflows generated"
-              value="0"
-              helper="AI packs created this billing period."
-            />
-            <MetricCard
-              label="Est. hours saved"
-              value="0.0"
-              helper="Based on ~30 minutes saved per workflow."
-            />
-            <MetricCard
-              label="Value created"
-              value="$0"
-              helper="Assuming an $85/hr effective agent rate."
-            />
-          </div>
-
-          <div className="mt-5 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-[11px] text-slate-100">
-            <p className="font-semibold">Getting started tip</p>
-            <p className="mt-1 text-slate-200">
-              Start with a live or upcoming listing. Drop your property
-              notes into the Listing Engine, generate the full pack, then
-              paste directly into your MLS, email, and social templates.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Plans + toggle */}
-      <section className="space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      {/* Current plan / status */}
+      <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 text-xs text-slate-200/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-              Plans
+            <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
+              Current plan
             </p>
-            <h2 className="mt-1 text-lg font-semibold text-[var(--brand-text)]">
-              Scale from your first AI listing to a fully automated command
-              center.
-            </h2>
-            <p className="mt-1 max-w-xl text-xs text-slate-300">
-              Start on the Founding Agent plan with the Listing Engine. When
-              you’re ready, upgrade to Avillo Pro to unlock Buyer & Seller
-              engines, CRM history, and deeper workflow automation.
+            <p className="mt-1 text-sm font-semibold text-slate-50">
+              Founding Agent
+              <span className="ml-2 inline-flex items-center rounded-full bg-emerald-400/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                Active
+              </span>
             </p>
-          </div>
-
-          {/* Billing toggle */}
-          <div className="flex flex-col items-start gap-2 sm:items-end">
-            <div className="inline-flex rounded-full bg-white/5 p-1 text-xs">
-              <button
-                type="button"
-                onClick={() => setBillingPeriod("monthly")}
-                className={`rounded-full px-3 py-1.5 transition ${
-                  billingPeriod === "monthly"
-                    ? "bg-white text-slate-900 shadow-[0_0_16px_rgba(255,255,255,0.35)]"
-                    : "text-slate-200"
-                }`}
-              >
-                Monthly
-              </button>
-              <button
-                type="button"
-                onClick={() => setBillingPeriod("annual")}
-                className={`rounded-full px-3 py-1.5 transition ${
-                  billingPeriod === "annual"
-                    ? "bg-white text-slate-900 shadow-[0_0_20px_rgba(52,211,153,0.55)]"
-                    : "text-slate-200"
-                }`}
-              >
-                Annual{" "}
-                <span className="ml-1 text-[10px] font-semibold text-emerald-400">
-                  Save ~2 months
-                </span>
-              </button>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              {isAnnual
-                ? "Billed yearly · best for agents committed to Avillo long-term."
-                : "Billed month-to-month · change or cancel before public launch."}
+            <p className="mt-1 text-[11px] text-slate-400/90">
+              You’re part of the early access cohort. Upgrading to Avillo Pro
+              adds all intelligence engines and CRM.
             </p>
           </div>
-        </div>
-
-        {/* Plan cards */}
-        <div className="grid gap-5 lg:grid-cols-2">
-          {/* Founding Agent plan */}
-          <PlanCard
-            label="Current plan"
-            name="Founding Agent"
-            badge="Beta cohort"
-            highlight="Perfect for getting started with the Listing Engine."
-            price={pricing.founding[billingPeriod]}
-            period={billingPeriod}
-            bulletGroups={[
-              {
-                title: "You get",
-                items: [
-                  "Listing Engine for MLS + social-ready copy",
-                  "Feature bullets, short descriptions, and open house notes",
-                  "Basic session history for recent listing packs",
-                ],
-              },
-              {
-                title: "Ideal for",
-                items: [
-                  "Solo agents experimenting with AI workflows",
-                  "Preparing listing copy faster without changing your process",
-                ],
-              },
-            ]}
-            ctaLabel="Your current plan"
-            ctaVariant="outline"
-            ctaDisabled
-          />
-
-          {/* Avillo Pro plan */}
-          <PlanCard
-            label="Upgrade"
-            name="Avillo Pro"
-            badge="Most popular (preview)"
-            highlight="Unlock the full Avillo Intelligence suite and CRM."
-            price={pricing.pro[billingPeriod]}
-            period={billingPeriod}
-            bulletGroups={[
-              {
-                title: "All Intelligence engines",
-                items: [
-                  "Listing Engine · MLS, social, email, talking points",
-                  "Seller Engine · prep, objections, follow-ups, pricing scripts",
-                  "Buyer Engine · tours, offers, nurture sequences, recaps",
-                ],
-              },
-              {
-                title: "CRM & history",
-                items: [
-                  "Save AI outputs directly into Avillo CRM",
-                  "Searchable history of past packs & campaigns",
-                  "Stronger pipeline insights across listings and clients",
-                ],
-              },
-            ]}
-            ctaLabel={
-              billingPeriod === "monthly"
-                ? "Upgrade to Avillo Pro – monthly"
-                : "Upgrade to Avillo Pro – annual"
-            }
-            ctaVariant="primary"
-            ctaOnClick={() => handleCheckout("pro", billingPeriod)}
-            ctaDisabled={isCheckingOut}
-          />
-        </div>
-      </section>
-
-      {/* Support + data footer */}
-      <section className="grid gap-5 lg:grid-cols-2">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-5 text-xs text-slate-200">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-            Billing & data
-          </p>
-          <h3 className="mt-2 text-sm font-semibold text-[var(--brand-text)]">
-            Simple billing. Clear rules around your data.
-          </h3>
-          <div className="mt-4 space-y-3">
-            <p className="text-[11px] text-slate-300">
-              When we move out of beta, you’ll get clear notice and a chance
-              to lock in founding-agent pricing. Billing runs through Stripe,
-              and you’ll be able to download invoices and receipts directly
-              from this page.
-            </p>
-            <p className="text-[11px] text-slate-300">
-              Your prompts, outputs, and client data are used only to power
-              your Avillo workspace. We don’t sell your data, and we don’t
-              use your content to train public models.
-            </p>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-3 text-[11px]">
+          <div className="text-[11px] text-slate-400/90">
+            Need help with billing?{" "}
             <a
               href="mailto:billing@avillo.io"
-              className="rounded-full border border-white/15 bg-white/5 px-3 py-1 hover:bg-white/10"
+              className="font-semibold text-amber-100 underline-offset-2 hover:underline"
             >
-              Billing questions · billing@avillo.io
-            </a>
-            <a
-              href="mailto:support@avillo.io"
-              className="rounded-full border border-white/15 bg-white/5 px-3 py-1 hover:bg-white/10"
-            >
-              Support · support@avillo.io
+              billing@avillo.io
             </a>
           </div>
         </div>
+      </div>
 
-        <div className="rounded-2xl border border-emerald-500/40 bg-gradient-to-b from-emerald-500/20 to-emerald-500/5 px-6 py-5 text-xs text-emerald-50 shadow-[0_0_32px_rgba(16,185,129,0.45)]">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-200">
-            Built for real estate teams
-          </p>
-          <h3 className="mt-2 text-sm font-semibold text-white">
-            Ready to roll Avillo out to a team or brokerage?
-          </h3>
-          <p className="mt-2 text-[11px] text-emerald-100">
-            If you’re planning to use Avillo across a team, brokerage, or
-            multi-office group, we can help you think through roles, CRM
-            structure, and onboarding. Enterprise pricing includes dedicated
-            success and custom rollout support.
-          </p>
-          <a
-            href="mailto:hello@avillo.io"
-            className="mt-4 inline-flex items-center justify-center rounded-full border border-emerald-200/60 bg-emerald-500/10 px-4 py-1.5 text-[11px] font-semibold text-emerald-50 hover:bg-emerald-500/20"
+      {/* Billing period toggle */}
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-xs text-slate-300/90">
+          Toggle between monthly and yearly. Yearly plans save 2 months.
+        </p>
+
+        <div className="inline-flex items-center rounded-full border border-slate-700 bg-slate-950/80 p-1 text-[11px] font-semibold text-slate-300 shadow-[0_0_24px_rgba(15,23,42,0.85)]">
+          <button
+            type="button"
+            onClick={() => setBillingPeriod("monthly")}
+            className={
+              "rounded-full px-3 py-1 transition " +
+              (billingPeriod === "monthly"
+                ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.7)]"
+                : "text-slate-400")
+            }
           >
-            Talk about team / enterprise · hello@avillo.io
+            Monthly
+          </button>
+          <button
+            type="button"
+            onClick={() => setBillingPeriod("annual")}
+            className={
+              "rounded-full px-3 py-1 transition " +
+              (billingPeriod === "annual"
+                ? "bg-amber-100 text-slate-900 shadow-[0_0_22px_rgba(251,191,36,0.75)]"
+                : "text-slate-400")
+            }
+          >
+            Yearly{" "}
+            <span className="ml-1 text-[9px] uppercase tracking-wide">
+              Save 2 months
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Pricing grid */}
+      <div className="grid gap-6 md:grid-cols-3">
+        {/* Founding Agent */}
+        <div className="relative overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/80 px-6 py-6 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
+          <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_left,rgba(253,230,138,0.15),transparent_55%)]" />
+
+          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-100/90">
+            Founding Agent
+          </p>
+
+          <p className="mt-3 text-3xl font-semibold text-slate-50">
+            {isAnnual ? (
+              <>
+                $290<span className="text-base font-normal opacity-70">/yr</span>
+              </>
+            ) : (
+              <>
+                $29<span className="text-base font-normal opacity-70">/mo</span>
+              </>
+            )}
+          </p>
+          <p className="text-xs text-slate-400">
+            {isAnnual
+              ? "Billed annually — save 2 months"
+              : "Billed monthly — cancel anytime"}
+          </p>
+
+          <ul className="mt-5 space-y-2 text-xs text-slate-200/90">
+            <li>• Access to the Listing Engine</li>
+            <li>• Saved search history</li>
+          </ul>
+
+          <button
+            disabled
+            className="mt-6 w-full rounded-full border border-slate-600 bg-slate-800/50 py-2 text-xs font-semibold text-slate-400 cursor-not-allowed"
+          >
+            Included in early access
+          </button>
+        </div>
+
+        {/* Avillo Pro */}
+        <div className="relative overflow-hidden rounded-2xl border border-amber-200/40 bg-slate-950/90 px-6 py-6 shadow-[0_0_55px_rgba(251,191,36,0.35)]">
+          <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.25),transparent_60%)]" />
+
+          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-200">
+            Avillo Pro
+          </p>
+
+          <p className="mt-3 text-3xl font-semibold text-amber-100">
+            {isAnnual ? (
+              <>
+                $790<span className="text-base font-normal opacity-75">/yr</span>
+              </>
+            ) : (
+              <>
+                $79<span className="text-base font-normal opacity-75">/mo</span>
+              </>
+            )}
+          </p>
+          <p className="text-xs text-slate-300">
+            {isAnnual
+              ? "Billed annually — save 2 months"
+              : "Billed monthly — cancel anytime"}
+          </p>
+
+          <ul className="mt-5 space-y-2 text-xs text-amber-50">
+            <li>• Access to all intelligence engines</li>
+            <li>• CRM & contact management</li>
+            <li>• Buyer / Seller / Listing Engines</li>
+          </ul>
+
+          <button
+            onClick={startCheckout}
+            disabled={loading}
+            className="mt-6 w-full rounded-full border border-amber-200/70 bg-amber-50/10 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-50/20 transition disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {loading
+              ? "Starting checkout…"
+              : isAnnual
+              ? "Subscribe Yearly (save 2 months)"
+              : "Subscribe Monthly"}
+          </button>
+        </div>
+
+        {/* Enterprise */}
+        <div className="relative overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/80 px-6 py-6 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
+          <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_bottom_left,rgba(248,250,252,0.12),transparent_55%)]" />
+
+          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-300">
+            Enterprise
+          </p>
+
+          <p className="mt-3 text-3xl font-semibold text-slate-50">Custom</p>
+          <p className="text-xs text-slate-400">Contact sales for pricing</p>
+
+          <ul className="mt-5 space-y-2 text-xs text-slate-200/90">
+            <li>• Designed for brokerages & real estate teams</li>
+            <li>• Centralized CRM, agent oversight & permissions</li>
+            <li>• Team reporting, lead routing & custom workflows</li>
+            <li>• Priority onboarding and dedicated support</li>
+          </ul>
+
+          <a
+            href="mailto:sales@avillo.io"
+            className="mt-6 block w-full rounded-full border border-slate-600 bg-slate-900/60 py-2 text-center text-xs font-semibold text-slate-200 hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 transition"
+          >
+            Contact Sales
           </a>
         </div>
-      </section>
-    </div>
-  );
-}
-
-/* ---------- Small helper components ---------- */
-
-type FeatureGroupProps = {
-  title: string;
-  items: string[];
-};
-
-function PlanFeatureGroup({ title, items }: FeatureGroupProps) {
-  return (
-    <div className="space-y-1">
-      <p className="mb-1 font-semibold uppercase tracking-[0.16em] text-slate-400">
-        {title}
-      </p>
-      <ul className="space-y-1 text-slate-200">
-        {items.map((item) => (
-          <li key={item}>• {item}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-type MetricCardProps = {
-  label: string;
-  value: string;
-  helper: string;
-};
-
-function MetricCard({ label, value, helper }: MetricCardProps) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-        {label}
-      </p>
-      <div className="mt-2 text-xl font-semibold text-[var(--brand-text)]">
-        {value}
-      </div>
-      <p className="mt-1 text-[11px] text-slate-300">{helper}</p>
-    </div>
-  );
-}
-
-type BulletGroup = {
-  title: string;
-  items: string[];
-};
-
-type PlanCardProps = {
-  label: string;
-  name: string;
-  badge?: string;
-  highlight?: string;
-  price: string;
-  period: BillingPeriod;
-  bulletGroups: BulletGroup[];
-  ctaLabel: string;
-  ctaVariant: "primary" | "outline";
-  ctaOnClick?: () => void;
-  ctaDisabled?: boolean;
-};
-
-function PlanCard({
-  label,
-  name,
-  badge,
-  highlight,
-  price,
-  period,
-  bulletGroups,
-  ctaLabel,
-  ctaVariant,
-  ctaOnClick,
-  ctaDisabled,
-}: PlanCardProps) {
-  const baseBtn =
-    "w-full rounded-full px-4 py-2 text-[11px] font-semibold transition";
-  const primaryBtn =
-    baseBtn +
-    " bg-emerald-400 text-slate-900 shadow-[0_0_24px_rgba(52,211,153,0.7)] hover:bg-emerald-300";
-  const outlineBtn =
-    baseBtn +
-    " border border-white/25 text-[var(--brand-text)] hover:border-white hover:bg-white/10";
-
-  const isContact = price.toLowerCase().includes("talk");
-
-  return (
-    <div className="flex flex-col justify-between rounded-2xl border border-white/10 bg-white/[0.02] px-6 py-5 shadow-[0_18px_45px_rgba(0,0,0,0.55)]">
-      <div>
-        <div className="mb-3 flex items-center justify-between gap-2 text-[11px] text-slate-400">
-          <span className="uppercase tracking-[0.18em]">{label}</span>
-          {badge && (
-            <span className="rounded-full border border-white/25 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-slate-100">
-              {badge}
-            </span>
-          )}
-        </div>
-
-        <h3 className="text-base font-semibold text-[var(--brand-text)]">
-          {name}
-        </h3>
-        {highlight && (
-          <p className="mt-1 text-[11px] text-slate-300">{highlight}</p>
-        )}
-
-        <div className="mt-4 flex items-baseline gap-2">
-          <span className="text-2xl font-semibold text-[var(--brand-text)]">
-            {price}
-          </span>
-          {!isContact && (
-            <span className="text-[11px] text-slate-400">
-              {period === "monthly"
-                ? "/agent per month"
-                : "/agent per year · billed annually"}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-4 space-y-4 text-[11px] text-slate-200">
-          {bulletGroups.map((group) => (
-            <div key={group.title}>
-              <p className="mb-1 font-semibold uppercase tracking-[0.16em] text-slate-400">
-                {group.title}
-              </p>
-              <ul className="space-y-1">
-                {group.items.map((item) => (
-                  <li key={item}>• {item}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
       </div>
 
-      <div className="mt-6">
-        <button
-          type="button"
-          onClick={ctaOnClick}
-          disabled={ctaDisabled || !ctaOnClick}
-          className={
-            ctaVariant === "primary"
-              ? primaryBtn +
-                (ctaDisabled || !ctaOnClick ? " cursor-not-allowed opacity-60" : "")
-              : outlineBtn +
-                (ctaDisabled || !ctaOnClick ? " cursor-not-allowed opacity-60" : "")
-          }
-        >
-          {ctaLabel}
-        </button>
+      {/* FAQ Card */}
+      <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-6 text-xs text-slate-200/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
+        <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
+          Billing FAQ
+        </p>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div>
+            <p className="font-semibold text-slate-50">
+              Can I switch between monthly and yearly?
+            </p>
+            <p className="mt-1 text-slate-400/90">
+              Yes. You can upgrade from monthly to yearly at any time. Your next
+              billing cycle will reflect the new plan.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-slate-50">
+              What happens if I cancel?
+            </p>
+            <p className="mt-1 text-slate-400/90">
+              You’ll keep access until the end of your current billing period.
+              Your workspace and data remain safely stored.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-slate-50">
+              Is the Founding Agent plan going away?
+            </p>
+            <p className="mt-1 text-slate-400/90">
+              Founding Agents lock in early access pricing during the beta. You
+              can upgrade to Avillo Pro at any time.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-slate-50">
+              How do Enterprise plans work?
+            </p>
+            <p className="mt-1 text-slate-400/90">
+              Enterprise is tailored for broker/owner and team leads. Pricing is
+              based on agent count, integrations, and support level. Reach out
+              to{" "}
+              <a
+                href="mailto:sales@avillo.io"
+                className="font-semibold text-amber-100 underline-offset-2 hover:underline"
+              >
+                sales@avillo.io
+              </a>{" "}
+              for details.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
