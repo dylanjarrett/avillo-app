@@ -1,92 +1,167 @@
 "use client";
 
-import React, { useState } from "react";
+import { FormEvent, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { signIn } from "next-auth/react";
+
+function AuthLogo() {
+  return (
+    <div className="mb-6 flex flex-col items-center">
+      <Image
+        src="/avillo-logo-cream.PNG"
+        alt="Avillo"
+        width={260}
+        height={120}
+        priority
+        className="h-auto w-[220px] md:w-[260px] drop-shadow-[0_0_40px_rgba(244,210,106,0.6)]"
+      />
+    </div>
+  );
+}
 
 export default function SignupPage() {
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
-  const [loading, setLoading] = useState(false);
+  const [name, setName] = useState("");
+  const [brokerage, setBrokerage] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+    setSubmitting(true);
 
     try {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          name,
+          brokerage: brokerage || undefined,
+          email,
+          password,
+        }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        setError(data.error || "Signup failed");
-        return;
+        throw new Error(data?.error || "Something went wrong creating your account.");
       }
 
-      // TODO: optionally redirect to /login or auto log in
-      alert("Account created! You can now log in.");
-    } catch (err) {
-      console.error(err);
-      setError("Something went wrong. Please try again.");
+      // Auto sign-in with credentials after successful signup
+      await signIn("credentials", {
+        redirect: true,
+        email,
+        password,
+        callbackUrl: "/dashboard",
+      });
+    } catch (err: any) {
+      setError(err?.message || "Something went wrong.");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-950">
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-4 rounded-2xl border border-slate-700/70 bg-slate-900/70 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.9)]"
-      >
-        <h1 className="text-lg font-semibold text-slate-50">Create your Avillo account</h1>
+    <div className="min-h-screen px-4">
+      <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center py-10">
+        <AuthLogo />
 
-        <div className="space-y-1">
-          <label className="text-xs text-slate-300">Name</label>
-          <input
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-200"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          />
-        </div>
+        <div className="w-full rounded-3xl border border-[rgba(148,163,184,0.35)] bg-[rgba(9,13,28,0.96)] px-6 py-7 shadow-[0_0_50px_rgba(15,23,42,0.9)] backdrop-blur">
+          <div className="mb-6 text-center">
+            <p className="text-[11px] font-semibold tracking-[0.24em] text-[var(--avillo-cream-muted)] uppercase">
+              Get started
+            </p>
+            <h1 className="mt-1 text-sm font-semibold text-[var(--avillo-cream)]">
+              Create your Avillo account
+            </h1>
+            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+              You’ll use this login to access your Intelligence tools and CRM.
+            </p>
+          </div>
 
-        <div className="space-y-1">
-          <label className="text-xs text-slate-300">Email</label>
-          <input
-            type="email"
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-200"
-            value={form.email}
-            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-          />
-        </div>
+          {error && (
+            <div className="mb-4 rounded-lg border border-red-400/70 bg-red-950/50 px-3 py-2 text-[11px] text-red-100">
+              {error}
+            </div>
+          )}
 
-        <div className="space-y-1">
-          <label className="text-xs text-slate-300">Password</label>
-          <input
-            type="password"
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-200"
-            value={form.password}
-            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-          />
-        </div>
+          <form className="space-y-3" onSubmit={handleSubmit}>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                Full name
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Dylan Jarrett"
+                className="avillo-input w-full"
+              />
+            </div>
 
-        {error && (
-          <p className="text-xs text-rose-300 bg-rose-950/50 border border-rose-800/60 rounded-lg px-3 py-2">
-            {error}
+            <div>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                Brokerage (optional)
+              </label>
+              <input
+                value={brokerage}
+                onChange={(e) => setBrokerage(e.target.value)}
+                placeholder="Compass, Coldwell, independent…"
+                className="avillo-input w-full"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                Work email
+              </label>
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@yourbrokerage.com"
+                className="avillo-input w-full"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                Password
+              </label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className="avillo-input w-full"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="mt-3 flex w-full items-center justify-center rounded-full border border-[var(--avillo-cream-soft)] bg-[var(--avillo-cream)] px-4 py-2 text-[13px] font-semibold text-[#050814] shadow-[0_0_26px_rgba(244,210,106,0.35)] transition hover:bg-[#f0ebdd] disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {submitting ? "Creating account…" : "Create account"}
+            </button>
+          </form>
+
+          <p className="mt-4 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+            Already have an account?{" "}
+            <Link
+              href="/login"
+              className="font-medium text-[var(--avillo-cream)] hover:underline"
+            >
+              Sign in
+            </Link>
           </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="mt-2 w-full rounded-full border border-amber-200/80 bg-amber-50/5 px-4 py-2 text-sm font-medium text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.3)] hover:bg-amber-50/10 disabled:opacity-60"
-        >
-          {loading ? "Creating account..." : "Create account"}
-        </button>
-      </form>
-    </main>
+        </div>
+      </div>
+    </div>
   );
 }

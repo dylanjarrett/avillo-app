@@ -4,43 +4,83 @@ import { prisma } from "@/lib/prisma";
 import { hash } from "bcryptjs";
 
 export async function POST(req: NextRequest) {
-  try {
-    const { token, password } = await req.json();
+  let body: { token?: string; password?: string } = {};
 
-    if (!token || !password) {
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid request body." },
+      { status: 400 }
+    );
+  }
+
+  const token = body.token ?? "";
+  const password = body.password ?? "";
+
+  if (!token || !password) {
+    return NextResponse.json(
+      { error: "Reset token and new password are required." },
+      { status: 400 }
+    );
+  }
+
+  if (password.length < 8) {
+    return NextResponse.json(
+      { error: "Password must be at least 8 characters long." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const verification = await prisma.verificationToken.findUnique({
+      where: { token },
+    });
+
+    if (
+      !verification ||
+      !verification.identifier ||
+      verification.expires < new Date()
+    ) {
       return NextResponse.json(
-        { error: "Token and new password are required." },
+        { error: "This reset link is invalid or has expired." },
         { status: 400 }
       );
     }
 
-    const record = await prisma.verificationToken.findUnique({
-      where: { token },
+    const email = verification.identifier;
+
+    const user = await prisma.user.findUnique({
+      where: { email },
     });
 
-    if (!record || record.expires < new Date()) {
+    if (!user) {
       return NextResponse.json(
-        { error: "Reset link is invalid or has expired." },
-        { status: 400 }
+        { error: "Account not found." },
+        { status: 404 }
       );
     }
 
     const passwordHash = await hash(password, 10);
 
     await prisma.user.update({
-      where: { email: record.identifier },
+      where: { id: user.id },
       data: { passwordHash },
     });
 
+    // Consume the token
     await prisma.verificationToken.delete({
       where: { token },
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      message: "Password updated. You can now sign in with your new password.",
+    });
   } catch (err) {
-    console.error("Reset password error:", err);
+    console.error("reset-password error", err);
     return NextResponse.json(
-      { error: "Could not reset password." },
+      { error: "Something went wrong while resetting your password." },
       { status: 500 }
     );
   }

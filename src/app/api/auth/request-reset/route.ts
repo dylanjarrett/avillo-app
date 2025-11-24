@@ -1,27 +1,49 @@
 // src/app/api/auth/request-reset/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { randomBytes } from "crypto";
+import crypto from "crypto";
 
 export async function POST(req: NextRequest) {
+  let body: { email?: string } = {};
+
   try {
-    const { email } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid request body." },
+      { status: 400 }
+    );
+  }
 
-    if (!email) {
-      return NextResponse.json(
-        { error: "Email is required." },
-        { status: 400 }
-      );
-    }
+  const email = (body.email ?? "").trim().toLowerCase();
 
-    const user = await prisma.user.findUnique({ where: { email } });
+  if (!email || !email.includes("@")) {
+    return NextResponse.json(
+      { error: "Please enter a valid email address." },
+      { status: 400 }
+    );
+  }
 
-    // Don't reveal if user exists
+  try {
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true },
+    });
+
+    // Don't reveal whether the email exists – return success either way
     if (!user) {
-      return NextResponse.json({ success: true });
+      return NextResponse.json({
+        success: true,
+        message: "If an account exists, a reset link will be sent.",
+      });
     }
 
-    const token = randomBytes(32).toString("hex");
+    // Clear any existing tokens for this identifier
+    await prisma.verificationToken.deleteMany({
+      where: { identifier: email },
+    });
+
+    const token = crypto.randomUUID();
     const expires = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
 
     await prisma.verificationToken.create({
@@ -32,14 +54,22 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const resetUrl = `${process.env.NEXTAUTH_URL}/reset-password?token=${token}`;
-    console.log("Password reset URL:", resetUrl); // TODO: send email later
+    const baseUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+    const resetUrl = `${baseUrl}/reset-password?token=${encodeURIComponent(
+      token
+    )}`;
 
-    return NextResponse.json({ success: true });
+    // TODO: wire up your actual email service here
+    console.log("[password-reset-link]", resetUrl);
+
+    return NextResponse.json({
+      success: true,
+      message: "If an account exists, a reset link will be sent.",
+    });
   } catch (err) {
-    console.error("Request reset error:", err);
+    console.error("request-reset error", err);
     return NextResponse.json(
-      { error: "Could not start password reset." },
+      { error: "Something went wrong while requesting a reset." },
       { status: 500 }
     );
   }
