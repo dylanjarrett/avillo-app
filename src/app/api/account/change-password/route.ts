@@ -2,8 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { compare, hash } from "bcryptjs";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -41,31 +43,42 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const user = await prisma.user.findUnique({
-    where: { email: session.user.email },
-  });
+  try {
+    // Lazy import prisma so it doesn't run at build time
+    const { prisma } = await import("@/lib/prisma");
 
-  if (!user || !("passwordHash" in user) || !user.passwordHash) {
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
+
+    if (!user || !("passwordHash" in user) || !user.passwordHash) {
+      return NextResponse.json(
+        { error: "Password change is not available for this account." },
+        { status: 400 }
+      );
+    }
+
+    const isValid = await compare(currentPassword, user.passwordHash);
+    if (!isValid) {
+      return NextResponse.json(
+        { error: "Current password is incorrect." },
+        { status: 400 }
+      );
+    }
+
+    const newHash = await hash(newPassword, 10);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: newHash },
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("change-password error", err);
     return NextResponse.json(
-      { error: "Password change is not available for this account." },
-      { status: 400 }
+      { error: "Something went wrong while updating your password." },
+      { status: 500 }
     );
   }
-
-  const isValid = await compare(currentPassword, user.passwordHash);
-  if (!isValid) {
-    return NextResponse.json(
-      { error: "Current password is incorrect." },
-      { status: 400 }
-    );
-  }
-
-  const newHash = await hash(newPassword, 10);
-
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { passwordHash: newHash },
-  });
-
-  return NextResponse.json({ ok: true });
 }

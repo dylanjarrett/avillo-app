@@ -2,7 +2,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // ------- GET: fetch current profile -------
 export async function GET() {
@@ -16,6 +18,8 @@ export async function GET() {
   }
 
   try {
+    const { prisma } = await import("@/lib/prisma");
+
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
@@ -27,13 +31,11 @@ export async function GET() {
       );
     }
 
-    // Build a safe payload (don’t leak hashes, etc.)
     const profile = {
       id: user.id,
       name: user.name,
       email: user.email,
-      // brokerage is optional – if your schema doesn’t have it, this will just be undefined
-      brokerage: user.brokerage ?? null,
+      brokerage: (user as any).brokerage ?? null,
       createdAt: user.createdAt,
     };
 
@@ -93,6 +95,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const { prisma } = await import("@/lib/prisma");
+
     const updated = await prisma.user.update({
       where: { email: session.user.email },
       data: {
