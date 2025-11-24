@@ -2,8 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { compare } from "bcryptjs";
+
+export const runtime = "nodejs";        // ensure Prisma-compatible runtime
+export const dynamic = "force-dynamic"; // don't try to pre-render this route
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -43,6 +45,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Lazy-import Prisma so it isn't evaluated during build
+    const { prisma } = await import("@/lib/prisma");
+
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
