@@ -1,59 +1,52 @@
-// src/app/api/account/change-password/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { compare, hash } from "bcryptjs";
 
-export const dynamic = "force-dynamic";
-
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-
-  if (!session?.user?.email) {
-    return NextResponse.json(
-      { error: "Not authenticated." },
-      { status: 401 }
-    );
-  }
-
-  let body: { currentPassword?: string; newPassword?: string } = {};
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(
-      { error: "Invalid request body." },
-      { status: 400 }
-    );
-  }
+    const session = await getServerSession(authOptions);
 
-  const currentPassword = body.currentPassword ?? "";
-  const newPassword = body.newPassword ?? "";
+    if (!session?.user?.email) {
+      return NextResponse.json(
+        { error: "Not authenticated." },
+        { status: 401 }
+      );
+    }
 
-  if (!currentPassword || !newPassword) {
-    return NextResponse.json(
-      { error: "Current and new password are required." },
-      { status: 400 }
-    );
-  }
+    const { currentPassword, newPassword } = await req.json();
 
-  if (newPassword.length < 8) {
-    return NextResponse.json(
-      { error: "New password must be at least 8 characters long." },
-      { status: 400 }
-    );
-  }
+    if (!currentPassword || !newPassword) {
+      return NextResponse.json(
+        { error: "Current password and new password are required." },
+        { status: 400 }
+      );
+    }
 
-  try {
+    if (typeof newPassword !== "string" || newPassword.length < 8) {
+      return NextResponse.json(
+        { error: "New password must be at least 8 characters long." },
+        { status: 400 }
+      );
+    }
+
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
 
-    if (!user || !user.passwordHash) {
+    if (!user) {
+      return NextResponse.json(
+        { error: "User not found." },
+        { status: 404 }
+      );
+    }
+
+    if (!user.passwordHash) {
       return NextResponse.json(
         {
           error:
-            "Password change is not available for this account. If you sign in with Google, manage access through your provider.",
+            "This account is linked to Google sign-in. Set a password by contacting support@avillo.io.",
         },
         { status: 400 }
       );
@@ -63,6 +56,14 @@ export async function POST(req: NextRequest) {
     if (!isValid) {
       return NextResponse.json(
         { error: "Current password is incorrect." },
+        { status: 400 }
+      );
+    }
+
+    const isSame = await compare(newPassword, user.passwordHash);
+    if (isSame) {
+      return NextResponse.json(
+        { error: "New password cannot be the same as your current password." },
         { status: 400 }
       );
     }
@@ -79,9 +80,9 @@ export async function POST(req: NextRequest) {
       message: "Password updated successfully.",
     });
   } catch (err) {
-    console.error("change-password error", err);
+    console.error("CHANGE PASSWORD API ERROR → ", err);
     return NextResponse.json(
-      { error: "Something went wrong while updating your password." },
+      { error: "Server error updating password." },
       { status: 500 }
     );
   }
