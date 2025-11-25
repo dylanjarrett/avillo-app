@@ -1,3 +1,4 @@
+// src/components/intelligence/engines/BuyerEngine.tsx
 "use client";
 
 import { useState } from "react";
@@ -139,12 +140,6 @@ export default function BuyerEngine({
 
       const data = await res.json();
 
-      // Expecting shape like:
-      // {
-      //   search?: { summary, nextSteps, smsFollowUp },
-      //   tour?: { recapEmail, highlights, concerns },
-      //   offer?: { offerEmail, strategySummary, negotiationPoints }
-      // }
       const nextPack: BuyerPack = {
         ...(pack || {}),
         ...(data || {}),
@@ -189,17 +184,19 @@ export default function BuyerEngine({
   // ----------------------------
   return (
     <section className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.5fr)]">
-      {/* ---------- LEFT: INPUT CARD ---------- */}
-      <div className="avillo-card p-5">
-        <h2 className="mb-1 text-sm font-semibold text-[var(--avillo-cream)]">
+      {/* ---------- LEFT: INPUT CARD (CRM styling) ---------- */}
+      <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
+        <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)]" />
+
+        <h2 className="mb-1 text-sm font-semibold text-slate-50">
           Buyer Studio
         </h2>
-        <p className="mb-4 text-xs text-[var(--avillo-cream-muted)]">
+        <p className="mb-4 text-xs text-slate-200/90">
           Turn search criteria, tours, and offers into clean summaries and
           follow-up emails.
         </p>
 
-        {/* Tool selector pills */}
+        {/* Tool selector pills (CRM accent) */}
         <div className="mb-4 flex flex-col gap-2 text-xs sm:inline-flex sm:flex-row sm:flex-wrap">
           <BuyerToolPill
             label="Search Recap"
@@ -222,7 +219,7 @@ export default function BuyerEngine({
         </div>
 
         {/* Active tool input fields */}
-        <div className="space-y-3 text-xs">
+        <div className="space-y-3 text-xs text-slate-100">
           {activeTool === "search" && (
             <>
               <InputField
@@ -308,13 +305,13 @@ export default function BuyerEngine({
           type="button"
           onClick={handleGenerate}
           disabled={isGenerating}
-          className="avillo-btn mt-4 flex w-full items-center justify-center disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isGenerating ? "Generating…" : "Generate Buyer Outputs"}
         </button>
       </div>
 
-      {/* ---------- RIGHT: OUTPUT CANVAS (delegated) ---------- */}
+      {/* ---------- RIGHT: OUTPUT CANVAS (delegated, uses CRM-style OutputShell) ---------- */}
       <BuyerOutputCanvas
         pack={pack}
         activeTool={activeTool}
@@ -349,14 +346,12 @@ function BuyerToolPill({
       className={
         "flex w-full flex-col rounded-xl border px-4 py-2 text-left text-xs transition sm:w-auto " +
         (active
-          ? "border-[var(--avillo-gold)] bg-[rgba(24,20,10,0.95)] text-[var(--avillo-cream)] shadow-[0_0_16px_rgba(244,210,106,0.45)]"
-          : "border-transparent text-[var(--avillo-cream-muted)] hover:border-[var(--avillo-gold)]/50 hover:text-[var(--avillo-cream)] hover:bg-white/5")
+          ? "border-amber-100/80 bg-amber-50/10 text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)]"
+          : "border-slate-700/80 bg-slate-900/60 text-slate-300/90 hover:border-amber-100/60 hover:text-amber-100 hover:bg-slate-900/80")
       }
     >
       <span className="text-[11px] font-medium">{label}</span>
-      <span className="text-[10px] text-[var(--avillo-cream-muted)]">
-        {description}
-      </span>
+      <span className="text-[10px] text-slate-300/90">{description}</span>
     </button>
   );
 }
@@ -368,22 +363,17 @@ type InputFieldProps = {
   placeholder?: string;
 };
 
-function InputField({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: InputFieldProps) {
+function InputField({ label, value, onChange, placeholder }: InputFieldProps) {
   return (
     <div>
-      <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+      <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
         {label}
       </label>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="avillo-input w-full"
+        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-100/70 focus:border-amber-100/70"
       />
     </div>
   );
@@ -406,7 +396,7 @@ function TextareaField({
 }: TextareaFieldProps) {
   return (
     <div>
-      <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+      <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
         {label}
       </label>
       <textarea
@@ -414,7 +404,7 @@ function TextareaField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows}
-        className="avillo-textarea w-full"
+        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-100/70 focus:border-amber-100/70"
       />
     </div>
   );

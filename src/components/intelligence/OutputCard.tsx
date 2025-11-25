@@ -10,8 +10,8 @@ import type {
 } from "@/lib/intelligence";
 
 /* ----------------------------------------
-   Local Seller / Buyer types
-   (match engine files)
+  Local Seller / Buyer types
+  (match engine files)
 ---------------------------------------- */
 
 export type SellerToolId = "prelisting" | "presentation" | "objection";
@@ -60,7 +60,7 @@ export type BuyerPack = {
 };
 
 /* ----------------------------------------
-   Shared shell + row components
+  Shared shell + row components
 ---------------------------------------- */
 
 type OutputShellProps = {
@@ -71,23 +71,24 @@ type OutputShellProps = {
 
 function OutputShell({ children, onSaveToCrm, savingCrm }: OutputShellProps) {
   return (
-    <div className="avillo-card flex flex-col p-5">
+    <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
+      {/* subtle glow */}
+      <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)]" />
+
       {/* Header */}
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
+          <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
             AI Output
           </p>
-          <h3 className="text-sm font-semibold text-[var(--avillo-cream)]">
-            Studio canvas
-          </h3>
+          <h3 className="text-sm font-semibold text-slate-50">Studio canvas</h3>
         </div>
 
         <button
           type="button"
           onClick={onSaveToCrm}
           disabled={savingCrm}
-          className="avillo-btn-ghost text-[10px] uppercase tracking-[0.18em] disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {savingCrm ? "Saving…" : "Save to CRM"}
         </button>
@@ -117,7 +118,6 @@ function OutputRow({ title, value }: OutputRowProps) {
         displayValue === "—" ? "" : displayValue
       );
       setCopied(true);
-      // Reset label after a short delay
       setTimeout(() => setCopied(false), 1200);
     } catch (err) {
       console.error("Failed to copy", err);
@@ -125,12 +125,12 @@ function OutputRow({ title, value }: OutputRowProps) {
   }
 
   return (
-    <div className="flex items-start justify-between gap-3 rounded-2xl border border-[var(--avillo-border-subtle)] bg-[rgba(9,13,28,0.9)] px-4 py-3 text-xs">
+    <div className="flex items-start justify-between gap-3 rounded-2xl border border-slate-700/80 bg-slate-900/80 px-4 py-3 text-xs">
       <div className="flex-1">
-        <p className="mb-1 text-[11px] font-semibold text-[var(--avillo-cream-soft)]">
+        <p className="mb-1 text-[11px] font-semibold text-slate-50">
           {title}
         </p>
-        <pre className="whitespace-pre-wrap text-[12px] leading-relaxed text-[var(--avillo-cream)]">
+        <pre className="whitespace-pre-wrap text-[12px] leading-relaxed text-slate-100/90">
           {displayValue}
         </pre>
       </div>
@@ -139,8 +139,10 @@ function OutputRow({ title, value }: OutputRowProps) {
         type="button"
         onClick={handleCopy}
         className={
-          "avillo-chip mt-1 text-[10px] uppercase tracking-[0.16em] transition-colors " +
-          (copied ? "avillo-chip--success" : "")
+          "mt-1 inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors " +
+          (copied
+            ? "border-emerald-300/80 bg-emerald-400/10 text-emerald-100"
+            : "border-slate-600/80 bg-slate-950/80 text-slate-200 hover:border-amber-100/70 hover:text-amber-50")
         }
       >
         {copied ? "Copied ✓" : "Copy"}
@@ -150,7 +152,7 @@ function OutputRow({ title, value }: OutputRowProps) {
 }
 
 /* ----------------------------------------
-   LISTING OUTPUT CANVAS
+  LISTING OUTPUT CANVAS
 ---------------------------------------- */
 
 const LISTING_TABS: { id: ListingTabId; label: string }[] = [
@@ -180,15 +182,17 @@ export function ListingOutputCanvas({
   return (
     <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
       {/* Tab pills */}
-      <div className="avillo-pill-group mb-4 inline-flex flex-wrap gap-1">
+      <div className="mb-4 inline-flex flex-wrap gap-1 text-xs">
         {LISTING_TABS.map((tab) => (
           <button
             key={tab.id}
             type="button"
             onClick={() => setActiveTab(tab.id)}
             className={
-              "avillo-pill" +
-              (activeTab === tab.id ? " avillo-pill--active" : "")
+              "inline-flex items-center rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors " +
+              (activeTab === tab.id
+                ? "border-amber-100/80 bg-amber-50/10 text-amber-50 shadow-[0_0_18px_rgba(248,250,252,0.35)]"
+                : "border-slate-700/70 bg-slate-950/40 text-slate-300/90 hover:border-amber-100/60 hover:text-amber-50")
             }
           >
             {tab.label}
@@ -197,12 +201,18 @@ export function ListingOutputCanvas({
       </div>
 
       {/* Tab content */}
-      <div className="space-y-3 text-xs text-[var(--avillo-cream)]">
+      <div className="space-y-3 text-xs text-slate-100/90">
         {/* Listing copy */}
         {activeTab === "listing" && (
           <>
-            <OutputRow title="Long MLS description" value={pack?.listing?.long} />
-            <OutputRow title="Short description" value={pack?.listing?.short} />
+            <OutputRow
+              title="Long MLS description"
+              value={pack?.listing?.long}
+            />
+            <OutputRow
+              title="Short description"
+              value={pack?.listing?.short}
+            />
             <OutputRow
               title="Feature bullets"
               value={
@@ -241,7 +251,10 @@ export function ListingOutputCanvas({
         {activeTab === "emails" && (
           <>
             <OutputRow title="Buyer email" value={pack?.emails?.buyer_email} />
-            <OutputRow title="Seller email" value={pack?.emails?.seller_email} />
+            <OutputRow
+              title="Seller email"
+              value={pack?.emails?.seller_email}
+            />
           </>
         )}
 
@@ -252,7 +265,9 @@ export function ListingOutputCanvas({
               title="Seller highlights"
               value={
                 pack?.talking_points?.highlights?.length
-                  ? pack.talking_points.highlights.map((b) => `• ${b}`).join("\n")
+                  ? pack.talking_points.highlights
+                      .map((b) => `• ${b}`)
+                      .join("\n")
                   : ""
               }
             />
@@ -270,7 +285,9 @@ export function ListingOutputCanvas({
               title="Suggested responses"
               value={
                 pack?.talking_points?.responses?.length
-                  ? pack.talking_points.responses.map((b) => `• ${b}`).join("\n")
+                  ? pack.talking_points.responses
+                      .map((b) => `• ${b}`)
+                      .join("\n")
                   : ""
               }
             />
@@ -314,9 +331,9 @@ export function ListingOutputCanvas({
         )}
 
         {!pack && (
-          <p className="pt-2 text-[11px] text-[var(--avillo-cream-muted)]">
-            Run the Listing Engine to populate this canvas with MLS copy, social
-            content, emails, and talking points.
+          <p className="pt-2 text-[11px] text-slate-300/90">
+            Run the Listing Engine to populate this canvas with MLS copy,
+            social content, emails, and talking points.
           </p>
         )}
       </div>
@@ -325,7 +342,7 @@ export function ListingOutputCanvas({
 }
 
 /* ----------------------------------------
-   SELLER OUTPUT CANVAS
+  SELLER OUTPUT CANVAS
 ---------------------------------------- */
 
 type SellerOutputCanvasProps = {
@@ -343,7 +360,7 @@ export function SellerOutputCanvas({
 }: SellerOutputCanvasProps) {
   return (
     <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
-      <div className="space-y-3 text-xs text-[var(--avillo-cream)]">
+      <div className="space-y-3 text-xs text-slate-100/90">
         {activeTool === "prelisting" && (
           <>
             <OutputRow title="Email 1" value={pack?.prelisting?.email1} />
@@ -404,7 +421,7 @@ export function SellerOutputCanvas({
         )}
 
         {!pack && (
-          <p className="pt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+          <p className="pt-2 text-[11px] text-slate-300/90">
             Run a Seller Studio tool to populate this canvas with emails,
             presentation talking points, or objection scripts.
           </p>
@@ -415,7 +432,7 @@ export function SellerOutputCanvas({
 }
 
 /* ----------------------------------------
-   BUYER OUTPUT CANVAS
+  BUYER OUTPUT CANVAS
 ---------------------------------------- */
 
 type BuyerOutputCanvasProps = {
@@ -433,7 +450,7 @@ export function BuyerOutputCanvas({
 }: BuyerOutputCanvasProps) {
   return (
     <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
-      <div className="space-y-3 text-xs text-[var(--avillo-cream)]">
+      <div className="space-y-3 text-xs text-slate-100/90">
         {activeTool === "search" && (
           <>
             <OutputRow
@@ -486,7 +503,7 @@ export function BuyerOutputCanvas({
         )}
 
         {!pack && (
-          <p className="pt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+          <p className="pt-2 text-[11px] text-slate-300/90">
             Run a Buyer Studio tool to populate this canvas with recaps, tour
             follow-ups, or offer strategy language.
           </p>
@@ -497,7 +514,7 @@ export function BuyerOutputCanvas({
 }
 
 /* ----------------------------------------
-   NEIGHBORHOOD OUTPUT CANVAS
+  NEIGHBORHOOD OUTPUT CANVAS
 ---------------------------------------- */
 
 const NEIGHBORHOOD_TABS: { id: NeighborhoodTabId; label: string }[] = [
@@ -526,15 +543,17 @@ export function NeighborhoodOutputCanvas({
   return (
     <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
       {/* Tab pills */}
-      <div className="avillo-pill-group mb-4 inline-flex flex-wrap gap-1">
+      <div className="mb-4 inline-flex flex-wrap gap-1 text-xs">
         {NEIGHBORHOOD_TABS.map((tab) => (
           <button
             key={tab.id}
             type="button"
             onClick={() => setActiveTab(tab.id)}
             className={
-              "avillo-pill" +
-              (activeTab === tab.id ? " avillo-pill--active" : "")
+              "inline-flex items-center rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors " +
+              (activeTab === tab.id
+                ? "border-amber-100/80 bg-amber-50/10 text-amber-50 shadow-[0_0_18px_rgba(248,250,252,0.35)]"
+                : "border-slate-700/70 bg-slate-950/40 text-slate-300/90 hover:border-amber-100/60 hover:text-amber-50")
             }
           >
             {tab.label}
@@ -543,8 +562,8 @@ export function NeighborhoodOutputCanvas({
       </div>
 
       {/* Tabbed content */}
-      <div className="space-y-3 text-xs text-[var(--avillo-cream)]">
-        {/* OVERVIEW TAB (includes buyer-ready talking points) */}
+      <div className="space-y-3 text-xs text-slate-100/90">
+        {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
           <>
             <OutputRow
@@ -663,7 +682,7 @@ export function NeighborhoodOutputCanvas({
         )}
 
         {!pack && (
-          <p className="pt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+          <p className="pt-2 text-[11px] text-slate-300/90">
             Run the Neighborhood Engine to populate this canvas with an area
             overview you can reuse in emails, tours, and listing presentations.
           </p>

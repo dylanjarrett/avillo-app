@@ -1,3 +1,4 @@
+// src/components/intelligence/engines/ListingEngine.tsx
 "use client";
 
 import { useState } from "react";
@@ -74,7 +75,7 @@ export default function ListingEngine({
           payload: pack,
         }),
       });
-      // In the future you can swap this for a toast
+      // later: toast
     } catch (err) {
       console.error("Failed to save listing pack to CRM", err);
     } finally {
@@ -84,17 +85,20 @@ export default function ListingEngine({
 
   return (
     <section className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.5fr)]">
-      {/* ---------- LEFT: INPUT CARD ---------- */}
-      <div className="avillo-card p-5">
-        <h2 className="mb-1 text-sm font-semibold text-[var(--avillo-cream)]">
+      {/* ---------- LEFT: INPUT CARD (CRM style) ---------- */}
+      <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
+        {/* subtle glow */}
+        <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)]" />
+
+        <h2 className="mb-1 text-sm font-semibold text-slate-50">
           Listing Engine
         </h2>
-        <p className="mb-4 text-xs text-[var(--avillo-cream-muted)]">
+        <p className="mb-4 text-xs text-slate-200/90">
           Turn messy property notes into a full MLS + social + email + insights
           pack.
         </p>
 
-        <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+        <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
           Property notes
         </label>
 
@@ -102,25 +106,25 @@ export default function ListingEngine({
           value={propertyText}
           onChange={(e) => setPropertyText(e.target.value)}
           placeholder="3 Bed • 3 Bath • San Diego — upgrades, lot size, schools, neighborhood vibes…"
-          className="avillo-textarea mb-4 h-44 w-full"
+          className="mb-4 h-44 w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-100/70 focus:border-amber-100/70"
         />
 
         <button
           type="button"
           onClick={handleGenerate}
           disabled={isGenerating}
-          className="avillo-btn mt-2 flex w-full items-center justify-center disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isGenerating ? "Generating listing pack…" : "Generate Listing Pack"}
         </button>
 
-        <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+        <p className="mt-2 text-[11px] text-slate-300/90">
           Outputs stay in this session only. Paste them directly into your CRM,
           emails, and MLS.
         </p>
       </div>
 
-      {/* ---------- RIGHT: OUTPUT CANVAS (moved to OutputCard.tsx) ---------- */}
+      {/* ---------- RIGHT: OUTPUT CANVAS (CRM shell via OutputCard) ---------- */}
       <ListingOutputCanvas
         pack={pack}
         activeTab={activeTab}

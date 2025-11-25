@@ -1,7 +1,8 @@
-// src/app/intelligence/page.tsx
+// src/app/(portal)/intelligence/page.tsx
 "use client";
 
 import { useState } from "react";
+import PageHeader from "@/components/layout/page-header";
 
 import ListingEngine from "@/components/intelligence/engines/ListingEngine";
 import SellerEngine from "@/components/intelligence/engines/SellerEngine";
@@ -19,47 +20,40 @@ export default function IntelligencePage() {
 
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 pb-16 pt-10 lg:px-6">
-      {/* --------- Hero / Header --------- */}
-      <header>
-        <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
-          AI Tools for Real Estate
-        </p>
-        <h1 className="text-balance text-2xl font-semibold text-[var(--avillo-cream)] sm:text-3xl">
-          Avillo AI Command Center
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm text-[var(--avillo-cream-muted)]">
-          Transform raw notes into listing packs, seller scripts, buyer
-          follow-ups, and CRM-ready insights — all in one workspace.
-        </p>
+      {/* --------- Standard Avillo page header --------- */}
+      <PageHeader
+        eyebrow="AI Tools for Real Estate"
+        title="Avillo AI Command Center"
+        subtitle="Transform raw notes into listing packs, seller scripts, buyer follow-ups, and CRM-ready insights — all in one workspace."
+      />
 
-        {/* Engine selector pills */}
-        <div className="mt-5 inline-flex flex-wrap gap-2 text-xs avillo-pill-group">
-          <EnginePill
-            label="Listing Engine"
-            description="MLS, social, emails, talking points."
-            active={activeEngine === "listing"}
-            onClick={() => setActiveEngine("listing")}
-          />
-          <EnginePill
-            label="Seller Engine"
-            description="Prelistings, presentations, objections."
-            active={activeEngine === "seller"}
-            onClick={() => setActiveEngine("seller")}
-          />
-          <EnginePill
-            label="Buyer Engine"
-            description="Tours, summaries, offers, nurture."
-            active={activeEngine === "buyer"}
-            onClick={() => setActiveEngine("buyer")}
-          />
-          <EnginePill
-            label="Neighborhood Engine"
-            description="Schools, lifestyle, access, and talking points."
-            active={activeEngine === "neighborhood"}
-            onClick={() => setActiveEngine("neighborhood")}
-          />
-        </div>
-      </header>
+      {/* --------- Engine selector pills --------- */}
+      <div className="mt-5 inline-flex flex-wrap gap-2 text-xs">
+        <EnginePill
+          label="Listing Engine"
+          description="MLS, social, emails, talking points."
+          active={activeEngine === "listing"}
+          onClick={() => setActiveEngine("listing")}
+        />
+        <EnginePill
+          label="Seller Engine"
+          description="Prelistings, presentations, objections."
+          active={activeEngine === "seller"}
+          onClick={() => setActiveEngine("seller")}
+        />
+        <EnginePill
+          label="Buyer Engine"
+          description="Tours, summaries, offers, nurture."
+          active={activeEngine === "buyer"}
+          onClick={() => setActiveEngine("buyer")}
+        />
+        <EnginePill
+          label="Neighborhood Engine"
+          description="Schools, lifestyle, access, and talking points."
+          active={activeEngine === "neighborhood"}
+          onClick={() => setActiveEngine("neighborhood")}
+        />
+      </div>
 
       {/* --------- Error bar --------- */}
       {error && <div className="avillo-error-bar">{error}</div>}
@@ -110,7 +104,7 @@ export default function IntelligencePage() {
 }
 
 /* ----------------------
- * Small sub-component
+ * Engine pill component
  * ---------------------*/
 
 type EnginePillProps = {
@@ -126,8 +120,12 @@ function EnginePill({ label, description, active, onClick }: EnginePillProps) {
       type="button"
       onClick={onClick}
       className={
-        "avillo-pill min-w-[170px] justify-between sm:justify-start " +
-        (active ? " avillo-pill--active" : "")
+        // base pill styling
+        "inline-flex min-w-[170px] items-center justify-between rounded-full border px-4 py-2 text-left transition-all duration-200 sm:justify-start " +
+        // soft-cream color + glow when active
+        (active
+          ? "border-[rgba(248,244,233,0.9)] bg-[rgba(248,244,233,0.12)] text-[var(--avillo-cream)] shadow-[0_0_0_1px_rgba(248,244,233,0.5),0_0_18px_rgba(248,244,233,0.6)]"
+          : "border-[rgba(248,244,233,0.35)] text-[var(--avillo-cream-muted)] hover:bg-[rgba(248,244,233,0.06)]")
       }
     >
       <span className="flex flex-col text-left">
