@@ -317,7 +317,7 @@ export default function NeighborhoodEngine({
                 value={pack?.essentials?.errands}
               />
               <OutputBlock
-                title="Healthcare (optional)"
+                title="Healthcare"
                 helper="Clinics, hospitals, and common healthcare notes."
                 value={pack?.essentials?.healthcare}
               />
