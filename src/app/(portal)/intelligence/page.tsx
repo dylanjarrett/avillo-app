@@ -19,8 +19,7 @@ export default function IntelligencePage() {
   const [, setOutput] = useState<any | null>(null); // reserved for future use
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 pb-16 pt-10 lg:px-6">
-      {/* --------- Standard Avillo page header --------- */}
+    <div className="space-y-8">
       <PageHeader
         eyebrow="AI Tools for Real Estate"
         title="Avillo AI Command Center"
@@ -99,7 +98,7 @@ export default function IntelligencePage() {
 
       {/* --------- CRM History --------- */}
       <CRMHistory />
-    </main>
+    </div>
   );
 }
 
