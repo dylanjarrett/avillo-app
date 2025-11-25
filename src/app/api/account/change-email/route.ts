@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Load user
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
@@ -54,12 +55,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Google-only / SSO account (no passwordHash)
-    if (!user.passwordHash) {
+    // SSO-only account has no passwordHash
+    if (!("passwordHash" in user) || !user.passwordHash) {
       return NextResponse.json(
         {
           error:
-            "This account is linked to Google login. Contact support@avillo.io to change your email.",
+            "This account uses Google sign-in. Contact support@avillo.io to change your login email.",
         },
         { status: 400 }
       );
@@ -80,6 +81,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Check if target email already exists
     const existing = await prisma.user.findUnique({
       where: { email: newEmail },
     });
@@ -102,14 +104,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        message:
-          "Email updated. Please sign in again with your new address.",
+        message: "Email updated. Please sign in again with your new address.",
         requiresLogout: true,
       },
       { status: 200 }
     );
   } catch (err) {
-    console.error("CHANGE EMAIL API ERROR → ", err);
+    console.error("CHANGE EMAIL API ERROR →", err);
     return NextResponse.json(
       { error: "Something went wrong while updating your email." },
       { status: 500 }

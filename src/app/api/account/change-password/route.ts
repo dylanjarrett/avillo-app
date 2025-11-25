@@ -21,7 +21,6 @@ export async function POST(req: NextRequest) {
     let body: {
       currentPassword?: string;
       newPassword?: string;
-      confirmPassword?: string;
     } = {};
 
     try {
@@ -35,18 +34,10 @@ export async function POST(req: NextRequest) {
 
     const currentPassword = body.currentPassword ?? "";
     const newPassword = body.newPassword ?? "";
-    const confirmPassword = body.confirmPassword ?? "";
 
-    if (!currentPassword || !newPassword || !confirmPassword) {
+    if (!currentPassword || !newPassword) {
       return NextResponse.json(
-        { error: "Please fill in all password fields." },
-        { status: 400 }
-      );
-    }
-
-    if (newPassword !== confirmPassword) {
-      return NextResponse.json(
-        { error: "New passwords do not match." },
+        { error: "Current password and new password are required." },
         { status: 400 }
       );
     }
@@ -54,7 +45,7 @@ export async function POST(req: NextRequest) {
     if (newPassword.length < MIN_PASSWORD_LENGTH) {
       return NextResponse.json(
         {
-          error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+          error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
         },
         { status: 400 }
       );
@@ -71,40 +62,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!user.passwordHash) {
+    if (!("passwordHash" in user) || !user.passwordHash) {
       return NextResponse.json(
         {
           error:
-            "This account uses Google login and does not have a password set.",
+            "This account uses Google sign-in. Set a password by using the reset password flow.",
         },
         { status: 400 }
       );
     }
 
-    const validCurrent = await compare(currentPassword, user.passwordHash);
-    if (!validCurrent) {
+    const isValidPassword = await compare(currentPassword, user.passwordHash);
+    if (!isValidPassword) {
       return NextResponse.json(
         { error: "Current password is incorrect." },
         { status: 400 }
       );
     }
 
-    if (currentPassword === newPassword) {
-      return NextResponse.json(
-        {
-          error: "New password must be different from your current password.",
-        },
-        { status: 400 }
-      );
-    }
-
-    const newHash = await hash(newPassword, 10);
+    const hashed = await hash(newPassword, 10);
 
     await prisma.user.update({
       where: { id: user.id },
-      data: {
-        passwordHash: newHash,
-      },
+      data: { passwordHash: hashed },
     });
 
     return NextResponse.json(
@@ -115,7 +95,7 @@ export async function POST(req: NextRequest) {
       { status: 200 }
     );
   } catch (err) {
-    console.error("CHANGE PASSWORD API ERROR → ", err);
+    console.error("CHANGE PASSWORD API ERROR →", err);
     return NextResponse.json(
       { error: "Something went wrong while updating your password." },
       { status: 500 }

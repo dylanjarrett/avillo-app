@@ -4,57 +4,41 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-export async function POST(req: NextRequest) {
+// Load the current user's profile for the Account screen
+export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.email) {
       return NextResponse.json(
-        { error: "Not authenticated." },
+        { error: "Not authenticated" },
         { status: 401 }
       );
     }
 
-    let body: { name?: string; brokerage?: string } = {};
-    try {
-      body = await req.json();
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid request body." },
-        { status: 400 }
-      );
-    }
-
-    const name = (body.name ?? "").trim();
-    const brokerage = (body.brokerage ?? "").trim();
-
-    const updated = await prisma.user.update({
+    const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      data: {
-        name: name || null,
-        brokerage: brokerage || null,
-      },
       select: {
         id: true,
-        email: true,
         name: true,
+        email: true,
         brokerage: true,
         createdAt: true,
       },
     });
 
-    return NextResponse.json(
-      {
-        success: true,
-        message: "Profile updated.",
-        user: updated,
-      },
-      { status: 200 }
-    );
+    if (!user) {
+      return NextResponse.json(
+        { error: "User not found" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ user }, { status: 200 });
   } catch (err) {
-    console.error("PROFILE UPDATE ERROR → ", err);
+    console.error("PROFILE API ERROR →", err);
     return NextResponse.json(
-      { error: "Something went wrong updating your profile." },
+      { error: "Something went wrong while loading your profile." },
       { status: 500 }
     );
   }
