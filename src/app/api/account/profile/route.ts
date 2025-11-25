@@ -4,103 +4,55 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-/**
- * GET  -> return current profile details
- * POST -> update profile details (name, brokerage, image)
- */
-
-export async function GET() {
-  const session = await getServerSession(authOptions);
-
-  if (!session?.user?.email) {
-    return NextResponse.json(
-      { error: "Not authenticated." },
-      { status: 401 }
-    );
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { email: session.user.email },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      brokerage: true,
-      image: true,
-    },
-  });
-
-  if (!user) {
-    return NextResponse.json(
-      { error: "Account not found." },
-      { status: 404 }
-    );
-  }
-
-  return NextResponse.json({ user });
-}
-
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-
-  if (!session?.user?.email) {
-    return NextResponse.json(
-      { error: "Not authenticated." },
-      { status: 401 }
-    );
-  }
-
-  let body: {
-    name?: string;
-    brokerage?: string;
-    image?: string;
-  } = {};
-
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(
-      { error: "Invalid request body." },
-      { status: 400 }
-    );
-  }
+    const session = await getServerSession(authOptions);
 
-  const updates: {
-    name?: string | null;
-    brokerage?: string | null;
-    image?: string | null;
-  } = {};
+    if (!session?.user?.email) {
+      return NextResponse.json(
+        { error: "Not authenticated." },
+        { status: 401 }
+      );
+    }
 
-  if (typeof body.name === "string") {
-    updates.name = body.name.trim() || null;
-  }
-  if (typeof body.brokerage === "string") {
-    updates.brokerage = body.brokerage.trim() || null;
-  }
-  if (typeof body.image === "string") {
-    updates.image = body.image.trim() || null;
-  }
+    let body: { name?: string; brokerage?: string } = {};
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid request body." },
+        { status: 400 }
+      );
+    }
 
-  try {
+    const name = (body.name ?? "").trim();
+    const brokerage = (body.brokerage ?? "").trim();
+
     const updated = await prisma.user.update({
       where: { email: session.user.email },
-      data: updates,
+      data: {
+        name: name || null,
+        brokerage: brokerage || null,
+      },
       select: {
         id: true,
-        name: true,
         email: true,
+        name: true,
         brokerage: true,
-        image: true,
+        createdAt: true,
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      user: updated,
-      message: "Profile updated.",
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Profile updated.",
+        user: updated,
+      },
+      { status: 200 }
+    );
   } catch (err) {
-    console.error("PROFILE UPDATE ERROR →", err);
+    console.error("PROFILE UPDATE ERROR → ", err);
     return NextResponse.json(
       { error: "Something went wrong updating your profile." },
       { status: 500 }

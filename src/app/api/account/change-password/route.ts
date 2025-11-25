@@ -8,58 +8,58 @@ import { compare, hash } from "bcryptjs";
 const MIN_PASSWORD_LENGTH = 8;
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-
-  if (!session?.user?.email) {
-    return NextResponse.json(
-      { error: "Not authenticated." },
-      { status: 401 }
-    );
-  }
-
-  let body: {
-    currentPassword?: string;
-    newPassword?: string;
-    confirmPassword?: string;
-  } = {};
-
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(
-      { error: "Invalid request body." },
-      { status: 400 }
-    );
-  }
+    const session = await getServerSession(authOptions);
 
-  const currentPassword = body.currentPassword ?? "";
-  const newPassword = body.newPassword ?? "";
-  const confirmPassword = body.confirmPassword ?? "";
+    if (!session?.user?.email) {
+      return NextResponse.json(
+        { error: "Not authenticated." },
+        { status: 401 }
+      );
+    }
 
-  if (!currentPassword || !newPassword || !confirmPassword) {
-    return NextResponse.json(
-      { error: "All password fields are required." },
-      { status: 400 }
-    );
-  }
+    let body: {
+      currentPassword?: string;
+      newPassword?: string;
+      confirmPassword?: string;
+    } = {};
 
-  if (newPassword !== confirmPassword) {
-    return NextResponse.json(
-      { error: "New passwords do not match." },
-      { status: 400 }
-    );
-  }
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid request body." },
+        { status: 400 }
+      );
+    }
 
-  if (newPassword.length < MIN_PASSWORD_LENGTH) {
-    return NextResponse.json(
-      {
-        error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
-      },
-      { status: 400 }
-    );
-  }
+    const currentPassword = body.currentPassword ?? "";
+    const newPassword = body.newPassword ?? "";
+    const confirmPassword = body.confirmPassword ?? "";
 
-  try {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return NextResponse.json(
+        { error: "Please fill in all password fields." },
+        { status: 400 }
+      );
+    }
+
+    if (newPassword !== confirmPassword) {
+      return NextResponse.json(
+        { error: "New passwords do not match." },
+        { status: 400 }
+      );
+    }
+
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      return NextResponse.json(
+        {
+          error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+        },
+        { status: 400 }
+      );
+    }
+
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "This account uses Google sign-in only. Set a password via the reset-password flow first.",
+            "This account uses Google login and does not have a password set.",
         },
         { status: 400 }
       );
@@ -89,27 +89,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (await compare(newPassword, user.passwordHash)) {
+    if (currentPassword === newPassword) {
       return NextResponse.json(
-        { error: "New password must be different from your current password." },
+        {
+          error: "New password must be different from your current password.",
+        },
         { status: 400 }
       );
     }
 
-    const newHash = await hash(newPassword, 12);
+    const newHash = await hash(newPassword, 10);
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: newHash },
+      data: {
+        passwordHash: newHash,
+      },
     });
 
-    return NextResponse.json({
-      success: true,
-      message: "Password updated successfully. Please sign in again.",
-      requiresLogout: true,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Password updated successfully.",
+      },
+      { status: 200 }
+    );
   } catch (err) {
-    console.error("CHANGE PASSWORD ERROR →", err);
+    console.error("CHANGE PASSWORD API ERROR → ", err);
     return NextResponse.json(
       { error: "Something went wrong while updating your password." },
       { status: 500 }
