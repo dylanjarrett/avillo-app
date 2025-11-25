@@ -2,9 +2,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { compare, hash } from "bcryptjs";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
@@ -27,7 +27,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { currentPassword, newPassword } = body;
+  const currentPassword = body.currentPassword ?? "";
+  const newPassword = body.newPassword ?? "";
 
   if (!currentPassword || !newPassword) {
     return NextResponse.json(
@@ -44,16 +45,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Lazy import prisma so it doesn't run at build time
-    const { prisma } = await import("@/lib/prisma");
-
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
 
-    if (!user || !("passwordHash" in user) || !user.passwordHash) {
+    if (!user || !user.passwordHash) {
       return NextResponse.json(
-        { error: "Password change is not available for this account." },
+        {
+          error:
+            "Password change is not available for this account. If you sign in with Google, manage access through your provider.",
+        },
         { status: 400 }
       );
     }
@@ -73,7 +74,10 @@ export async function POST(req: NextRequest) {
       data: { passwordHash: newHash },
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      success: true,
+      message: "Password updated successfully.",
+    });
   } catch (err) {
     console.error("change-password error", err);
     return NextResponse.json(

@@ -2,10 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { compare } from "bcryptjs";
 
-export const runtime = "nodejs";        // ensure Prisma-compatible runtime
-export const dynamic = "force-dynamic"; // don't try to pre-render this route
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -45,9 +45,6 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Lazy-import Prisma so it isn't evaluated during build
-    const { prisma } = await import("@/lib/prisma");
-
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
@@ -59,12 +56,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // If the account was created via Google / SSO only (no passwordHash)
-    if (!("passwordHash" in user) || !user.passwordHash) {
+    // Google / OAuth-only accounts can't change email here
+    if (!user.passwordHash) {
       return NextResponse.json(
         {
           error:
-            "This account is linked to Google sign-in. Contact support@avillo.io to change your login email.",
+            "This account is linked to Google sign-in. Email changes go through support@avillo.io.",
         },
         { status: 400 }
       );
@@ -85,7 +82,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Check if that email is already used
+    // Check if new email is already in use
     const existing = await prisma.user.findUnique({
       where: { email: newEmail },
     });
@@ -94,7 +91,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "That email is already in use. If you believe this is an error, contact support.",
+            "That email is already in use. If you believe this is an error, contact support@avillo.io.",
         },
         { status: 400 }
       );
@@ -102,7 +99,10 @@ export async function POST(req: NextRequest) {
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { email: newEmail },
+      data: {
+        email: newEmail,
+        emailVerified: null,
+      },
     });
 
     return NextResponse.json({

@@ -2,11 +2,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ------- GET: fetch current profile -------
+// GET – current profile
 export async function GET() {
   const session = await getServerSession(authOptions);
 
@@ -18,8 +18,6 @@ export async function GET() {
   }
 
   try {
-    const { prisma } = await import("@/lib/prisma");
-
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
@@ -33,10 +31,9 @@ export async function GET() {
 
     const profile = {
       id: user.id,
-      name: user.name,
+      name: user.name ?? "",
       email: user.email,
-      brokerage: (user as any).brokerage ?? null,
-      createdAt: user.createdAt,
+      brokerage: user.brokerage ?? "",
     };
 
     return NextResponse.json({ success: true, user: profile });
@@ -49,7 +46,7 @@ export async function GET() {
   }
 }
 
-// ------- POST: update profile (name + brokerage) -------
+// POST – update name + brokerage
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
 
@@ -61,6 +58,7 @@ export async function POST(req: NextRequest) {
   }
 
   let body: { name?: string; brokerage?: string } = {};
+
   try {
     body = await req.json();
   } catch {
@@ -95,8 +93,6 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { prisma } = await import("@/lib/prisma");
-
     const updated = await prisma.user.update({
       where: { email: session.user.email },
       data: {
@@ -107,14 +103,14 @@ export async function POST(req: NextRequest) {
 
     const safeUser = {
       id: updated.id,
-      name: updated.name,
+      name: updated.name ?? "",
       email: updated.email,
-      brokerage: updated.brokerage ?? null,
+      brokerage: updated.brokerage ?? "",
     };
 
     return NextResponse.json({ success: true, user: safeUser });
   } catch (err) {
-    console.error("update-profile error", err);
+    console.error("profile POST error", err);
     return NextResponse.json(
       { error: "Something went wrong updating your profile." },
       { status: 500 }
