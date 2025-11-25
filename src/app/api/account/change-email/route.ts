@@ -5,24 +5,22 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { compare } from "bcryptjs";
 
-export const dynamic = "force-dynamic";
-
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.email) {
     return NextResponse.json(
-      { error: "Not authenticated." },
+      { error: "Not authenticated" },
       { status: 401 }
     );
   }
 
-  let body: { newEmail?: string; password?: string } = {};
+  let body;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json(
-      { error: "Invalid request body." },
+      { error: "Invalid request body" },
       { status: 400 }
     );
   }
@@ -32,89 +30,58 @@ export async function POST(req: NextRequest) {
 
   if (!newEmail || !password) {
     return NextResponse.json(
-      { error: "New email and current password are required." },
+      { error: "New email and password required" },
       { status: 400 }
     );
   }
 
-  if (!newEmail.includes("@") || newEmail.length > 120) {
+  const user = await prisma.user.findUnique({
+    where: { email: session.user.email },
+  });
+
+  if (!user) {
     return NextResponse.json(
-      { error: "Please enter a valid email address." },
-      { status: 400 }
+      { error: "User not found" },
+      { status: 404 }
     );
   }
 
-  try {
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
-    }
-
-    // Google / OAuth-only accounts can't change email here
-    if (!user.passwordHash) {
-      return NextResponse.json(
-        {
-          error:
-            "This account is linked to Google sign-in. Email changes go through support@avillo.io.",
-        },
-        { status: 400 }
-      );
-    }
-
-    const isValidPassword = await compare(password, user.passwordHash);
-    if (!isValidPassword) {
-      return NextResponse.json(
-        { error: "Current password is incorrect." },
-        { status: 400 }
-      );
-    }
-
-    if (newEmail === user.email.toLowerCase()) {
-      return NextResponse.json(
-        { error: "That’s already your current email." },
-        { status: 400 }
-      );
-    }
-
-    // Check if new email is already in use
-    const existing = await prisma.user.findUnique({
-      where: { email: newEmail },
-    });
-
-    if (existing) {
-      return NextResponse.json(
-        {
-          error:
-            "That email is already in use. If you believe this is an error, contact support@avillo.io.",
-        },
-        { status: 400 }
-      );
-    }
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        email: newEmail,
-        emailVerified: null,
+  if (!user.passwordHash) {
+    return NextResponse.json(
+      {
+        error:
+          "This account uses Google login. Contact support@avillo.io to change email.",
       },
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: "Email updated. Please sign in again with your new address.",
-      requiresLogout: true,
-    });
-  } catch (err) {
-    console.error("change-email error", err);
-    return NextResponse.json(
-      { error: "Something went wrong while updating your email." },
-      { status: 500 }
+      { status: 400 }
     );
   }
+
+  const matches = await compare(password, user.passwordHash);
+  if (!matches) {
+    return NextResponse.json(
+      { error: "Incorrect password" },
+      { status: 400 }
+    );
+  }
+
+  const exists = await prisma.user.findUnique({
+    where: { email: newEmail },
+  });
+
+  if (exists) {
+    return NextResponse.json(
+      { error: "Email already in use" },
+      { status: 400 }
+    );
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { email: newEmail },
+  });
+
+  return NextResponse.json({
+    success: true,
+    message: "Email updated. Please log back in.",
+  });
 }
