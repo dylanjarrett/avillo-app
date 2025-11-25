@@ -1,36 +1,42 @@
 // src/app/api/auth/signup/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { hash } from "bcryptjs";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type SignupBody = {
+  name?: string;
+  email?: string;
+  password?: string;
+  brokerage?: string;
+};
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = ((await req.json().catch(() => ({}))) || {}) as SignupBody;
+
     const name = (body.name ?? "").trim();
-    const brokerage = (body.brokerage ?? "").trim();
-    const email = (body.email ?? "").trim().toLowerCase();
+    const emailRaw = body.email ?? "";
+    const email = emailRaw.trim().toLowerCase();
     const password = body.password ?? "";
+    const brokerage = (body.brokerage ?? "").trim();
 
-    if (!name || !email || !password) {
-      return NextResponse.json(
-        { error: "Name, email, and password are required." },
-        { status: 400 }
-      );
-    }
-
-    if (!email.includes("@") || email.length > 120) {
+    if (!email || !email.includes("@")) {
       return NextResponse.json(
         { error: "Please enter a valid email address." },
         { status: 400 }
       );
     }
 
-    if (password.length < 8) {
+    if (!password || password.length < 8) {
       return NextResponse.json(
         { error: "Password must be at least 8 characters long." },
         { status: 400 }
       );
     }
+
+    const { prisma } = await import("@/lib/prisma");
 
     const existing = await prisma.user.findUnique({
       where: { email },
@@ -38,7 +44,7 @@ export async function POST(req: NextRequest) {
 
     if (existing) {
       return NextResponse.json(
-        { error: "An account with that email already exists." },
+        { error: "An account already exists with that email." },
         { status: 400 }
       );
     }
@@ -47,31 +53,43 @@ export async function POST(req: NextRequest) {
 
     const user = await prisma.user.create({
       data: {
-        name,
         email,
+        name: name || null,
         passwordHash,
         brokerage: brokerage || null,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        brokerage: true,
-        createdAt: true,
+        // For now we treat email as verified on signup.
+        // Later we can wire EmailVerificationToken + email flow.
+        emailVerified: new Date(),
       },
     });
 
+    // Seed CRM activity with a "workspace created" event
+    await prisma.cRMActivity.create({
+      data: {
+        userId: user.id,
+        type: "system",
+        summary: "Avillo workspace created.",
+        data: {},
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        brokerage: user.brokerage ?? null,
+      },
+    });
+  } catch (err) {
+    console.error("signup error:", err);
     return NextResponse.json(
       {
-        success: true,
-        user,
+        error:
+          "We couldn’t create your account right now. Try again or contact support@avillo.io.",
+
       },
-      { status: 201 }
-    );
-  } catch (err) {
-    console.error("signup error", err);
-    return NextResponse.json(
-      { error: "Something went wrong while creating your account." },
       { status: 500 }
     );
   }

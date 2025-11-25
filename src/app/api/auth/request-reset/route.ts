@@ -1,75 +1,82 @@
 // src/app/api/auth/request-reset/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const RESET_TOKEN_EXPIRY_MINUTES = 45;
+
 export async function POST(req: NextRequest) {
-  let body: { email?: string } = {};
-
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(
-      { error: "Invalid request body." },
-      { status: 400 }
-    );
-  }
+    const body = ((await req.json().catch(() => ({}))) || {}) as {
+      email?: string;
+    };
 
-  const email = (body.email ?? "").trim().toLowerCase();
+    const emailRaw = body.email ?? "";
+    const email = emailRaw.trim().toLowerCase();
 
-  if (!email || !email.includes("@")) {
-    return NextResponse.json(
-      { error: "Please enter a valid email address." },
-      { status: 400 }
-    );
-  }
-
-  try {
-    const user = await prisma.user.findUnique({
-      where: { email },
-      select: { id: true, email: true },
-    });
-
-    // Don't reveal whether the email exists – return success either way
-    if (!user) {
-      return NextResponse.json({
-        success: true,
-        message: "If an account exists, a reset link will be sent.",
-      });
+    if (!email || !email.includes("@")) {
+      // Always respond generic to avoid user enumeration
+      return NextResponse.json({ ok: true });
     }
 
-    // Clear any existing tokens for this identifier
-    await prisma.verificationToken.deleteMany({
-      where: { identifier: email },
+    const { prisma } = await import("@/lib/prisma");
+
+    const user = await prisma.user.findUnique({
+      where: { email },
     });
 
-    const token = crypto.randomUUID();
-    const expires = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
+    // Respond the same whether or not the user exists
+    if (!user) {
+      return NextResponse.json({ ok: true });
+    }
 
-    await prisma.verificationToken.create({
+    // Remove any existing tokens for this user
+    await prisma.passwordResetToken.deleteMany({
+      where: { userId: user.id },
+    });
+
+    // Generate a raw token (sent to user)
+    const rawToken = crypto.randomBytes(32).toString("hex");
+
+    // Hash before storing (security best practice)
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+
+    const expiresAt = new Date(
+      Date.now() + RESET_TOKEN_EXPIRY_MINUTES * 60_000
+    );
+
+    await prisma.passwordResetToken.create({
       data: {
-        identifier: email,
-        token,
-        expires,
+        userId: user.id,
+        token: hashedToken,
+        expiresAt,
       },
     });
 
-    const baseUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+    const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
+
     const resetUrl = `${baseUrl}/reset-password?token=${encodeURIComponent(
-      token
-    )}`;
+      rawToken
+    )}&email=${encodeURIComponent(email)}`;
 
-    // TODO: wire up your actual email service here
-    console.log("[password-reset-link]", resetUrl);
+    // TODO: Replace with real email provider (Resend/Postmark/etc.)
+    // For now this logs so you can test in dev:
+    console.log("📧 Password reset link (dev):", resetUrl);
+    console.log("From: no-reply@avillo.io → To:", email);
 
-    return NextResponse.json({
-      success: true,
-      message: "If an account exists, a reset link will be sent.",
-    });
+    return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("request-reset error", err);
+    console.error("request-reset error:", err);
     return NextResponse.json(
-      { error: "Something went wrong while requesting a reset." },
+      {
+        ok: false,
+        error: "Unable to process password reset request.",
+      },
       { status: 500 }
     );
   }

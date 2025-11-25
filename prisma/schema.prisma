@@ -8,6 +8,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ---------------------------
+// USER
+// ---------------------------
 model User {
   id            String    @id @default(cuid())
   name          String?
@@ -17,22 +20,28 @@ model User {
   image         String?
   brokerage     String?
 
-  // Relations for NextAuth
+  // Auth relations
   accounts Account[]
   sessions Session[]
 
-  // Your app relations
-  contacts   Contact[]
-  listings   Listing[]
-  activities Activity[]
-  CRMRecord  CRMRecord[]
+  // App relations
+  contacts                Contact[]
+  listings                Listing[]
+  activities              Activity[]
+  CRMRecord               CRMRecord[]
+  crmActivity             CRMActivity[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+
+  stripeCustomerId String? @db.VarChar(255)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  stripeCustomerId  String? @db.VarChar(255)
 }
 
+// ---------------------------
+// CONTACTS
+// ---------------------------
 model Contact {
   id     String @id @default(cuid())
   user   User   @relation(fields: [userId], references: [id])
@@ -47,13 +56,17 @@ model Contact {
   notes     String?
   source    String? // Zillow, Open House, Referral, Social, etc.
 
-  listings   Listing[]
-  activities Activity[]
+  listings    Listing[]
+  activities  Activity[]
+  crmActivity CRMActivity[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
+// ---------------------------
+// LISTINGS
+// ---------------------------
 model Listing {
   id     String @id @default(cuid())
   user   User   @relation(fields: [userId], references: [id])
@@ -65,10 +78,10 @@ model Listing {
   address     String
   mlsId       String?
   price       Int?
-  status      String  @default("draft") // draft → active → under_contract → sold
+  status      String  @default("draft")
   description String?
-  aiCopy      String? // last AI-generated listing description
-  aiNotes     String? // prep notes, talking points
+  aiCopy      String?
+  aiNotes     String?
 
   activities Activity[]
 
@@ -76,6 +89,9 @@ model Listing {
   updatedAt DateTime @updatedAt
 }
 
+// ---------------------------
+// ACTIVITIES (SYSTEM EVENTS)
+// ---------------------------
 model Activity {
   id     String @id @default(cuid())
   user   User   @relation(fields: [userId], references: [id])
@@ -92,6 +108,27 @@ model Activity {
 
   createdAt DateTime @default(now())
 }
+
+// ---------------------------
+// CRM ACTIVITY (TIMELINE LOG)
+// Billion-dollar SaaS standard
+// ---------------------------
+model CRMActivity {
+  id        String   @id @default(cuid())
+  userId    String
+  contactId String?
+  type      String // "created", "updated", "stage_change", "note", "call", "ai_generated"
+  summary   String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id])
+  contact Contact? @relation(fields: [contactId], references: [id])
+}
+
+// ---------------------------
+// NEXTAUTH
+// ---------------------------
 
 model Account {
   id                String  @id @default(cuid())
@@ -129,12 +166,45 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+// ---------------------------
+// EMAIL VERIFICATION TOKENS
+// ---------------------------
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// ---------------------------
+// PASSWORD RESET TOKENS
+// ---------------------------
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// ---------------------------
+// CRM RAW RECORDS
+// ---------------------------
 model CRMRecord {
   id        String   @id @default(cuid())
   userId    String
   raw       String
   processed String
-  type      String // "listing", "buyer", "seller"
+  type      String // listing | buyer | seller
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])

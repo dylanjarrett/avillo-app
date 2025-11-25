@@ -1,61 +1,191 @@
 // src/app/api/crm/save/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-
-import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type ContactPayload = {
+  id?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  stage?: string;
+  tags?: string[];
+  notes?: string;
+  source?: string;
+};
+
+type ActivityPayload = {
+  type: string;         // "note", "call", "stage_change", "updated", etc.
+  summary?: string;     // Human-readable summary
+};
+
+type SaveBody = {
+  contact?: ContactPayload;
+  activity?: ActivityPayload;
+};
+
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  try {
+    const session = await getServerSession(authOptions);
 
-  if (!session?.user?.email) {
-    return NextResponse.json(
-      { error: "Not authenticated." },
-      { status: 401 }
-    );
-  }
+    if (!session?.user?.email) {
+      return NextResponse.json(
+        { error: "Not authenticated." },
+        { status: 401 }
+      );
+    }
 
-  const body = (await req.json().catch(() => ({}))) as {
-    raw?: string;
-    processed?: string;
-    type?: string;
-  };
+    const body = (await req.json().catch(() => null)) as SaveBody | null;
 
-  const { raw, processed, type } = body;
+    if (!body || (!body.contact && !body.activity)) {
+      return NextResponse.json(
+        { error: "Nothing to save. Include contact and/or activity data." },
+        { status: 400 }
+      );
+    }
 
-  if (!processed) {
-    return NextResponse.json(
-      { error: "Missing processed AI text to save." },
-      { status: 400 }
-    );
-  }
+    const { prisma } = await import("@/lib/prisma");
 
-  const user = await prisma.user.findUnique({
-    where: { email: session.user.email },
-  });
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
 
-  if (!user) {
-    return NextResponse.json(
-      { error: "User not found in database." },
-      { status: 404 }
-    );
-  }
+    if (!user) {
+      return NextResponse.json(
+        { error: "Account not found." },
+        { status: 404 }
+      );
+    }
 
-  // Prisma model is CRMRecord -> client accessor is cRMRecord
-  const saved = await prisma.cRMRecord.create({
-    data: {
-      userId: user.id,
-      raw: raw ?? "",
-      processed,
-      type: type ?? "general",
-    },
-  });
+    let contactId: string | undefined = body.contact?.id;
+    let contactRecord: any = null;
 
-  return NextResponse.json(
-    {
+    /* --------------------------
+       CREATE OR UPDATE CONTACT
+    --------------------------- */
+    if (body.contact) {
+      const {
+        id,
+        firstName,
+        lastName,
+        email,
+        phone,
+        stage,
+        tags,
+        notes,
+        source,
+      } = body.contact;
+
+      if (id) {
+        // UPDATE CONTACT
+        contactRecord = await prisma.contact.update({
+          where: { id },
+          data: {
+            firstName,
+            lastName,
+            email,
+            phone,
+            stage,
+            tags: tags ?? [],
+            notes,
+            source,
+          },
+        });
+
+        contactId = contactRecord.id;
+
+        // Log CRM activity for update
+        await prisma.cRMActivity.create({
+          data: {
+            userId: user.id,
+            contactId,
+            type: "updated",
+            summary:
+              `Updated contact ${firstName ?? ""} ${lastName ?? ""}`.trim() ||
+              "Updated contact",
+            data: {},
+          },
+        });
+      } else {
+        // CREATE CONTACT
+        contactRecord = await prisma.contact.create({
+          data: {
+            userId: user.id,
+            firstName,
+            lastName,
+            email,
+            phone,
+            stage: stage ?? "new",
+            tags: tags ?? [],
+            notes,
+            source,
+          },
+        });
+
+        contactId = contactRecord.id;
+
+        // Log CRM activity for creation
+        await prisma.cRMActivity.create({
+          data: {
+            userId: user.id,
+            contactId,
+            type: "created",
+            summary:
+              `New contact: ${firstName ?? ""} ${lastName ?? ""}`.trim() ||
+              "New contact added",
+            data: {},
+          },
+        });
+      }
+    }
+
+    /* --------------------------
+       OPTIONAL: LOG ACTIVITY
+    --------------------------- */
+    let activityRecord = null;
+
+    if (body.activity) {
+      const { type, summary } = body.activity;
+
+      if (!type) {
+        return NextResponse.json(
+          { error: "Activity type is required when logging an activity." },
+          { status: 400 }
+        );
+      }
+
+      activityRecord = await prisma.cRMActivity.create({
+        data: {
+          userId: user.id,
+          contactId: contactId ?? null,
+          type,
+          summary:
+            summary ||
+            (type === "note"
+              ? "New note added"
+              : `Activity recorded: ${type}`),
+          data: {},
+        },
+      });
+    }
+
+    return NextResponse.json({
       success: true,
-      record: saved,
-    },
-    { status: 201 }
-  );
+      contact: contactRecord,
+      activity: activityRecord,
+    });
+  } catch (err) {
+    console.error("crm/save error:", err);
+    return NextResponse.json(
+      {
+        error:
+          "We couldn’t save your CRM update. Try again or contact support@avillo.io.",
+      },
+      { status: 500 }
+    );
+  }
 }
