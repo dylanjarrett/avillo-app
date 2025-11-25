@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useSession, signOut } from "next-auth/react";
 
 function getInitials(nameOrEmail?: string | null) {
-  if (!nameOrEmail) return "DJ"; // fallback
+  if (!nameOrEmail) return "DJ";
   const value = nameOrEmail.trim();
   if (!value) return "DJ";
 
@@ -26,12 +26,18 @@ function getInitials(nameOrEmail?: string | null) {
   return value.slice(0, 2).toUpperCase();
 }
 
-export default function Navbar() {
+type NavbarProps = {
+  sidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
+};
+
+export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
   const { data: session } = useSession();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const initials = getInitials(session?.user?.name || session?.user?.email || "DJ");
+  const emailLabel = session?.user?.email || "Signed in to Avillo";
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -72,7 +78,58 @@ export default function Navbar() {
         </Link>
 
         {/* RIGHT – STATUS + USER */}
-        <div className="flex items-center gap-3 sm:gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
+          {/* Mobile menu button – animated hamburger / X */}
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="
+              inline-flex h-9 w-9 items-center justify-center
+              rounded-full border border-[#273247]
+              bg-[radial-gradient(circle_at_30%_0%,#182135,#050815)]
+              shadow-[0_0_18px_rgba(0,0,0,0.9)]
+              hover:border-[#f7f0d8]/40 hover:shadow-[0_0_26px_rgba(248,244,223,0.45)]
+              transition
+              lg:hidden
+            "
+          >
+            <span className="sr-only">Toggle menu</span>
+
+            <span className="relative block h-3.5 w-4">
+              {/* Top bar */}
+              <span
+                className={`
+                  absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]
+                  transition-transform duration-200 ease-out
+                  ${sidebarOpen
+                    ? "top-1.5 rotate-45"
+                    : "top-0 translate-y-0"
+                  }
+                `}
+              />
+              {/* Middle bar */}
+              <span
+                className={`
+                  absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]/80
+                  transition-all duration-150 ease-out
+                  ${sidebarOpen ? "top-1.5 opacity-0" : "top-1.5 opacity-80"}
+                `}
+              />
+              {/* Bottom bar */}
+              <span
+                className={`
+                  absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]
+                  transition-transform duration-200 ease-out
+                  ${sidebarOpen
+                    ? "top-1.5 -rotate-45"
+                    : "bottom-0 translate-y-0"
+                  }
+                `}
+              />
+            </span>
+          </button>
+
+          {/* Private beta pill (desktop only) */}
           <button
             type="button"
             className="hidden rounded-full border border-[#273247] bg-[#0b1220] px-3 py-1 text-[0.65rem] font-medium uppercase tracking-[0.18em] text-[#f7f0d8] shadow-[0_0_20px_rgba(0,0,0,0.6)] sm:inline-flex"
@@ -89,7 +146,6 @@ export default function Navbar() {
               {initials}
             </button>
 
-            {/* Animated dropdown */}
             <div
               className={`absolute right-0 mt-3 w-48 origin-top-right rounded-2xl border border-[#273247] bg-[#050815]/95 py-2 shadow-[0_0_36px_rgba(0,0,0,0.85)] backdrop-blur transition-all duration-150 ease-out transform ${
                 open
@@ -103,7 +159,7 @@ export default function Navbar() {
                   Workspace
                 </p>
                 <p className="mt-0.5 truncate text-[11px] text-[#cfd7ea]">
-                  {session?.user?.email || "Signed in to Avillo"}
+                  {emailLabel}
                 </p>
               </div>
 

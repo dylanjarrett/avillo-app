@@ -112,40 +112,44 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* Billing period toggle */}
-      <div className="flex items-center justify-between gap-4">
+       {/* Billing period toggle */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-xs text-slate-300/90">
           Toggle between monthly and yearly. Yearly plans save 2 months.
         </p>
 
-        <div className="inline-flex items-center rounded-full border border-slate-700 bg-slate-950/80 p-1 text-[11px] font-semibold text-slate-300 shadow-[0_0_24px_rgba(15,23,42,0.85)]">
-          <button
-            type="button"
-            onClick={() => setBillingPeriod("monthly")}
-            className={
-              "rounded-full px-3 py-1 transition " +
-              (billingPeriod === "monthly"
-                ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.7)]"
-                : "text-slate-400")
-            }
-          >
-            Monthly
-          </button>
-          <button
-            type="button"
-            onClick={() => setBillingPeriod("annual")}
-            className={
-              "rounded-full px-3 py-1 transition " +
-              (billingPeriod === "annual"
-                ? "bg-amber-100 text-slate-900 shadow-[0_0_22px_rgba(251,191,36,0.75)]"
-                : "text-slate-400")
-            }
-          >
-            Yearly{" "}
-            <span className="ml-1 text-[9px] uppercase tracking-wide">
-              Save 2 months
-            </span>
-          </button>
+        {/* Wrapper so the pill can go full-width on mobile */}
+        <div className="w-full sm:w-auto">
+          <div className="flex w-full rounded-full border border-slate-700 bg-slate-950/80 p-1 text-[11px] font-semibold text-slate-300 shadow-[0_0_24px_rgba(15,23,42,0.85)]">
+            <button
+              type="button"
+              onClick={() => setBillingPeriod("monthly")}
+              className={
+                "flex-1 rounded-full px-3 py-1.5 transition " +
+                (billingPeriod === "monthly"
+                  ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.7)]"
+                  : "text-slate-400")
+              }
+            >
+              Monthly
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setBillingPeriod("annual")}
+              className={
+                "flex-1 rounded-full px-3 py-1.5 text-center transition " +
+                (billingPeriod === "annual"
+                  ? "bg-amber-100 text-slate-900 shadow-[0_0_22px_rgba(251,191,36,0.75)]"
+                  : "text-slate-400")
+              }
+            >
+              Yearly~{" "}
+              <span className="block text-[9px] uppercase tracking-wide sm:inline">
+                Save 2 months
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 

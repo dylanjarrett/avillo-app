@@ -1,3 +1,4 @@
+// src/components/layout/sidebar.tsx
 "use client";
 
 import Link from "next/link";
@@ -14,7 +15,12 @@ const ACCOUNT_ITEMS = [
   { href: "/account", label: "Account" },
 ];
 
-export default function Sidebar() {
+type SidebarProps = {
+  open?: boolean;
+  onClose?: () => void;
+};
+
+export default function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
 
   function renderNavItem(item: { href: string; label: string }) {
@@ -35,8 +41,8 @@ export default function Sidebar() {
               : "text-[#c0c9de]/80 hover:text-[#f7f2e9] hover:bg-[#0b1322]"
           }
         `}
+        onClick={onClose}
       >
-        {/* Left accent bar */}
         <span
           className={`
             mr-2 h-7 w-0.5 rounded-full bg-[#f7f2e9] transition-all duration-200
@@ -46,7 +52,6 @@ export default function Sidebar() {
 
         <span className="flex-1 font-medium">{item.label}</span>
 
-        {/* glowing active dot */}
         {isActive && (
           <span className="h-1.5 w-1.5 rounded-full bg-[#f7f2e9]/90 shadow-[0_0_8px_rgba(247,242,233,0.9)]" />
         )}
@@ -54,41 +59,67 @@ export default function Sidebar() {
     );
   }
 
+  function SidebarInner() {
+    return (
+      <div className="flex h-full flex-col bg-[#050b16]/80 backdrop-blur-xl">
+        {/* TOOLS SECTION */}
+        <div className="px-6 pt-4 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
+          TOOLS
+        </div>
+        <nav className="flex flex-col gap-1 px-3 pb-4">
+          {TOOL_ITEMS.map(renderNavItem)}
+        </nav>
+
+        {/* Divider */}
+        <div className="mx-6 my-2 h-px bg-[#1a2435]/60" />
+
+        {/* ACCOUNT SECTION */}
+        <div className="px-6 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
+          ADMIN
+        </div>
+        <nav className="flex flex-col gap-1 px-3 pb-4">
+          {ACCOUNT_ITEMS.map(renderNavItem)}
+        </nav>
+
+        {/* FOOTER */}
+        <div className="mt-auto px-6 pb-5 text-[0.7rem] text-[#8f9bb8]/70">
+          Private beta · <span className="text-[#f7f2e9]">Single-seat preview</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <aside
-      className="
-        flex h-full w-64 flex-col border-r border-[#1d2940]/70
-        bg-[#050b16]/80 backdrop-blur-xl
-      "
-    >
-      {/* Top spacer to align with navbar */}
-      <div className="h-16 shrink-0" />
+    <>
+      {/* Desktop sidebar */}
+      <aside className="hidden h-full w-64 border-r border-[#1d2940]/70 lg:flex">
+        <SidebarInner />
+      </aside>
 
-      {/* TOOLS SECTION */}
-      <div className="px-6 pb-3 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
-        TOOLS
+      {/* Mobile slide-in drawer */}
+      <div
+        className={`
+          fixed inset-y-0 left-0 z-40 w-64 border-r border-[#1d2940]/70
+          transform transition-transform duration-200 ease-out
+          lg:hidden
+          ${open ? "translate-x-0" : "-translate-x-full"}
+        `}
+      >
+        {/* Top bar inside drawer */}
+        <div className="flex items-center justify-between border-b border-[#1d2940]/70 bg-[#050b16]/95 px-4 py-3">
+          <span className="text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-[#a3b0d0]/80">
+            Menu
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-[#273247] bg-[#0f1729] px-2 py-1 text-[0.7rem] text-[#f7f2e9] hover:bg-[#162037] transition"
+          >
+            Close
+          </button>
+        </div>
+        <SidebarInner />
       </div>
-
-      <nav className="flex flex-col gap-1 px-3 pb-6">
-        {TOOL_ITEMS.map(renderNavItem)}
-      </nav>
-
-      {/* Divider Line */}
-      <div className="mx-6 my-2 h-px bg-[#1a2435]/60" />
-
-      {/* ACCOUNT SECTION */}
-      <div className="px-6 pb-3 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
-        ADMIN
-      </div>
-
-      <nav className="flex flex-col gap-1 px-3 pb-6">
-        {ACCOUNT_ITEMS.map(renderNavItem)}
-      </nav>
-
-      {/* FOOTER */}
-      <div className="mt-auto px-6 pb-6 text-[0.7rem] text-[#8f9bb8]/70">
-        Private beta · <span className="text-[#f7f2e9]">Single-seat preview</span>
-      </div>
-    </aside>
+    </>
   );
 }

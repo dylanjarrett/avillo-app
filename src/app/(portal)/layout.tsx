@@ -1,25 +1,39 @@
+// src/app/(portal)/layout.tsx
 "use client";
 
-import { SessionProvider } from "next-auth/react";
+import React, { useState } from "react";
 import Navbar from "@/components/layout/navbar";
 import Sidebar from "@/components/layout/sidebar";
 
-export default function PortalLayout({ children }: { children: React.ReactNode }) {
+export default function PortalLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
-    <SessionProvider>
-      <div className="min-h-screen bg-[var(--brand-bg)] text-[var(--brand-text)]">
-        {/* Top Nav */}
-        <Navbar />
+    <>
+      <Navbar
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
+      />
 
-        {/* Sidebar + Content */}
-        <div className="flex flex-1">
-          <Sidebar />
+      <div
+        className="
+          relative
+          mx-auto
+          max-w-7xl
+          min-h-[calc(100vh-5rem)]
+          lg:grid lg:grid-cols-[260px_minmax(0,1fr)]
+        "
+      >
+        <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-          <main className="flex-1 px-4 py-6 md:px-10 md:py-8">
-            <div className="max-w-6xl mx-auto">{children}</div>
-          </main>
-        </div>
+        <main className="flex-1 overflow-y-auto px-4 py-6 lg:px-10 lg:py-10">
+          {children}
+        </main>
       </div>
-    </SessionProvider>
+    </>
   );
 }
