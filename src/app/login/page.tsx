@@ -71,7 +71,7 @@ export default function LoginPage() {
         {/* Logo block */}
         <div className="mb-6 flex flex-col items-center">
           <Image
-            src="/avillo-logo-cream.PNG"
+            src="/avillo-logo-cream.png"
             alt="Avillo"
             width={260}
             height={120}

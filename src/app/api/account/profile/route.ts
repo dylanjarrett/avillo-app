@@ -1,57 +1,90 @@
+// src/app/api/account/profile/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+/**
+ * GET  -> return current profile details
+ * POST -> update profile details (name, brokerage, image)
+ */
+
+export async function GET() {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user?.email) {
+    return NextResponse.json(
+      { error: "Not authenticated." },
+      { status: 401 }
+    );
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email: session.user.email },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      brokerage: true,
+      image: true,
+    },
+  });
+
+  if (!user) {
+    return NextResponse.json(
+      { error: "Account not found." },
+      { status: 404 }
+    );
+  }
+
+  return NextResponse.json({ user });
+}
+
 export async function POST(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user?.email) {
+    return NextResponse.json(
+      { error: "Not authenticated." },
+      { status: 401 }
+    );
+  }
+
+  let body: {
+    name?: string;
+    brokerage?: string;
+    image?: string;
+  } = {};
+
   try {
-    const session = await getServerSession(authOptions);
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid request body." },
+      { status: 400 }
+    );
+  }
 
-    if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: "Not authenticated." },
-        { status: 401 }
-      );
-    }
+  const updates: {
+    name?: string | null;
+    brokerage?: string | null;
+    image?: string | null;
+  } = {};
 
-    const body = await req.json();
+  if (typeof body.name === "string") {
+    updates.name = body.name.trim() || null;
+  }
+  if (typeof body.brokerage === "string") {
+    updates.brokerage = body.brokerage.trim() || null;
+  }
+  if (typeof body.image === "string") {
+    updates.image = body.image.trim() || null;
+  }
 
-    const name =
-      typeof body.name === "string" ? body.name.trim().slice(0, 120) : undefined;
-    const brokerage =
-      typeof body.brokerage === "string"
-        ? body.brokerage.trim().slice(0, 160)
-        : undefined;
-    const image =
-      typeof body.image === "string" ? body.image.trim().slice(0, 255) : undefined;
-
-    if (!name && !brokerage && !image) {
-      return NextResponse.json(
-        { error: "No profile fields to update." },
-        { status: 400 }
-      );
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-      select: { id: true },
-    });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: "User not found." },
-        { status: 404 }
-      );
-    }
-
-    const data: Record<string, any> = {};
-    if (name !== undefined) data.name = name;
-    if (brokerage !== undefined) data.brokerage = brokerage;
-    if (image !== undefined) data.image = image;
-
+  try {
     const updated = await prisma.user.update({
-      where: { id: user.id },
-      data,
+      where: { email: session.user.email },
+      data: updates,
       select: {
         id: true,
         name: true,
@@ -64,11 +97,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       user: updated,
+      message: "Profile updated.",
     });
   } catch (err) {
-    console.error("PROFILE API ERROR → ", err);
+    console.error("PROFILE UPDATE ERROR →", err);
     return NextResponse.json(
-      { error: "Server error updating profile." },
+      { error: "Something went wrong updating your profile." },
       { status: 500 }
     );
   }

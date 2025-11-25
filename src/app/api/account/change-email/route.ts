@@ -1,3 +1,4 @@
+// src/app/api/account/change-email/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
@@ -5,85 +6,112 @@ import { prisma } from "@/lib/prisma";
 import { compare } from "bcryptjs";
 
 export async function POST(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user?.email) {
+    return NextResponse.json(
+      { error: "Not authenticated." },
+      { status: 401 }
+    );
+  }
+
+  let body: { newEmail?: string; password?: string } = {};
   try {
-    const session = await getServerSession(authOptions);
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid request body." },
+      { status: 400 }
+    );
+  }
 
-    if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: "Not authenticated." },
-        { status: 401 }
-      );
-    }
+  const newEmail = (body.newEmail ?? "").trim().toLowerCase();
+  const password = body.password ?? "";
 
-    const { newEmail, password } = await req.json();
+  if (!newEmail || !password) {
+    return NextResponse.json(
+      { error: "New email and current password are required." },
+      { status: 400 }
+    );
+  }
 
-    if (!newEmail || !password) {
-      return NextResponse.json(
-        { error: "New email and password required." },
-        { status: 400 }
-      );
-    }
+  if (!newEmail.includes("@") || newEmail.length > 120) {
+    return NextResponse.json(
+      { error: "Please enter a valid email address." },
+      { status: 400 }
+    );
+  }
 
+  try {
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
 
     if (!user) {
       return NextResponse.json(
-        { error: "User not found." },
+        { error: "Account not found." },
         { status: 404 }
       );
     }
 
+    // Google-only / SSO accounts cannot change email here
     if (!user.passwordHash) {
       return NextResponse.json(
         {
           error:
-            "This account uses Google login. Contact support@avillo.io to update your email.",
+            "This account is linked to Google sign-in. Contact support@avillo.io to change your login email.",
         },
         { status: 400 }
       );
     }
 
-    const valid = await compare(password, user.passwordHash);
-    if (!valid) {
+    const isValidPassword = await compare(password, user.passwordHash);
+    if (!isValidPassword) {
       return NextResponse.json(
-        { error: "Incorrect password." },
+        { error: "Current password is incorrect." },
         { status: 400 }
       );
     }
 
-    if (newEmail.toLowerCase() === user.email.toLowerCase()) {
+    if (newEmail === user.email.toLowerCase()) {
       return NextResponse.json(
-        { error: "That is already your email." },
+        { error: "That’s already your current email." },
         { status: 400 }
       );
     }
 
-    const exists = await prisma.user.findUnique({
-      where: { email: newEmail.toLowerCase() },
+    const existing = await prisma.user.findUnique({
+      where: { email: newEmail },
     });
 
-    if (exists) {
+    if (existing) {
       return NextResponse.json(
-        { error: "Email already in use." },
+        {
+          error:
+            "That email is already in use. If you believe this is an error, contact support.",
+        },
         { status: 400 }
       );
     }
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { email: newEmail.toLowerCase() },
+      data: {
+        email: newEmail,
+        emailVerified: null, // force re-verification later if you add that flow
+      },
     });
 
     return NextResponse.json({
       success: true,
-      message: "Email updated. Please log in again.",
+      message:
+        "Email updated. You’ll need to sign in again with your new address.",
+      requiresLogout: true,
     });
   } catch (err) {
-    console.error("CHANGE EMAIL API ERROR → ", err);
+    console.error("CHANGE EMAIL ERROR →", err);
     return NextResponse.json(
-      { error: "Server error updating email." },
+      { error: "Something went wrong while updating your email." },
       { status: 500 }
     );
   }
