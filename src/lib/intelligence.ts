@@ -1,7 +1,7 @@
 // src/lib/intelligence.ts
 
 // -----------------------------
-// Type Definitions
+// Listing Engine
 // -----------------------------
 
 // Tabs used by the Listing Engine
@@ -44,7 +44,10 @@ export type IntelligencePack = {
   open_house_pitch?: string;
 };
 
-// Seller Engine Types
+// -----------------------------
+// Seller Engine
+// -----------------------------
+
 export type SellerToolId = "prelisting" | "presentation" | "objection";
 
 export type SellerPack = {
@@ -70,7 +73,10 @@ export type SellerPack = {
   };
 };
 
-// Buyer Engine Types
+// -----------------------------
+// Buyer Engine
+// -----------------------------
+
 export type BuyerToolId = "search" | "tour" | "offer";
 
 export type BuyerPack = {
@@ -91,8 +97,58 @@ export type BuyerPack = {
   };
 };
 
-// Unified Output Type for Any Engine
+// -----------------------------
+// Neighborhood Engine
+// -----------------------------
+
+export type NeighborhoodTabId =
+  | "overview"
+  | "schools"
+  | "mobility"
+  | "essentials"
+  | "lifestyle";
+
+export type NeighborhoodPack = {
+  overview: {
+    areaSummary: string;
+    whoItFits: string;
+    priceVibe: string;
+    talkingPoints: string[];
+  };
+  schools: {
+    schoolsOverview: string;
+    notableSchools: string;
+    schoolsDisclaimer: string;
+  };
+  mobility: {
+    walkability: string;
+    bikeability: string;
+    transitOverview: string;
+    drivingAccess: string;
+    airports: string;
+    commuteExamples: string;
+  };
+  essentials: {
+    groceries: string;
+    gyms: string;
+    errands: string;
+    healthcare?: string;
+  };
+  lifestyle: {
+    parksAndOutdoors: string;
+    diningNightlife: string;
+    familyActivities: string;
+    safetyOverview: string;
+    safetyDisclaimer: string;
+  };
+};
+
+// -----------------------------
+// Unified Output Type
+// -----------------------------
+
 export type AvilloEngineOutput =
   | { engine: "listing"; pack: IntelligencePack }
   | { engine: "seller"; pack: SellerPack }
-  | { engine: "buyer"; pack: BuyerPack };
+  | { engine: "buyer"; pack: BuyerPack }
+  | { engine: "neighborhood"; pack: NeighborhoodPack };

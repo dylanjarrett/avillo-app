@@ -6,9 +6,10 @@ import { useState } from "react";
 import ListingEngine from "@/components/intelligence/engines/ListingEngine";
 import SellerEngine from "@/components/intelligence/engines/SellerEngine";
 import BuyerEngine from "@/components/intelligence/engines/BuyerEngine";
+import NeighborhoodEngine from "@/components/intelligence/engines/NeighborhoodEngine";
 import CRMHistory from "@/components/intelligence/CRMHistory";
 
-type ActiveEngine = "listing" | "seller" | "buyer";
+type ActiveEngine = "listing" | "seller" | "buyer" | "neighborhood";
 
 export default function IntelligencePage() {
   const [activeEngine, setActiveEngine] = useState<ActiveEngine>("listing");
@@ -51,15 +52,17 @@ export default function IntelligencePage() {
             active={activeEngine === "buyer"}
             onClick={() => setActiveEngine("buyer")}
           />
+          <EnginePill
+            label="Neighborhood Engine"
+            description="Schools, lifestyle, access, and talking points."
+            active={activeEngine === "neighborhood"}
+            onClick={() => setActiveEngine("neighborhood")}
+          />
         </div>
       </header>
 
       {/* --------- Error bar --------- */}
-      {error && (
-        <div className="avillo-error-bar">
-          {error}
-        </div>
-      )}
+      {error && <div className="avillo-error-bar">{error}</div>}
 
       {/* --------- Engines --------- */}
       <section className="grid gap-7 lg:grid-cols-1">
@@ -83,6 +86,15 @@ export default function IntelligencePage() {
 
         {activeEngine === "buyer" && (
           <BuyerEngine
+            isGenerating={isGenerating}
+            setIsGenerating={setIsGenerating}
+            setOutput={setOutput}
+            setError={setError}
+          />
+        )}
+
+        {activeEngine === "neighborhood" && (
+          <NeighborhoodEngine
             isGenerating={isGenerating}
             setIsGenerating={setIsGenerating}
             setOutput={setOutput}

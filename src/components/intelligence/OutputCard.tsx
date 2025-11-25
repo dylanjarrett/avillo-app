@@ -1,12 +1,19 @@
+// src/components/intelligence/OutputCard.tsx
 "use client";
 
-import React, { ReactNode } from "react";
-import type { IntelligencePack, ListingTabId } from "@/lib/intelligence";
+import React, { ReactNode, useState } from "react";
+import type {
+  IntelligencePack,
+  ListingTabId,
+  NeighborhoodTabId,
+  NeighborhoodPack,
+} from "@/lib/intelligence";
 
 /* ----------------------------------------
    Local Seller / Buyer types
-   (structurally match the engine files)
+   (match engine files)
 ---------------------------------------- */
+
 export type SellerToolId = "prelisting" | "presentation" | "objection";
 
 export type SellerPack = {
@@ -97,12 +104,21 @@ type OutputRowProps = {
 };
 
 function OutputRow({ title, value }: OutputRowProps) {
+  const [copied, setCopied] = useState(false);
+
   const displayValue =
-    value && value.trim().length > 0 ? value.trim() : "—";
+    typeof value === "string" && value.trim().length > 0
+      ? value.trim()
+      : "—";
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(displayValue === "—" ? "" : displayValue);
+      await navigator.clipboard.writeText(
+        displayValue === "—" ? "" : displayValue
+      );
+      setCopied(true);
+      // Reset label after a short delay
+      setTimeout(() => setCopied(false), 1200);
     } catch (err) {
       console.error("Failed to copy", err);
     }
@@ -118,12 +134,16 @@ function OutputRow({ title, value }: OutputRowProps) {
           {displayValue}
         </pre>
       </div>
+
       <button
         type="button"
         onClick={handleCopy}
-        className="avillo-chip mt-1"
+        className={
+          "avillo-chip mt-1 text-[10px] uppercase tracking-[0.16em] transition-colors " +
+          (copied ? "avillo-chip--success" : "")
+        }
       >
-        Copy
+        {copied ? "Copied ✓" : "Copy"}
       </button>
     </div>
   );
@@ -334,7 +354,10 @@ export function SellerOutputCanvas({
 
         {activeTool === "presentation" && (
           <>
-            <OutputRow title="Opening & rapport" value={pack?.presentation?.opening} />
+            <OutputRow
+              title="Opening & rapport"
+              value={pack?.presentation?.opening}
+            />
             <OutputRow
               title="Questions to ask them"
               value={pack?.presentation?.questions}
@@ -466,6 +489,183 @@ export function BuyerOutputCanvas({
           <p className="pt-2 text-[11px] text-[var(--avillo-cream-muted)]">
             Run a Buyer Studio tool to populate this canvas with recaps, tour
             follow-ups, or offer strategy language.
+          </p>
+        )}
+      </div>
+    </OutputShell>
+  );
+}
+
+/* ----------------------------------------
+   NEIGHBORHOOD OUTPUT CANVAS
+---------------------------------------- */
+
+const NEIGHBORHOOD_TABS: { id: NeighborhoodTabId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "schools", label: "Schools" },
+  { id: "mobility", label: "Mobility & commute" },
+  { id: "essentials", label: "Essentials" },
+  { id: "lifestyle", label: "Lifestyle & safety" },
+];
+
+type NeighborhoodOutputCanvasProps = {
+  pack: NeighborhoodPack | null;
+  activeTab: NeighborhoodTabId;
+  setActiveTab: (tab: NeighborhoodTabId) => void;
+  onSaveToCrm: () => void;
+  savingCrm: boolean;
+};
+
+export function NeighborhoodOutputCanvas({
+  pack,
+  activeTab,
+  setActiveTab,
+  onSaveToCrm,
+  savingCrm,
+}: NeighborhoodOutputCanvasProps) {
+  return (
+    <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
+      {/* Tab pills */}
+      <div className="avillo-pill-group mb-4 inline-flex flex-wrap gap-1">
+        {NEIGHBORHOOD_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={
+              "avillo-pill" +
+              (activeTab === tab.id ? " avillo-pill--active" : "")
+            }
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tabbed content */}
+      <div className="space-y-3 text-xs text-[var(--avillo-cream)]">
+        {/* OVERVIEW TAB (includes buyer-ready talking points) */}
+        {activeTab === "overview" && (
+          <>
+            <OutputRow
+              title="Area summary"
+              value={pack?.overview?.areaSummary}
+            />
+            <OutputRow
+              title="Who this area fits"
+              value={pack?.overview?.whoItFits}
+            />
+            <OutputRow
+              title="Price & housing vibe"
+              value={pack?.overview?.priceVibe}
+            />
+            <OutputRow
+              title="Buyer-ready talking points"
+              value={
+                pack?.overview?.talkingPoints?.length
+                  ? pack.overview.talkingPoints
+                      .map((b) => `• ${b}`)
+                      .join("\n")
+                  : ""
+              }
+            />
+          </>
+        )}
+
+        {/* SCHOOLS TAB */}
+        {activeTab === "schools" && (
+          <>
+            <OutputRow
+              title="Schools overview"
+              value={pack?.schools?.schoolsOverview}
+            />
+            <OutputRow
+              title="Notable schools"
+              value={pack?.schools?.notableSchools}
+            />
+            <OutputRow
+              title="Schools disclaimer"
+              value={pack?.schools?.schoolsDisclaimer}
+            />
+          </>
+        )}
+
+        {/* MOBILITY TAB */}
+        {activeTab === "mobility" && (
+          <>
+            <OutputRow
+              title="Walkability"
+              value={pack?.mobility?.walkability}
+            />
+            <OutputRow
+              title="Bikeability"
+              value={pack?.mobility?.bikeability}
+            />
+            <OutputRow
+              title="Transit overview"
+              value={pack?.mobility?.transitOverview}
+            />
+            <OutputRow
+              title="Driving access"
+              value={pack?.mobility?.drivingAccess}
+            />
+            <OutputRow title="Airports" value={pack?.mobility?.airports} />
+            <OutputRow
+              title="Commute examples"
+              value={pack?.mobility?.commuteExamples}
+            />
+          </>
+        )}
+
+        {/* ESSENTIALS TAB */}
+        {activeTab === "essentials" && (
+          <>
+            <OutputRow
+              title="Groceries & essentials"
+              value={pack?.essentials?.groceries}
+            />
+            <OutputRow title="Gyms & fitness" value={pack?.essentials?.gyms} />
+            <OutputRow
+              title="Daily errands"
+              value={pack?.essentials?.errands}
+            />
+            <OutputRow
+              title="Healthcare options"
+              value={pack?.essentials?.healthcare}
+            />
+          </>
+        )}
+
+        {/* LIFESTYLE TAB */}
+        {activeTab === "lifestyle" && (
+          <>
+            <OutputRow
+              title="Parks & outdoors"
+              value={pack?.lifestyle?.parksAndOutdoors}
+            />
+            <OutputRow
+              title="Dining & nightlife"
+              value={pack?.lifestyle?.diningNightlife}
+            />
+            <OutputRow
+              title="Family activities"
+              value={pack?.lifestyle?.familyActivities}
+            />
+            <OutputRow
+              title="Safety overview"
+              value={pack?.lifestyle?.safetyOverview}
+            />
+            <OutputRow
+              title="Safety disclaimer"
+              value={pack?.lifestyle?.safetyDisclaimer}
+            />
+          </>
+        )}
+
+        {!pack && (
+          <p className="pt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+            Run the Neighborhood Engine to populate this canvas with an area
+            overview you can reuse in emails, tours, and listing presentations.
           </p>
         )}
       </div>

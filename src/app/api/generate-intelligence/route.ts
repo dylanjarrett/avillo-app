@@ -1,9 +1,12 @@
+// src/app/api/generate-intelligence/route.ts
+
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import type {
   IntelligencePack,
   SellerPack,
   BuyerPack,
+  NeighborhoodPack,
 } from "@/lib/intelligence";
 
 const openai = new OpenAI({
@@ -13,6 +16,8 @@ const openai = new OpenAI({
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+
+    // engine = "listing" | "seller" | "buyer" | "neighborhood"
     const { engine, notes, tool, ...context } = body;
 
     if (!engine) {
@@ -25,14 +30,14 @@ export async function POST(req: Request) {
     let prompt = "";
 
     // ----------------------------
-    // Prompt per Engine Type
+    // LISTING ENGINE
     // ----------------------------
     if (engine === "listing") {
       prompt = `
 You are an AI real estate assistant that transforms messy property notes into marketing-ready copy.
 
 INPUT NOTES:
-${notes}
+${notes || ""}
 
 OUTPUT JSON with fields exactly matching:
 {
@@ -66,31 +71,45 @@ OUTPUT JSON with fields exactly matching:
 }`;
     }
 
+    // ----------------------------
+    // SELLER ENGINE
+    // ----------------------------
     if (engine === "seller") {
       prompt = `
 You are an AI writing agent for real estate sellers. Tool = ${tool}.
 
-Context:
+Context from the agent:
 ${JSON.stringify(context, null, 2)}
 
 Return JSON exactly shaped as:
 {
   "prelisting": { "email1": "...", "email2": "...", "email3": "..." },
   "presentation": {
-    "opening": "...", "questions": "...", "story": "...", "pricing": "...",
-    "marketing": "...", "process": "...", "value": "...", "nextSteps": "..."
+    "opening": "...",
+    "questions": "...",
+    "story": "...",
+    "pricing": "...",
+    "marketing": "...",
+    "process": "...",
+    "value": "...",
+    "nextSteps": "..."
   },
   "objection": {
-    "talkTrack": "...", "smsReply": "...", "emailFollowUp": "..."
+    "talkTrack": "...",
+    "smsReply": "...",
+    "emailFollowUp": "..."
   }
 }`;
     }
 
+    // ----------------------------
+    // BUYER ENGINE
+    // ----------------------------
     if (engine === "buyer") {
       prompt = `
 You are an AI agent that helps real estate buyers with summaries, tours, and offers. Tool = ${tool}.
 
-Context:
+Context from the agent:
 ${JSON.stringify(context, null, 2)}
 
 Return JSON exactly shaped as:
@@ -114,6 +133,64 @@ Return JSON exactly shaped as:
     }
 
     // ----------------------------
+    // NEIGHBORHOOD ENGINE
+    // ----------------------------
+    if (engine === "neighborhood") {
+      prompt = `
+You are an AI assistant that creates neighborhood briefs for real estate agents.
+The goal is to give a *narrative overview* buyers can read in emails, tours, or listing materials.
+Do NOT invent precise statistics or guarantees. Be directional and always remind users to verify with official sources.
+
+Agent context (may include ZIP code, city, neighborhood name, and buyer notes):
+${JSON.stringify(context, null, 2)}
+
+Return JSON exactly shaped as:
+
+{
+  "overview": {
+    "areaSummary": "...",
+    "whoItFits": "...",
+    "priceVibe": "..."
+    "talkingPoints": "Bullet-point style talking points the agent can reuse in emails, showings, and listing remarks."
+
+  },
+  "schools": {
+    "schoolsOverview": "...",
+    "notableSchools": "...",
+    "schoolsDisclaimer": "Always verify school boundaries, ratings, and programs with official district and state sources."
+  },
+  "mobility": {
+    "walkability": "...",
+    "bikeability": "...",
+    "transitOverview": "...",
+    "drivingAccess": "...",
+    "airports": "...",
+    "commuteExamples": "..."
+  },
+  "essentials": {
+    "groceries": "...",
+    "gyms": "...",
+    "errands": "...",
+    "healthcare": "..."
+  },
+  "lifestyle": {
+    "parksAndOutdoors": "...",
+    "diningNightlife": "...",
+    "familyActivities": "...",
+    "safetyOverview": "...",
+    "safetyDisclaimer": "This is a general lifestyle and safety overview only. For crime and safety information, buyers must review official crime maps, local police resources, and municipal data." 
+    }
+}`;
+    }
+
+    if (!prompt) {
+      return NextResponse.json(
+        { error: "Unsupported engine type." },
+        { status: 400 }
+      );
+    }
+
+    // ----------------------------
     // Call OpenAI
     // ----------------------------
     const completion = await openai.chat.completions.create({
@@ -123,7 +200,7 @@ Return JSON exactly shaped as:
         {
           role: "system",
           content:
-            "You are Avillo’s AI engine. Respond only with valid JSON output matching the provided schema.",
+            "You are Avillo’s AI engine. Respond ONLY with valid JSON output matching the provided schema. Do not include explanations.",
         },
         { role: "user", content: prompt },
       ],
@@ -132,7 +209,7 @@ Return JSON exactly shaped as:
     const raw = completion.choices[0]?.message?.content?.trim() || "{}";
 
     // Safe JSON parsing
-    let parsed: IntelligencePack | SellerPack | BuyerPack;
+    let parsed: IntelligencePack | SellerPack | BuyerPack | NeighborhoodPack;
     try {
       parsed = JSON.parse(raw);
     } catch (err) {
