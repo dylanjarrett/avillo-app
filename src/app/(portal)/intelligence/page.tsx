@@ -26,32 +26,43 @@ export default function IntelligencePage() {
         subtitle="Transform raw notes into listing packs, seller scripts, buyer follow-ups, and CRM-ready insights — all in one workspace."
       />
 
-      {/* --------- Engine selector pills --------- */}
-      <div className="mt-5 inline-flex flex-wrap gap-2 text-xs">
-        <EnginePill
-          label="Listing Engine"
-          description="MLS, social, emails, talking points."
-          active={activeEngine === "listing"}
-          onClick={() => setActiveEngine("listing")}
-        />
-        <EnginePill
-          label="Seller Engine"
-          description="Prelistings, presentations, objections."
-          active={activeEngine === "seller"}
-          onClick={() => setActiveEngine("seller")}
-        />
-        <EnginePill
-          label="Buyer Engine"
-          description="Tours, summaries, offers, nurture."
-          active={activeEngine === "buyer"}
-          onClick={() => setActiveEngine("buyer")}
-        />
-        <EnginePill
-          label="Neighborhood Engine"
-          description="Schools, lifestyle, access, and talking points."
-          active={activeEngine === "neighborhood"}
-          onClick={() => setActiveEngine("neighborhood")}
-        />
+      {/* --------- Engine selector (mobile scroller, desktop row) --------- */}
+      <div className="mt-5">
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
+          Engines
+        </p>
+
+        <div className="-mx-4 overflow-x-auto pb-3 sm:mx-0 sm:overflow-visible">
+          <div className="flex gap-2 px-4 text-xs snap-x snap-mandatory sm:inline-flex sm:flex-wrap sm:px-0">
+            <EnginePill
+              label="Listing Engine"
+              description="MLS, social, emails, talking points."
+              active={activeEngine === "listing"}
+              onClick={() => setActiveEngine("listing")}
+            />
+            <EnginePill
+              label="Seller Engine"
+              description="Prelistings, presentations, objections."
+              active={activeEngine === "seller"}
+              onClick={() => setActiveEngine("seller")}
+            />
+            <EnginePill
+              label="Buyer Engine"
+              description="Tours, summaries, offers, nurture."
+              active={activeEngine === "buyer"}
+              onClick={() => setActiveEngine("buyer")}
+            />
+            <EnginePill
+              label="Neighborhood Engine"
+              description="Schools, lifestyle, access, and talking points."
+              active={activeEngine === "neighborhood"}
+              onClick={() => setActiveEngine("neighborhood")}
+            />
+
+            {/* Spacer so the last pill isn't pressed against the edge on mobile */}
+            <div className="w-2 flex-shrink-0 sm:hidden" aria-hidden="true" />
+          </div>
+        </div>
       </div>
 
       {/* --------- Error bar --------- */}
@@ -119,12 +130,18 @@ function EnginePill({ label, description, active, onClick }: EnginePillProps) {
       type="button"
       onClick={onClick}
       className={
-        // base pill styling
-        "inline-flex min-w-[170px] items-center justify-between rounded-full border px-4 py-2 text-left transition-all duration-200 sm:justify-start " +
-        // soft-cream color + glow when active
-        (active
-          ? "border-[rgba(248,244,233,0.9)] bg-[rgba(248,244,233,0.12)] text-[var(--avillo-cream)] shadow-[0_0_0_1px_rgba(248,244,233,0.5),0_0_18px_rgba(248,244,233,0.6)]"
-          : "border-[rgba(248,244,233,0.35)] text-[var(--avillo-cream-muted)] hover:bg-[rgba(248,244,233,0.06)]")
+        [
+          // base pill styling
+          "inline-flex items-center rounded-full border px-4 py-2 text-left transition-all duration-200",
+          // Mobile: wide “product card” and snap to center
+          "min-w-[78%] justify-between snap-center",
+          // Desktop: original sizing + alignment
+          "sm:min-w-[170px] sm:justify-start",
+          // soft-cream color + glow when active
+          active
+            ? "border-[rgba(248,244,233,0.9)] bg-[rgba(248,244,233,0.12)] text-[var(--avillo-cream)] shadow-[0_0_0_1px_rgba(248,244,233,0.5),0_0_18px_rgba(248,244,233,0.6)]"
+            : "border-[rgba(248,244,233,0.35)] text-[var(--avillo-cream-muted)] hover:bg-[rgba(248,244,233,0.06)]",
+        ].join(" ")
       }
     >
       <span className="flex flex-col text-left">

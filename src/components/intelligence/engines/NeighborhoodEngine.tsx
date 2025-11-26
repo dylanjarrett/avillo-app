@@ -96,8 +96,15 @@ export default function NeighborhoodEngine({
   // ----------------------------
   return (
     <section className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.5fr)]">
-      {/* ---------- LEFT: INPUT CARD (matches Seller/Buyer/Listing) ---------- */}
-      <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
+
+      {/* LEFT INPUT CARD */}
+      <div
+        className="
+          relative overflow-hidden rounded-2xl border border-slate-700/70 
+          bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]
+          mb-8 pb-4
+        "
+      >
         <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)]" />
 
         <h2 className="mb-1 text-sm font-semibold text-slate-50">
@@ -142,16 +149,16 @@ export default function NeighborhoodEngine({
         </div>
 
         <button
-          type="button"
-          onClick={handleGenerate}
-          disabled={isGenerating}
-          className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isGenerating ? "Generating…" : "Generate Seller Outputs"}
-        </button>
+  type="button"
+  onClick={handleGenerate}
+  disabled={isGenerating}
+  className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+>
+  {isGenerating ? "Generating…" : "Generate Snapshot"}
+</button>
       </div>
 
-      {/* ---------- RIGHT: OUTPUT CANVAS (handled by OutputCard) ---------- */}
+      {/* RIGHT OUTPUT CANVAS */}
       <NeighborhoodOutputCanvas
         pack={pack}
         activeTab={activeTab}
