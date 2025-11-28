@@ -32,8 +32,7 @@ model User {
   crmActivity             CRMActivity[]
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
-
-  stripeCustomerId String? @db.VarChar(255)
+  stripeCustomerId        String?                  @db.VarChar(255)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -51,12 +50,29 @@ model Contact {
   lastName  String?
   email     String?
   phone     String?
-  stage     String   @default("new") // new → warm → hot → closed
-  tags      String[] @default([])
-  notes     String?
-  source    String? // Zillow, Open House, Referral, Social, etc.
 
-  listings    Listing[]
+  stage String @default("new") // new → warm → hot → past
+
+  tags   String[] @default([])
+  notes  String?
+  source String? // Zillow, Open House, Referral, Social, etc.
+
+  // Avillo CRM — pipeline + profile fields
+  label      String? // e.g. "potential buy"
+  type       String? // "Buyer" | "Seller" | "Past / sphere"
+  priceRange String?
+  areas      String?
+  timeline   String?
+
+  // Avillo CRM — touchpoints & working context
+  nextTouchDate String?
+  lastTouchNote String?
+  workingNotes  String?
+
+  // Relationships to listings
+  listingsAsSeller Listing[]          @relation("SellerListings")
+  buyerListings    ListingBuyerLink[]
+
   activities  Activity[]
   crmActivity CRMActivity[]
 
@@ -72,8 +88,9 @@ model Listing {
   user   User   @relation(fields: [userId], references: [id])
   userId String
 
-  contact   Contact? @relation(fields: [contactId], references: [id])
-  contactId String?
+  // Primary seller contact for this listing
+  seller          Contact? @relation("SellerListings", fields: [sellerContactId], references: [id])
+  sellerContactId String?
 
   address     String
   mlsId       String?
@@ -83,6 +100,9 @@ model Listing {
   aiCopy      String?
   aiNotes     String?
 
+  // Tagged buyers (many-to-many via join table)
+  buyers ListingBuyerLink[]
+
   activities Activity[]
 
   createdAt DateTime @default(now())
@@ -90,16 +110,32 @@ model Listing {
 }
 
 // ---------------------------
+// LISTING ↔ BUYER LINK
+// ---------------------------
+model ListingBuyerLink {
+  id String @id @default(cuid())
+
+  listing   Listing @relation(fields: [listingId], references: [id])
+  listingId String
+
+  contact   Contact @relation(fields: [contactId], references: [id])
+  contactId String
+
+  role      String? // "primary", "backup", "interested", etc.
+  createdAt DateTime @default(now())
+
+  @@unique([listingId, contactId])
+}
+
+// ---------------------------
 // ACTIVITIES (SYSTEM EVENTS)
 // ---------------------------
 model Activity {
-  id     String @id @default(cuid())
-  user   User   @relation(fields: [userId], references: [id])
-  userId String
-
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
   contact   Contact? @relation(fields: [contactId], references: [id])
   contactId String?
-
   listing   Listing? @relation(fields: [listingId], references: [id])
   listingId String?
 
@@ -129,7 +165,6 @@ model CRMActivity {
 // ---------------------------
 // NEXTAUTH
 // ---------------------------
-
 model Account {
   id                String  @id @default(cuid())
   userId            String

@@ -1,4 +1,3 @@
-// src/components/layout/sidebar.tsx
 "use client";
 
 import Link from "next/link";
@@ -8,6 +7,7 @@ const TOOL_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/intelligence", label: "Intelligence" },
   { href: "/crm", label: "CRM" },
+  { href: "/listings", label: "My Listings" },
 ];
 
 const ACCOUNT_ITEMS = [
@@ -118,6 +118,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
             Close
           </button>
         </div>
+
         <SidebarInner />
       </div>
     </>

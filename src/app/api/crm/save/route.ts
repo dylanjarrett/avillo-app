@@ -8,19 +8,35 @@ export const dynamic = "force-dynamic";
 
 type ContactPayload = {
   id?: string;
+
+  // Core name + contact
   firstName?: string;
   lastName?: string;
   email?: string;
   phone?: string;
-  stage?: string;
-  tags?: string[];
-  notes?: string;
+
+  // Pipeline + metadata
+  stage?: string;          // "new" | "warm" | "hot" | "past"
   source?: string;
+  tags?: string[];
+
+  // Avillo CRM extras (make sure these exist on your Prisma Contact model)
+  label?: string;          // e.g. "potential buy"
+  type?: string;           // "Buyer" | "Seller" | "Past / sphere"
+  priceRange?: string;
+  areas?: string;
+  timeline?: string;
+
+  // Notes & touchpoints
+  notes?: string;          // general notes (legacy)
+  nextTouchDate?: string;
+  lastTouchNote?: string;
+  workingNotes?: string;
 };
 
 type ActivityPayload = {
-  type: string;         // "note", "call", "stage_change", "updated", etc.
-  summary?: string;     // Human-readable summary
+  type: string;     // "note", "call", "stage_change", "updated", etc.
+  summary?: string; // Human-readable summary
 };
 
 type SaveBody = {
@@ -78,22 +94,42 @@ export async function POST(req: NextRequest) {
         tags,
         notes,
         source,
+        label,
+        type,
+        priceRange,
+        areas,
+        timeline,
+        nextTouchDate,
+        lastTouchNote,
+        workingNotes,
       } = body.contact;
+
+      const baseData = {
+        firstName,
+        lastName,
+        email,
+        phone,
+        stage,
+        tags: tags ?? [],
+        notes,
+        source,
+
+        // extended CRM fields
+        label,
+        type,
+        priceRange,
+        areas,
+        timeline,
+        nextTouchDate,
+        lastTouchNote,
+        workingNotes,
+      };
 
       if (id) {
         // UPDATE CONTACT
         contactRecord = await prisma.contact.update({
           where: { id },
-          data: {
-            firstName,
-            lastName,
-            email,
-            phone,
-            stage,
-            tags: tags ?? [],
-            notes,
-            source,
-          },
+          data: baseData,
         });
 
         contactId = contactRecord.id;
@@ -115,14 +151,9 @@ export async function POST(req: NextRequest) {
         contactRecord = await prisma.contact.create({
           data: {
             userId: user.id,
-            firstName,
-            lastName,
-            email,
-            phone,
             stage: stage ?? "new",
             tags: tags ?? [],
-            notes,
-            source,
+            ...baseData,
           },
         });
 
