@@ -13,6 +13,44 @@ async function getPrisma() {
 }
 
 /* ----------------------------------------------------
+ * Helpers
+ * ---------------------------------------------------*/
+
+function shapeContactNote(note: any) {
+  return {
+    id: note.id,
+    text: note.text,
+    createdAt: note.createdAt?.toISOString?.() ?? new Date().toISOString(),
+    reminderAt: note.reminderAt ? note.reminderAt.toISOString() : null,
+  };
+}
+
+function shapeContact(contactRecord: any) {
+  const name =
+    `${(contactRecord.firstName ?? "").trim()} ${(contactRecord.lastName ?? "")
+      .trim()}`.trim() ||
+    contactRecord.email ||
+    "Unnamed contact";
+
+  return {
+    id: contactRecord.id,
+    name,
+    label: contactRecord.label ?? "",
+    stage: (contactRecord.stage as any) ?? "new",
+    type: contactRecord.type ?? null,
+    priceRange: contactRecord.priceRange ?? "",
+    areas: contactRecord.areas ?? "",
+    timeline: contactRecord.timeline ?? "",
+    source: contactRecord.source ?? "",
+    email: contactRecord.email ?? "",
+    phone: contactRecord.phone ?? "",
+    notes: Array.isArray(contactRecord.contactNotes)
+      ? contactRecord.contactNotes.map(shapeContactNote)
+      : [],
+  };
+}
+
+/* ----------------------------------------------------
  * GET /api/crm/contacts
  * Load all contacts for the logged-in user
  * ---------------------------------------------------*/
@@ -40,31 +78,12 @@ export async function GET(_req: NextRequest) {
     const contacts = await prisma.contact.findMany({
       where: { userId: user.id },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      include: {
+        contactNotes: true,
+      },
     });
 
-    const items = contacts.map((c) => {
-      const name =
-        `${(c.firstName ?? "").trim()} ${(c.lastName ?? "").trim()}`.trim() ||
-        c.email ||
-        "Unnamed contact";
-
-      return {
-        id: c.id,
-        name,
-        label: c.label ?? "",
-        stage: (c.stage as any) ?? "new",
-        type: c.type ?? null,
-        priceRange: c.priceRange ?? "",
-        areas: c.areas ?? "",
-        timeline: c.timeline ?? "",
-        source: c.source ?? "",
-        email: c.email ?? "",
-        phone: c.phone ?? "",
-        nextTouchDate: c.nextTouchDate ?? "",
-        lastTouchNote: c.lastTouchNote ?? "",
-        workingNotes: c.workingNotes ?? "",
-      };
-    });
+    const items = contacts.map(shapeContact);
 
     return NextResponse.json({ contacts: items });
   } catch (err) {
@@ -99,9 +118,6 @@ type SaveContactBody = {
   areas?: string;
   timeline?: string;
   source?: string;
-  nextTouchDate?: string;
-  lastTouchNote?: string;
-  workingNotes?: string;
 };
 
 export async function POST(req: NextRequest) {
@@ -147,14 +163,10 @@ export async function POST(req: NextRequest) {
       areas,
       timeline,
       source,
-      nextTouchDate,
-      lastTouchNote,
-      workingNotes,
     } = body;
 
-    const normalizedStage = stage && ["new", "warm", "hot", "past"].includes(stage)
-      ? stage
-      : "new";
+    const normalizedStage =
+      stage && ["new", "warm", "hot", "past"].includes(stage) ? stage : "new";
 
     let contactRecord;
 
@@ -185,11 +197,9 @@ export async function POST(req: NextRequest) {
           areas: areas ?? existing.areas,
           timeline: timeline ?? existing.timeline,
           source: source ?? existing.source,
-          nextTouchDate: nextTouchDate ?? existing.nextTouchDate,
-          lastTouchNote: lastTouchNote ?? existing.lastTouchNote,
-          workingNotes: workingNotes ?? existing.workingNotes,
-          // keep notes in sync for older features
-          notes: workingNotes ?? existing.notes,
+        },
+        include: {
+          contactNotes: true,
         },
       });
 
@@ -201,8 +211,7 @@ export async function POST(req: NextRequest) {
           summary:
             [
               "Updated contact",
-              (firstName ?? existing.firstName) ||
-                (lastName ?? existing.lastName),
+              (firstName ?? existing.firstName) || (lastName ?? existing.lastName),
             ]
               .filter(Boolean)
               .join(" ") || "Updated contact",
@@ -225,10 +234,9 @@ export async function POST(req: NextRequest) {
           areas: areas ?? "",
           timeline: timeline ?? "",
           source: source ?? "",
-          nextTouchDate: nextTouchDate ?? "",
-          lastTouchNote: lastTouchNote ?? "",
-          workingNotes: workingNotes ?? "",
-          notes: workingNotes ?? "",
+        },
+        include: {
+          contactNotes: true,
         },
       });
 
@@ -238,34 +246,14 @@ export async function POST(req: NextRequest) {
           contactId: contactRecord.id,
           type: "created",
           summary:
-            `New contact: ${(firstName ?? "").trim()} ${(lastName ?? "").trim()}`.trim() ||
-            "New contact added",
+            `New contact: ${(firstName ?? "").trim()} ${(lastName ?? "")
+              .trim()}`.trim() || "New contact added",
           data: {},
         },
       });
     }
 
-    const name =
-      `${(contactRecord.firstName ?? "").trim()} ${(contactRecord.lastName ?? "").trim()}`.trim() ||
-      contactRecord.email ||
-      "Unnamed contact";
-
-    const shaped = {
-      id: contactRecord.id,
-      name,
-      label: contactRecord.label ?? "",
-      stage: (contactRecord.stage as any) ?? "new",
-      type: contactRecord.type ?? null,
-      priceRange: contactRecord.priceRange ?? "",
-      areas: contactRecord.areas ?? "",
-      timeline: contactRecord.timeline ?? "",
-      source: contactRecord.source ?? "",
-      email: contactRecord.email ?? "",
-      phone: contactRecord.phone ?? "",
-      nextTouchDate: contactRecord.nextTouchDate ?? "",
-      lastTouchNote: contactRecord.lastTouchNote ?? "",
-      workingNotes: contactRecord.workingNotes ?? "",
-    };
+    const shaped = shapeContact(contactRecord);
 
     return NextResponse.json({ contact: shaped });
   } catch (err) {

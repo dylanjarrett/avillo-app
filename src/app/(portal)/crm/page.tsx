@@ -12,6 +12,13 @@ import PageHeader from "@/components/layout/page-header";
 type Stage = "new" | "warm" | "hot" | "past";
 type StageFilter = "active" | "new" | "warm" | "hot" | "past";
 
+type ContactNote = {
+  id: string;
+  text: string;
+  createdAt: string;
+  reminderAt?: string | null;
+};
+
 type Contact = {
   id?: string; // undefined = not yet saved
   name: string;
@@ -24,9 +31,7 @@ type Contact = {
   source: string;
   email: string;
   phone: string;
-  nextTouchDate: string;
-  lastTouchNote: string;
-  workingNotes: string;
+  notes: ContactNote[];
 };
 
 type ListingOption = {
@@ -58,6 +63,12 @@ export default function CrmPage() {
     null
   );
 
+  // Notes (per contact) drafts + saving state
+  const [noteDrafts, setNoteDrafts] = useState<
+    Record<string, { text: string; reminderAt: string }>
+  >({});
+  const [noteSaving, setNoteSaving] = useState(false);
+
   // ---------- Load contacts & listings on mount ----------
   useEffect(() => {
     let cancelled = false;
@@ -86,9 +97,7 @@ export default function CrmPage() {
           source: c.source ?? "",
           email: c.email ?? "",
           phone: c.phone ?? "",
-          nextTouchDate: c.nextTouchDate ?? "",
-          lastTouchNote: c.lastTouchNote ?? "",
-          workingNotes: c.workingNotes ?? "",
+          notes: Array.isArray(c.notes) ? c.notes : [],
         }));
 
         if (!cancelled) {
@@ -156,11 +165,16 @@ export default function CrmPage() {
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter((c) => {
+        const notesText = (c.notes ?? [])
+          .map((n) => n.text)
+          .join(" ")
+          .toLowerCase();
+
         return (
           c.name.toLowerCase().includes(q) ||
           c.areas.toLowerCase().includes(q) ||
           c.priceRange.toLowerCase().includes(q) ||
-          c.workingNotes.toLowerCase().includes(q)
+          notesText.includes(q)
         );
       });
     }
@@ -206,19 +220,14 @@ export default function CrmPage() {
       source: "",
       email: "",
       phone: "",
-      nextTouchDate: "",
-      lastTouchNote: "",
-      workingNotes: "",
+      notes: [],
     };
     setSelectedId("new");
     setActiveContact(fresh);
     setSelectedListingId(null);
   }
 
-  function handleFieldChange<K extends keyof Contact>(
-    key: K,
-    value: Contact[K]
-  ) {
+  function handleFieldChange<K extends keyof Contact>(key: K, value: Contact[K]) {
     if (!activeContact) return;
     setActiveContact({ ...activeContact, [key]: value });
   }
@@ -231,6 +240,75 @@ export default function CrmPage() {
     const firstName = parts.shift();
     const lastName = parts.join(" ") || undefined;
     return { firstName, lastName };
+  }
+
+  function updateNoteDraft(
+    contactId: string,
+    field: "text" | "reminderAt",
+    value: string
+  ) {
+    setNoteDrafts((prev) => ({
+      ...prev,
+      [contactId]: {
+        text: field === "text" ? value : prev[contactId]?.text ?? "",
+        reminderAt:
+          field === "reminderAt" ? value : prev[contactId]?.reminderAt ?? "",
+      },
+    }));
+  }
+
+  async function handleAddNote(contactId: string) {
+    const draft = noteDrafts[contactId];
+    if (!draft || !draft.text.trim()) return;
+
+    try {
+      setNoteSaving(true);
+      setError(null);
+
+      const res = await fetch(`/api/crm/contacts/${contactId}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: draft.text,
+          reminderAt: draft.reminderAt || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to save note.");
+      }
+
+      const data = await res.json();
+      const note: ContactNote = data.note;
+
+      // prepend note to this contact in list
+      setContacts((prev) =>
+        prev.map((c) =>
+          c.id === contactId ? { ...c, notes: [note, ...(c.notes ?? [])] } : c
+        )
+      );
+
+      // update active contact, if it’s the same one
+      setActiveContact((prev) =>
+        prev && prev.id === contactId
+          ? { ...prev, notes: [note, ...(prev.notes ?? [])] }
+          : prev
+      );
+
+      // clear draft
+      setNoteDrafts((prev) => ({
+        ...prev,
+        [contactId]: { text: "", reminderAt: "" },
+      }));
+    } catch (err: any) {
+      console.error("Save note error", err);
+      setError(
+        err?.message || "We couldn’t save this note. Try again in a moment."
+      );
+    } finally {
+      setNoteSaving(false);
+    }
   }
 
   async function handleSave(): Promise<Contact | null> {
@@ -258,9 +336,6 @@ export default function CrmPage() {
           areas: activeContact.areas || undefined,
           timeline: activeContact.timeline || undefined,
           source: activeContact.source || undefined,
-          nextTouchDate: activeContact.nextTouchDate || undefined,
-          lastTouchNote: activeContact.lastTouchNote || undefined,
-          workingNotes: activeContact.workingNotes || undefined,
         }),
       });
 
@@ -284,9 +359,7 @@ export default function CrmPage() {
         source: data.contact.source ?? "",
         email: data.contact.email ?? "",
         phone: data.contact.phone ?? "",
-        nextTouchDate: data.contact.nextTouchDate ?? "",
-        lastTouchNote: data.contact.lastTouchNote ?? "",
-        workingNotes: data.contact.workingNotes ?? "",
+        notes: Array.isArray(data.contact.notes) ? data.contact.notes : [],
       };
 
       // Update in-memory list
@@ -334,8 +407,7 @@ export default function CrmPage() {
     } catch (err: any) {
       console.error("Save contact error", err);
       setError(
-        err?.message ||
-          "We couldn’t save this contact. Try again in a moment."
+        err?.message || "We couldn’t save this contact. Try again in a moment."
       );
       return null;
     } finally {
@@ -380,8 +452,7 @@ export default function CrmPage() {
     } catch (err: any) {
       console.error("Delete contact error", err);
       setError(
-        err?.message ||
-          "We couldn’t delete this contact. Try again in a moment."
+        err?.message || "We couldn’t delete this contact. Try again in a moment."
       );
     } finally {
       setDeleting(false);
@@ -834,43 +905,131 @@ export default function CrmPage() {
                   </div>
                 </div>
 
-                {/* Touch cadence */}
+                {/* Notes & reminders (replaces Timeline & touchpoints + Working notes) */}
                 <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                   <p className="text-[11px] font-semibold text-amber-100/90">
-                    Timeline & touchpoints
+                    Notes & reminders
                   </p>
-                  <div className="mt-2 grid gap-2 text-[11px] sm:grid-cols-2">
-                    <DetailInput
-                      label="Next touch"
-                      value={activeContact.nextTouchDate}
-                      onChange={(v) => handleFieldChange("nextTouchDate", v)}
-                      placeholder="Today, next week, a date…"
-                      minimal
-                    />
-                    <DetailInput
-                      label="Last touch note"
-                      value={activeContact.lastTouchNote}
-                      onChange={(v) => handleFieldChange("lastTouchNote", v)}
-                      placeholder="What happened last time you spoke?"
-                      minimal
-                    />
-                  </div>
-                </div>
 
-                {/* Working notes */}
-                <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                  <p className="text-[11px] font-semibold text-amber-100/90">
-                    Working notes
-                  </p>
-                  <textarea
-                    value={activeContact.workingNotes}
-                    onChange={(e) =>
-                      handleFieldChange("workingNotes", e.target.value)
-                    }
-                    rows={3}
-                    placeholder="Add quick context, next steps, and anything you want Avillo to remember for AI workflows."
-                    className="mt-2 w-full resize-none border-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                  />
+                  {!activeContact.id ? (
+                    <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                      Save this contact first, then you’ll be able to log notes and
+                      create reminders tied to your dashboard.
+                    </p>
+                  ) : (
+                    <>
+                      {/* Existing notes */}
+                      <div className="mt-2 max-h-44 space-y-2 overflow-y-auto">
+                        {(activeContact.notes ?? []).length === 0 && (
+                          <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
+                            No notes yet. Log your first touchpoint below.
+                          </p>
+                        )}
+
+                        {activeContact.notes
+                          .slice()
+                          .sort(
+                            (a, b) =>
+                              new Date(b.createdAt).getTime() -
+                              new Date(a.createdAt).getTime()
+                          )
+                          .map((note) => (
+                            <div
+                              key={note.id}
+                              className="rounded-md border border-slate-800/80 bg-slate-900/60 px-2 py-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] text-slate-400">
+                                  {new Date(note.createdAt).toLocaleString(
+                                    undefined,
+                                    {
+                                      month: "short",
+                                      day: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                    }
+                                  )}
+                                </span>
+                                {note.reminderAt && (
+                                  <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                                    Reminder{" "}
+                                    {new Date(note.reminderAt).toLocaleString(
+                                      undefined,
+                                      {
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "numeric",
+                                        minute: "2-digit",
+                                      }
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 whitespace-pre-wrap text-[11px] text-slate-50">
+                                {note.text}
+                              </p>
+                            </div>
+                          ))}
+                      </div>
+
+                      {/* New note composer */}
+                      <div className="mt-3 space-y-2">
+                        <textarea
+                          rows={3}
+                          value={
+                            activeContact.id
+                              ? noteDrafts[activeContact.id]?.text ?? ""
+                              : ""
+                          }
+                          onChange={(e) =>
+                            activeContact.id &&
+                            updateNoteDraft(activeContact.id, "text", e.target.value)
+                          }
+                          placeholder="Log a quick note, call summary, or next steps…"
+                          className="w-full resize-none rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
+                        />
+
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <label className="flex items-center gap-2 text-[10px] text-[var(--avillo-cream-muted)]">
+                            Reminder
+                            <input
+                              type="datetime-local"
+                              value={
+                                activeContact.id
+                                  ? noteDrafts[activeContact.id]?.reminderAt ?? ""
+                                  : ""
+                              }
+                              onChange={(e) =>
+                                activeContact.id &&
+                                updateNoteDraft(
+                                  activeContact.id,
+                                  "reminderAt",
+                                  e.target.value
+                                )
+                              }
+                              className="rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-50 outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              activeContact.id &&
+                              handleAddNote(activeContact.id)
+                            }
+                            disabled={
+                              !activeContact.id ||
+                              noteSaving ||
+                              !noteDrafts[activeContact.id]?.text?.trim()
+                            }
+                            className="inline-flex items-center justify-center rounded-full border border-amber-100/80 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-50 shadow-[0_0_18px_rgba(248,250,252,0.28)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {noteSaving ? "Saving note…" : "Save note"}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Quick AI actions */}
@@ -949,24 +1108,11 @@ type DetailInputProps = {
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
-  minimal?: boolean;
 };
 
-function DetailInput({
-  label,
-  value,
-  onChange,
-  placeholder,
-  minimal,
-}: DetailInputProps) {
+function DetailInput({ label, value, onChange, placeholder }: DetailInputProps) {
   return (
-    <div
-      className={
-        minimal
-          ? "space-y-1"
-          : "rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2"
-      }
-    >
+    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2">
       <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
         {label}
       </p>
@@ -974,10 +1120,7 @@ function DetailInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className={
-          "mt-0.5 w-full border-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]" +
-          (minimal ? "" : " pt-0.5")
-        }
+        className="mt-0.5 w-full border-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] pt-0.5"
       />
     </div>
   );
