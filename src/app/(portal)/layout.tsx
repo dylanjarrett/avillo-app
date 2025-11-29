@@ -22,16 +22,28 @@ export default function PortalLayout({
       <div
         className="
           relative
-          mx-auto
-          max-w-7xl
+          w-full
           min-h-[calc(100vh-5rem)]
           lg:grid lg:grid-cols-[260px_minmax(0,1fr)]
         "
       >
+        {/* Sidebar column */}
         <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
+        {/* Main content */}
         <main className="flex-1 overflow-y-auto px-4 py-6 lg:px-10 lg:py-10">
-          {children}
+          <div
+            className="
+              mx-auto
+              w-full
+              max-w-6xl
+              xl:max-w-7xl
+              2xl:max-w-[88rem]
+              space-y-8
+            "
+          >
+            {children}
+          </div>
         </main>
       </div>
     </>

@@ -61,7 +61,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
 
   function SidebarInner() {
     return (
-      <div className="flex h-full flex-col bg-[#050b16]/80 backdrop-blur-xl">
+      <div className="flex h-full flex-col bg-[#050b16]/80 backdrop-blur-xl pb-6">
         {/* TOOLS SECTION */}
         <div className="px-6 pt-4 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
           TOOLS
@@ -82,7 +82,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
         </nav>
 
         {/* FOOTER */}
-        <div className="mt-auto px-6 pb-5 text-[0.7rem] text-[#8f9bb8]/70">
+        <div className="mt-auto px-6 text-[0.7rem] text-[#8f9bb8]/70">
           Private beta · <span className="text-[#f7f2e9]">Single-seat preview</span>
         </div>
       </div>
@@ -91,10 +91,22 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
 
   return (
     <>
-      {/* Desktop sidebar */}
-      <aside className="hidden h-full w-64 border-r border-[#1d2940]/70 lg:flex">
-        <SidebarInner />
-      </aside>
+      {/* Desktop Sidebar */}
+<aside className="hidden lg:block w-64 border-r border-[#1d2940]/70">
+  <div
+    className="
+      fixed
+      left-0
+      top-20                 /* adjust if needed to sit below header */
+      w-64
+      h-[calc(100vh-5rem)]   /* full height minus header */
+      bg-[#050b16]/80
+      backdrop-blur-xl
+    "
+  >
+    <SidebarInner />
+  </div>
+</aside>
 
       {/* Mobile slide-in drawer */}
       <div
@@ -103,13 +115,15 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
           transform transition-transform duration-200 ease-out
           lg:hidden
           ${open ? "translate-x-0" : "-translate-x-full"}
+          bg-[#050b16]/95 backdrop-blur-xl
         `}
       >
         {/* Top bar inside drawer */}
-        <div className="flex items-center justify-between border-b border-[#1d2940]/70 bg-[#050b16]/95 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-[#1d2940]/70 px-4 py-3">
           <span className="text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-[#a3b0d0]/80">
             Menu
           </span>
+
           <button
             type="button"
             onClick={onClose}
@@ -119,7 +133,9 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
           </button>
         </div>
 
-        <SidebarInner />
+        <div className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-[#1d2940] scrollbar-track-transparent">
+          <SidebarInner />
+        </div>
       </div>
     </>
   );
