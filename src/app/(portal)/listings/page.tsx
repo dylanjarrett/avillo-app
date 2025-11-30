@@ -137,6 +137,7 @@ export default function ListingsPage() {
   // ✅ mobile workspace toggle (always visible on md+)
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   /* ------------------------------------
    * Load listings
@@ -567,7 +568,7 @@ export default function ListingsPage() {
   }
 
   function handleDropFiles(
-    e: React.DragEvent<HTMLLabelElement>,
+    e: React.DragEvent<HTMLElement>,
     listingId?: string
   ) {
     e.preventDefault();
@@ -1484,31 +1485,39 @@ const savedSellerContactId =
 
                 {form.id ? (
                   <>
-                    {/* Hidden input + clickable / droppable zone */}
-                    <input
-                      id="listing-photos-input"
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => handleSelectFiles(e, form.id)}
-                    />
+                    {/* Hidden input for uploads (visually hidden, not display:none) */}
+<input
+  ref={fileInputRef}
+  type="file"
+  accept="image/*"
+  multiple
+  className="sr-only" // keeps it in the DOM for Safari
+  onChange={(e) => handleSelectFiles(e, form.id)}
+/>
 
-                    <label
-                      htmlFor="listing-photos-input"
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                      }}
-                      onDrop={(e) => handleDropFiles(e, form.id)}
-                      className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-slate-950/70 px-4 py-4 text-center text-[11px] text-[var(--avillo-cream-muted)] hover:border-amber-200/80 hover:bg-slate-900/80"
-                    >
-                      <span className="mb-1 font-semibold text-[var(--avillo-cream-soft)]">
-                        Drop photos here or click to upload
-                      </span>
-                      <span className="text-[10px]">
-                        JPG, PNG. Multiple files allowed.
-                      </span>
-                    </label>
+{/* Clickable / droppable zone */}
+<div
+  onClick={() => {
+    if (!form.id) {
+      // extra guard so we don't silently fail
+      alert("Save or create the listing before uploading photos.");
+      return;
+    }
+    fileInputRef.current?.click();
+  }}
+  onDragOver={(e) => {
+    e.preventDefault();
+  }}
+  onDrop={(e) => handleDropFiles(e, form.id)}
+  className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-slate-950/70 px-4 py-4 text-center text-[11px] text-[var(--avillo-cream-muted)] hover:border-amber-200/80 hover:bg-slate-900/80"
+>
+  <span className="mb-1 font-semibold text-[var(--avillo-cream-soft)]">
+    Drop photos here or tap to upload
+  </span>
+  <span className="text-[10px]">
+    JPG, PNG. Multiple files allowed.
+  </span>
+</div>
 
                     {workspacePhotos.length > 0 ? (
                       <div className="mt-3 grid grid-cols-3 gap-3 md:grid-cols-4">
