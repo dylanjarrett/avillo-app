@@ -13,52 +13,49 @@ datasource db {
 // USER
 // ---------------------------
 model User {
-  id                     String                 @id @default(cuid())
-  name                   String?
-  email                  String                 @unique
-  emailVerified          DateTime?
-  passwordHash           String?                @map("password_hash")
-  image                  String?
-  brokerage              String?
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?   @map("password_hash")
+  image         String?
+  brokerage     String?
 
   // Auth relations
-  accounts               Account[]
-  sessions               Session[]
+  accounts Account[]
+  sessions Session[]
 
   // App relations
-  contacts               Contact[]
-  listings               Listing[]
-  activities             Activity[]
-  CRMRecord              CRMRecord[]
-  crmActivity            CRMActivity[]
-  passwordResetTokens    PasswordResetToken[]
+  contacts                Contact[]
+  listings                Listing[]
+  activities              Activity[]
+  CRMRecord               CRMRecord[]
+  crmActivity             CRMActivity[]
+  passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
 
-  stripeCustomerId       String?                @db.VarChar(255)
+  stripeCustomerId String? @db.VarChar(255)
 
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ---------------------------
 // CONTACTS
 // ---------------------------
 model Contact {
-  id       String @id @default(cuid())
-  user     User   @relation(fields: [userId], references: [id])
-  userId   String
-
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
   firstName String?
   lastName  String?
   email     String?
   phone     String?
-
-  stage String   @default("new") // new → warm → hot → past
-  tags  String[] @default([])
+  stage     String   @default("new") // new → warm → hot → past
+  tags      String[] @default([])
 
   // Legacy free-form notes field (kept for backwards compatibility)
   notes  String?
-
   source String? // Zillow, Open House, Referral, Social, etc.
 
   // Avillo CRM — pipeline + profile fields
@@ -72,7 +69,7 @@ model Contact {
   contactNotes ContactNote[]
 
   // Relationships to listings
-  listingsAsSeller Listing[]        @relation("SellerListings")
+  listingsAsSeller Listing[]          @relation("SellerListings")
   buyerListings    ListingBuyerLink[]
 
   activities  Activity[]
@@ -94,31 +91,50 @@ model Listing {
   seller          Contact? @relation("SellerListings", fields: [sellerContactId], references: [id])
   sellerContactId String?
 
-  address   String
-  mlsId     String?
-  price     Int?
-  status    String  @default("draft")
+  address     String
+  mlsId       String?
+  price       Int?
+  status      String  @default("draft")
   description String?
   aiCopy      String?
   aiNotes     String?
 
   // Tagged buyers (many-to-many via join table)
-  buyers     ListingBuyerLink[]
+  buyers ListingBuyerLink[]
+
+  // Listing photos (1-many)
+  photos ListingPhoto[]
 
   activities Activity[]
 
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------
+// LISTING PHOTOS
+// ---------------------------
+model ListingPhoto {
+  id String @id @default(cuid())
+
+  listing   Listing @relation(fields: [listingId], references: [id])
+  listingId String
+
+  url       String
+  isCover   Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
 }
 
 // ---------------------------
 // LISTING ↔ BUYER LINK
 // ---------------------------
 model ListingBuyerLink {
-  id        String  @id @default(cuid())
-  listing   Listing @relation(fields: [listingId], references: [id])
+  id        String   @id @default(cuid())
+  listing   Listing  @relation(fields: [listingId], references: [id])
   listingId String
-  contact   Contact @relation(fields: [contactId], references: [id])
+  contact   Contact  @relation(fields: [contactId], references: [id])
   contactId String
   role      String? // "primary", "backup", "interested", etc.
   createdAt DateTime @default(now())
@@ -130,8 +146,8 @@ model ListingBuyerLink {
 // ACTIVITIES (SYSTEM EVENTS)
 // ---------------------------
 model Activity {
-  id        String  @id @default(cuid())
-  user      User    @relation(fields: [userId], references: [id])
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
   userId    String
   contact   Contact? @relation(fields: [contactId], references: [id])
   contactId String?
@@ -147,7 +163,7 @@ model Activity {
 // Billion-dollar SaaS standard
 // ---------------------------
 model CRMActivity {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   userId    String
   contactId String?
   type      String // "created", "updated", "stage_change", "note", "call", "ai_generated"
@@ -155,7 +171,7 @@ model CRMActivity {
   data      Json?
   createdAt DateTime @default(now())
 
-  user    User    @relation(fields: [userId], references: [id])
+  user    User     @relation(fields: [userId], references: [id])
   contact Contact? @relation(fields: [contactId], references: [id])
 }
 
@@ -163,20 +179,19 @@ model CRMActivity {
 // CONTACT NOTES (STRUCTURED)
 // ---------------------------
 model ContactNote {
-  id        String  @id @default(cuid())
-  contact   Contact @relation(fields: [contactId], references: [id])
-  contactId String
-
+  id         String    @id @default(cuid())
+  contact    Contact   @relation(fields: [contactId], references: [id])
+  contactId  String
   text       String
   reminderAt DateTime?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
 }
 
 // ---------------------------
 // NEXTAUTH
 // ---------------------------
 model Account {
-  id                String @id @default(cuid())
+  id                String  @id @default(cuid())
   userId            String
   type              String
   provider          String
@@ -205,7 +220,7 @@ model Session {
 
 model VerificationToken {
   identifier String
-  token      String @unique
+  token      String   @unique
   expires    DateTime
 
   @@unique([identifier, token])
@@ -215,11 +230,11 @@ model VerificationToken {
 // EMAIL VERIFICATION TOKENS
 // ---------------------------
 model EmailVerificationToken {
-  id       String   @id @default(cuid())
-  userId   String
-  token    String   @unique
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
   expiresAt DateTime
-  usedAt   DateTime?
+  usedAt    DateTime?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -230,11 +245,11 @@ model EmailVerificationToken {
 // PASSWORD RESET TOKENS
 // ---------------------------
 model PasswordResetToken {
-  id       String   @id @default(cuid())
-  userId   String
-  token    String   @unique
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
   expiresAt DateTime
-  usedAt   DateTime?
+  usedAt    DateTime?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -245,7 +260,7 @@ model PasswordResetToken {
 // CRM RAW RECORDS
 // ---------------------------
 model CRMRecord {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   userId    String
   raw       String
   processed String

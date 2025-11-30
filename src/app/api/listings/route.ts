@@ -53,6 +53,9 @@ export async function GET(req: NextRequest) {
             contact: true,
           },
         },
+        photos: {
+          orderBy: { sortOrder: "asc" },
+        },
       },
     });
 
@@ -79,6 +82,10 @@ export async function GET(req: NextRequest) {
           ""
         : null;
 
+      const photoCount = l.photos.length;
+      const coverPhoto =
+        l.photos.find((p) => p.isCover) ?? l.photos[0] ?? null;
+
       return {
         id: l.id,
         address: l.address,
@@ -88,6 +95,17 @@ export async function GET(req: NextRequest) {
         description: l.description,
         aiCopy: l.aiCopy,
         aiNotes: l.aiNotes,
+
+        // ---- NEW: photos for gallery + workspace ----
+        photoCount,
+        coverPhotoUrl: coverPhoto ? coverPhoto.url : null,
+        photos: l.photos.map((p) => ({
+          id: p.id,
+          url: p.url,
+          isCover: p.isCover,
+          sortOrder: p.sortOrder,
+        })),
+
         seller: l.seller
           ? {
               id: l.seller.id,
@@ -96,6 +114,7 @@ export async function GET(req: NextRequest) {
               phone: l.seller.phone,
             }
           : null,
+
         buyers: l.buyers.map((b) => {
           const c = b.contact;
           const buyerName = c
@@ -110,6 +129,7 @@ export async function GET(req: NextRequest) {
             contactName: buyerName || null,
           };
         }),
+
         createdAt: l.createdAt,
         updatedAt: l.updatedAt,
       };

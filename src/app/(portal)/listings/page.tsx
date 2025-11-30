@@ -1,14 +1,23 @@
-// src/app/(portal)/listings/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import type React from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import Image from "next/image";
 import PageHeader from "@/components/layout/page-header";
+import { createClient } from "@supabase/supabase-js";
 
 /* ------------------------------------
- * Types (aligned with /api/listings + /api/listings/save)
+ * Types
  * -----------------------------------*/
 
 type ListingStatus = "draft" | "active" | "pending" | "closed";
+
+type ListingPhoto = {
+  id?: string;
+  url: string;
+  isCover?: boolean;
+  sortOrder?: number;
+};
 
 type ListingRow = {
   id: string;
@@ -16,14 +25,15 @@ type ListingRow = {
   mlsId?: string | null;
   price?: number | null;
   status: ListingStatus | string;
-  createdAt?: string;
-  updatedAt?: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
   sellerName?: string | null;
   buyerCount?: number;
+  coverPhotoUrl?: string | null;
 };
 
 type ListingDetail = {
-  id?: string;
+  id: string;
   address: string;
   mlsId?: string | null;
   price?: number | null;
@@ -32,10 +42,55 @@ type ListingDetail = {
   aiCopy?: string | null;
   aiNotes?: string | null;
   sellerContactId?: string | null;
-  buyers?: {
-    contactId: string;
-    role?: string | null;
-  }[];
+  buyers?: { contactId: string; role?: string | null }[];
+  photos?: ListingPhoto[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+type ContactOption = {
+  id: string;
+  name: string;
+  type?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
+
+/* ------------------------------------
+ * Supabase client helper
+ * -----------------------------------*/
+
+const supabase =
+  process.env.NEXT_PUBLIC_SUPABASE_URL &&
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    ? createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      )
+    : null;
+
+/* ------------------------------------
+ * Initial form state
+ * -----------------------------------*/
+
+const INITIAL_FORM: {
+  id?: string;
+  address: string;
+  mlsId: string;
+  price: string;
+  status: ListingStatus | string;
+  description: string;
+  sellerContactId: string;
+  buyers: { contactId: string; role?: string | null }[];
+} = {
+  id: undefined,
+  address: "",
+  mlsId: "",
+  price: "",
+  status: "draft",
+  description: "",
+  sellerContactId: "",
+  buyers: [],
 };
 
 /* ------------------------------------
@@ -47,47 +102,41 @@ export default function ListingsPage() {
   const [loadingList, setLoadingList] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ✅ default to "all"
   const [statusFilter, setStatusFilter] = useState<"all" | ListingStatus>(
-    "active"
+    "all"
   );
   const [search, setSearch] = useState("");
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  // Detail form state
-  const [form, setForm] = useState<{
-    id?: string;
-    address: string;
-    mlsId: string;
-    price: string;
-    status: ListingStatus | string;
-    description: string;
-    aiCopy: string;
-    aiNotes: string;
-    sellerContactId: string;
-    buyerContactIds: string; // comma or newline separated IDs
-  }>({
-    id: undefined,
-    address: "",
-    mlsId: "",
-    price: "",
-    status: "draft",
-    description: "",
-    aiCopy: "",
-    aiNotes: "",
-    sellerContactId: "",
-    buyerContactIds: "",
-  });
-
   const [saving, setSaving] = useState(false);
 
+  // form for the workspace
+  const [form, setForm] = useState<typeof INITIAL_FORM>(INITIAL_FORM);
+
+  // contacts for selectors
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsError, setContactsError] = useState<string | null>(null);
+
+  // listingId -> photos
+  const [photoState, setPhotoState] = useState<Record<string, ListingPhoto[]>>(
+    {}
+  );
+
+  // slideshow index for each listing in gallery
+  const [galleryIndexByListing, setGalleryIndexByListing] = useState<
+    Record<string, number>
+  >({});
+
   /* ------------------------------------
-   * Load listings on mount
+   * Load listings
    * -----------------------------------*/
+
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
+    async function loadListings() {
       try {
         setLoadingList(true);
         setError(null);
@@ -103,15 +152,54 @@ export default function ListingsPage() {
         }
 
         const data = (await res.json()) as {
-          listings?: ListingRow[];
+          listings?: any[];
         };
 
-        if (!cancelled) {
-          setListings(data.listings ?? []);
-          if ((data.listings ?? []).length > 0) {
-            setSelectedId(data.listings![0].id);
-            hydrateFormFromListing(data.listings![0]);
-          }
+        const apiListings = data.listings ?? [];
+
+        if (cancelled) return;
+
+        const rows: ListingRow[] = apiListings.map((l: any) => {
+          const cover =
+            Array.isArray(l.photos) && l.photos.length > 0
+              ? l.photos.find((p: any) => p.isCover) ?? l.photos[0]
+              : null;
+
+          return {
+            id: l.id,
+            address: l.address,
+            mlsId: l.mlsId ?? null,
+            price: typeof l.price === "number" ? l.price : null,
+            status: l.status,
+            createdAt: l.createdAt ?? null,
+            updatedAt: l.updatedAt ?? null,
+            sellerName: l.seller?.name ?? null,
+            buyerCount: Array.isArray(l.buyers) ? l.buyers.length : 0,
+            coverPhotoUrl: cover ? cover.url : null,
+          };
+        });
+
+        const initialPhotos: Record<string, ListingPhoto[]> = {};
+        apiListings.forEach((l: any) => {
+          initialPhotos[l.id] = Array.isArray(l.photos)
+            ? l.photos.map((p: any) => ({
+                id: p.id,
+                url: p.url,
+                isCover: p.isCover,
+                sortOrder: p.sortOrder,
+              }))
+            : [];
+        });
+
+        setListings(rows);
+        setPhotoState(initialPhotos);
+
+        if (rows.length > 0) {
+          const first = apiListings[0];
+          setSelectedId(first.id);
+          hydrateFormFromApi(first);
+        } else {
+          setSelectedId(null);
         }
       } catch (err: any) {
         console.error("load listings error", err);
@@ -126,56 +214,113 @@ export default function ListingsPage() {
       }
     }
 
-    load();
+    loadListings();
+
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ------------------------------------
+   * Load CRM contacts
+   * -----------------------------------*/
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadContacts() {
+      try {
+        setContactsLoading(true);
+        setContactsError(null);
+
+        const res = await fetch("/api/crm/contacts", {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          throw new Error(data?.error || "Failed to load contacts.");
+        }
+
+        const data = (await res.json()) as {
+          contacts?: any[];
+        };
+
+        if (cancelled) return;
+
+        const mapped: ContactOption[] = (data.contacts ?? []).map((c) => ({
+          id: c.id,
+          name: c.name ?? "Unnamed contact",
+          type: c.type ?? null,
+          email: c.email ?? null,
+          phone: c.phone ?? null,
+        }));
+
+        setContacts(mapped);
+      } catch (err: any) {
+        console.error("load contacts error", err);
+        if (!cancelled) {
+          setContactsError(
+            err?.message ||
+              "We couldn’t load your CRM contacts. Searchable selectors may be limited."
+          );
+        }
+      } finally {
+        if (!cancelled) setContactsLoading(false);
+      }
+    }
+
+    loadContacts();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /* ------------------------------------
    * Helpers
    * -----------------------------------*/
 
-  function hydrateFormFromListing(listing: ListingRow | ListingDetail) {
+  function hydrateFormFromApi(l: any) {
     setForm({
-      id: listing.id,
-      address: listing.address ?? "",
-      mlsId: listing.mlsId ?? "",
+      id: l.id,
+      address: l.address ?? "",
+      mlsId: l.mlsId ?? "",
       price:
-        listing.price != null && !Number.isNaN(listing.price)
-          ? String(listing.price)
+        typeof l.price === "number" && !Number.isNaN(l.price)
+          ? String(l.price)
           : "",
-      status: (listing.status as ListingStatus) ?? "draft",
-      description: (listing as any).description ?? "",
-      aiCopy: (listing as any).aiCopy ?? "",
-      aiNotes: (listing as any).aiNotes ?? "",
-      sellerContactId:
-        (listing as any).seller?.id ??
-        (listing as any).sellerContactId ??
-        "",
-      buyerContactIds:
-        Array.isArray((listing as any).buyers) &&
-        (listing as any).buyers.length > 0
-          ? (listing as any).buyers
-              .map(
-                (b: any) =>
-                  b.contactId ||
-                  b.contact?.id ||
-                  "" /* gracefully handle different shapes */
-              )
-              .filter(Boolean)
-              .join(", ")
-          : "",
+      status: (l.status as ListingStatus) ?? "draft",
+      description: l.description ?? "",
+      sellerContactId: l.seller?.id ?? l.sellerContactId ?? "",
+      buyers: Array.isArray(l.buyers)
+        ? l.buyers
+            .map((b: any) => ({
+              contactId: b.contactId ?? b.contact?.id ?? "",
+              role: b.role ?? null,
+            }))
+            .filter((b: any) => b.contactId)
+        : [],
     });
+
+    if (Array.isArray(l.photos)) {
+      setPhotoState((prev) => ({
+        ...prev,
+        [l.id]: l.photos.map((p: any) => ({
+          id: p.id,
+          url: p.url,
+          isCover: p.isCover,
+          sortOrder: p.sortOrder,
+        })),
+      }));
+    }
   }
 
   const filteredListings = useMemo(() => {
     return listings.filter((l) => {
       if (statusFilter !== "all") {
         if ((l.status as ListingStatus) !== statusFilter) return false;
-      } else {
-        // "all" means show everything
       }
 
       if (!search.trim()) return true;
@@ -187,164 +332,9 @@ export default function ListingsPage() {
     });
   }, [listings, statusFilter, search]);
 
-  const selectedListingRow = useMemo(
-    () => filteredListings.find((l) => l.id === selectedId) ?? null,
-    [filteredListings, selectedId]
-  );
-
-  // Ensure selected listing always exists in filtered set
-  useEffect(() => {
-    if (!selectedListingRow && filteredListings[0]) {
-      setSelectedId(filteredListings[0].id);
-      hydrateFormFromListing(filteredListings[0]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedListingRow, filteredListings]);
-
-  function handleSelectListing(row: ListingRow) {
-    setSelectedId(row.id);
-    hydrateFormFromListing(row);
-  }
-
-  function handleNewListing() {
-    setSelectedId(null);
-    setForm({
-      id: undefined,
-      address: "",
-      mlsId: "",
-      price: "",
-      status: "draft",
-      description: "",
-      aiCopy: "",
-      aiNotes: "",
-      sellerContactId: "",
-      buyerContactIds: "",
-    });
-  }
-
-  function onFormChange<K extends keyof typeof form>(key: K, value: string) {
+  function onFormChange<K extends keyof typeof form>(key: K, value: any) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
-
-  function normalizeBuyerContactIds(raw: string): { contactId: string }[] {
-    const pieces = raw
-      .split(/[\n,]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const uniqueIds = Array.from(new Set(pieces));
-    return uniqueIds.map((id) => ({ contactId: id }));
-  }
-
-  /* ------------------------------------
-   * Save handler (create or update)
-   * -----------------------------------*/
-
-  async function handleSave() {
-    if (!form.address.trim()) {
-      setError("Please add an address before saving this listing.");
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
-
-    try {
-      const payload: ListingDetail = {
-        id: form.id,
-        address: form.address.trim(),
-        mlsId: form.mlsId.trim() || null,
-        price: form.price.trim()
-          ? Number.isNaN(Number(form.price.trim()))
-            ? null
-            : Number(form.price.trim())
-          : null,
-        status: (form.status as ListingStatus) || "draft",
-        description: form.description.trim() || null,
-        aiCopy: form.aiCopy.trim() || null,
-        aiNotes: form.aiNotes.trim() || null,
-        sellerContactId: form.sellerContactId.trim() || null,
-        buyers: normalizeBuyerContactIds(form.buyerContactIds),
-      };
-
-      const res = await fetch("/api/listings/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ listing: payload }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Failed to save listing.");
-      }
-
-      const data = (await res.json()) as {
-        listing: any;
-      };
-
-      const saved = data.listing;
-
-      // Build updated row for the left list
-      const sellerName =
-        saved?.seller?.name ||
-        (saved?.seller
-          ? `${saved.seller.firstName ?? ""} ${
-              saved.seller.lastName ?? ""
-            }`.trim()
-          : "") ||
-        null;
-
-      const buyerCount = Array.isArray(saved?.buyers)
-        ? saved.buyers.length
-        : 0;
-
-      const updatedRow: ListingRow = {
-        id: saved.id,
-        address: saved.address,
-        mlsId: saved.mlsId,
-        price: saved.price,
-        status: saved.status,
-        createdAt:
-          typeof saved.createdAt === "string"
-            ? saved.createdAt
-            : saved.createdAt
-            ? new Date(saved.createdAt).toISOString()
-            : undefined,
-        updatedAt:
-          typeof saved.updatedAt === "string"
-            ? saved.updatedAt
-            : saved.updatedAt
-            ? new Date(saved.updatedAt).toISOString()
-            : undefined,
-        sellerName,
-        buyerCount,
-      };
-
-      // Update list in-place
-      setListings((prev) => {
-        const exists = prev.some((l) => l.id === updatedRow.id);
-        if (exists) {
-          return prev.map((l) => (l.id === updatedRow.id ? updatedRow : l));
-        }
-        return [updatedRow, ...prev];
-      });
-
-      setSelectedId(updatedRow.id);
-      hydrateFormFromListing(saved);
-    } catch (err: any) {
-      console.error("save listing error", err);
-      setError(
-        err?.message ||
-          "We couldn’t save your listing. Try again or contact support@avillo.io."
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  /* ------------------------------------
-   * Render helpers
-   * -----------------------------------*/
 
   function statusLabel(status: ListingStatus | string): string {
     switch (status) {
@@ -376,6 +366,559 @@ export default function ListingsPage() {
     }
   }
 
+  const total = listings.length;
+  const activeCount = listings.filter((l) => l.status === "active").length;
+  const pendingCount = listings.filter((l) => l.status === "pending").length;
+  const closedCount = listings.filter((l) => l.status === "closed").length;
+  const draftCount = listings.filter((l) => l.status === "draft").length;
+
+  const statusCounts = {
+    all: total,
+    active: activeCount,
+    pending: pendingCount,
+    closed: closedCount,
+    draft: draftCount,
+  };
+
+  const sellerOptions = useMemo(
+    () =>
+      contacts.filter((c) => (c.type ?? "").toLowerCase().includes("seller")),
+    [contacts]
+  );
+  const buyerOptions = useMemo(
+    () =>
+      contacts.filter((c) => (c.type ?? "").toLowerCase().includes("buyer")),
+    [contacts]
+  );
+
+  const selectedBuyers = useMemo(() => {
+    const ids = new Set(form.buyers.map((b) => b.contactId));
+    return buyerOptions.filter((b) => ids.has(b.id));
+  }, [buyerOptions, form.buyers]);
+
+  const selectedSeller =
+    sellerOptions.find((c) => c.id === form.sellerContactId) ?? null;
+
+  /* ------------------------------------
+   * Photo helpers (Supabase)
+   * -----------------------------------*/
+
+  async function uploadFilesToSupabase(listingId: string, files: FileList) {
+    if (!supabase) {
+      console.warn("Supabase not configured – cannot upload images.");
+      return;
+    }
+
+    const bucket = "listing-photos";
+    const uploaded: ListingPhoto[] = [];
+
+    for (const file of Array.from(files)) {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `${listingId}/${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(path, file, { upsert: false });
+
+      if (uploadError) {
+        console.error("Supabase upload error", uploadError);
+        continue;
+      }
+
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      const publicUrl = data.publicUrl;
+
+      uploaded.push({
+        url: publicUrl,
+        isCover: false,
+      });
+    }
+
+    if (uploaded.length === 0) return;
+
+    setPhotoState((prev) => {
+      const current = prev[listingId] ?? [];
+      const merged = [...current, ...uploaded];
+
+      if (!merged.some((p) => p.isCover)) {
+        merged[0] = { ...merged[0], isCover: true };
+      }
+
+      return {
+        ...prev,
+        [listingId]: merged.map((p, index) => ({
+          ...p,
+          sortOrder: typeof p.sortOrder === "number" ? p.sortOrder : index,
+        })),
+      };
+    });
+  }
+
+  // use the current workspace listing id (form.id) for uploads
+  function handleSelectFiles(
+    e: React.ChangeEvent<HTMLInputElement>,
+    listingId?: string
+  ) {
+    const targetListingId = listingId || form.id || selectedId;
+    if (!targetListingId || !e.target.files || e.target.files.length === 0)
+      return;
+    void uploadFilesToSupabase(targetListingId, e.target.files);
+    e.target.value = "";
+  }
+
+  function handleDropFiles(
+    e: React.DragEvent<HTMLLabelElement>,
+    listingId?: string
+  ) {
+    e.preventDefault();
+    const targetListingId = listingId || form.id || selectedId;
+    if (
+      !targetListingId ||
+      !e.dataTransfer.files ||
+      e.dataTransfer.files.length === 0
+    )
+      return;
+    void uploadFilesToSupabase(targetListingId, e.dataTransfer.files);
+  }
+
+  function removePhoto(listingId: string, url: string) {
+    setPhotoState((prev) => {
+      const current = prev[listingId] ?? [];
+      const filtered = current.filter((p) => p.url !== url);
+
+      if (filtered.length > 0 && !filtered.some((p) => p.isCover)) {
+        filtered[0] = { ...filtered[0], isCover: true };
+      }
+
+      return {
+        ...prev,
+        [listingId]: filtered.map((p, index) => ({
+          ...p,
+          sortOrder: index,
+        })),
+      };
+    });
+  }
+
+  function setCoverPhoto(listingId: string, url: string) {
+    setPhotoState((prev) => {
+      const current = prev[listingId] ?? [];
+      const updated = current.map((p, index) => ({
+        ...p,
+        isCover: p.url === url,
+        sortOrder: typeof p.sortOrder === "number" ? p.sortOrder : index,
+      }));
+      return {
+        ...prev,
+        [listingId]: updated,
+      };
+    });
+  }
+
+  /* ------------------------------------
+   * Gallery slideshow helpers
+   * -----------------------------------*/
+
+  function getPhotosForListingCard(row: ListingRow): ListingPhoto[] {
+    const fromState = photoState[row.id];
+    if (fromState && fromState.length > 0) return fromState;
+
+    return row.coverPhotoUrl
+      ? [
+          {
+            url: row.coverPhotoUrl,
+            isCover: true,
+            sortOrder: 0,
+          },
+        ]
+      : [];
+  }
+
+  function getCurrentCardPhotoUrl(row: ListingRow): string | null {
+    const photos = getPhotosForListingCard(row);
+    if (photos.length === 0) return null;
+
+    const coverIndex =
+      photos.findIndex((p) => p.isCover) >= 0
+        ? photos.findIndex((p) => p.isCover)
+        : 0;
+
+    const rawIndex = galleryIndexByListing[row.id] ?? coverIndex;
+    const clamped = Math.max(0, Math.min(rawIndex, photos.length - 1));
+
+    return photos[clamped]?.url ?? null;
+  }
+
+  function showPrevPhoto(listingId: string) {
+    setGalleryIndexByListing((prev) => {
+      const photos = photoState[listingId] ?? [];
+      if (photos.length <= 1) return prev;
+
+      const coverIndex =
+        photos.findIndex((p) => p.isCover) >= 0
+          ? photos.findIndex((p) => p.isCover)
+          : 0;
+
+      const current = prev[listingId] ?? coverIndex;
+      const next = (current - 1 + photos.length) % photos.length;
+
+      return {
+        ...prev,
+        [listingId]: next,
+      };
+    });
+  }
+
+  function showNextPhoto(listingId: string) {
+    setGalleryIndexByListing((prev) => {
+      const photos = photoState[listingId] ?? [];
+      if (photos.length <= 1) return prev;
+
+      const coverIndex =
+        photos.findIndex((p) => p.isCover) >= 0
+          ? photos.findIndex((p) => p.isCover)
+          : 0;
+
+      const current = prev[listingId] ?? coverIndex;
+      const next = (current + 1) % photos.length;
+
+      return {
+        ...prev,
+        [listingId]: next,
+      };
+    });
+  }
+
+  /* ------------------------------------
+   * Buyer toggle
+   * -----------------------------------*/
+
+  function toggleBuyer(contactId: string) {
+    setForm((prev) => {
+      const exists = prev.buyers.some((b) => b.contactId === contactId);
+      if (exists) {
+        return {
+          ...prev,
+          buyers: prev.buyers.filter((b) => b.contactId !== contactId),
+        };
+      }
+      return {
+        ...prev,
+        buyers: [...prev.buyers, { contactId }],
+      };
+    });
+  }
+
+  /* ------------------------------------
+   * New listing
+   * -----------------------------------*/
+
+  async function handleNewListingClick() {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/listings/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listing: {
+            address: "New listing",
+            status: "draft",
+            buyers: [],
+            photos: [],
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to create listing.");
+      }
+
+      const { listing: saved } = (await res.json()) as { listing: any };
+
+      const newRow: ListingRow = {
+        id: saved.id,
+        address: saved.address,
+        mlsId: saved.mlsId ?? null,
+        price: typeof saved.price === "number" ? saved.price : null,
+        status: saved.status,
+        createdAt: saved.createdAt ?? null,
+        updatedAt: saved.updatedAt ?? null,
+        sellerName: saved.seller?.name ?? null,
+        buyerCount: Array.isArray(saved.buyers) ? saved.buyers.length : 0,
+        coverPhotoUrl:
+          (saved.photos ?? []).find((p: any) => p.isCover)?.url ??
+          (saved.photos ?? [])[0]?.url ??
+          null,
+      };
+
+      setListings((prev) => [newRow, ...prev]);
+
+      setSelectedId(saved.id);
+      setForm({
+        id: saved.id,
+        address: "",
+        mlsId: saved.mlsId ?? "",
+        price:
+          typeof saved.price === "number" && !Number.isNaN(saved.price)
+            ? String(saved.price)
+            : "",
+        status: (saved.status as ListingStatus) ?? "draft",
+        description: saved.description ?? "",
+        sellerContactId: saved.sellerContactId ?? "",
+        buyers: Array.isArray(saved.buyers)
+          ? saved.buyers
+              .map((b: any) => ({
+                contactId: b.contactId ?? b.contact?.id ?? "",
+                role: b.role ?? null,
+              }))
+              .filter((b: any) => b.contactId)
+          : [],
+      });
+
+      setPhotoState((prev) => ({
+        ...prev,
+        [saved.id]: Array.isArray(saved.photos)
+          ? saved.photos.map((p: any, index: number) => ({
+              id: p.id,
+              url: p.url,
+              isCover: p.isCover,
+              sortOrder:
+                typeof p.sortOrder === "number" ? p.sortOrder : index,
+            }))
+          : [],
+      }));
+
+      setGalleryIndexByListing((prev) => ({
+        ...prev,
+        [saved.id]: 0,
+      }));
+    } catch (err) {
+      console.error("New listing error", err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /* ------------------------------------
+   * Save listing
+   * -----------------------------------*/
+
+  async function handleSaveListing() {
+    if (!form.id) return;
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      const photosForListing = photoState[form.id] ?? [];
+
+      const payload = {
+        id: form.id,
+        address: form.address.trim() || "Untitled listing",
+        mlsId: form.mlsId || null,
+        price: form.price.trim()
+          ? Number.isNaN(Number(form.price.trim()))
+            ? null
+            : Number(form.price.trim())
+          : null,
+        status: (form.status as ListingStatus) || "draft",
+        description: form.description || null,
+        aiCopy: null,
+        aiNotes: null,
+        sellerContactId: form.sellerContactId || null,
+        buyers: (form.buyers ?? []).map((b) => ({
+          contactId: b.contactId,
+          role: b.role ?? null,
+        })),
+        photos: photosForListing.map((p, index) => ({
+          url: p.url,
+          isCover: !!p.isCover,
+          sortOrder:
+            typeof p.sortOrder === "number" ? p.sortOrder : index,
+        })),
+      };
+
+      const res = await fetch("/api/listings/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listing: payload }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to save listing.");
+      }
+
+      const { listing: saved } = (await res.json()) as { listing: any };
+
+      // sync photos from backend
+      const normalizedPhotos: ListingPhoto[] = Array.isArray(saved.photos)
+        ? saved.photos.map((p: any, index: number) => ({
+            id: p.id,
+            url: p.url,
+            isCover: p.isCover,
+            sortOrder:
+              typeof p.sortOrder === "number" ? p.sortOrder : index,
+          }))
+        : [];
+
+      setPhotoState((prev) => ({
+        ...prev,
+        [saved.id]: normalizedPhotos,
+      }));
+
+      // update form
+      hydrateFormFromApi(saved);
+
+      // update gallery row
+      setListings((prev) => {
+        const idx = prev.findIndex((l) => l.id === saved.id);
+        const row: ListingRow = {
+          id: saved.id,
+          address: saved.address,
+          mlsId: saved.mlsId ?? null,
+          price: typeof saved.price === "number" ? saved.price : null,
+          status: saved.status,
+          createdAt: saved.createdAt ?? null,
+          updatedAt: saved.updatedAt ?? null,
+          sellerName: saved.seller?.name ?? null,
+          buyerCount: Array.isArray(saved.buyers) ? saved.buyers.length : 0,
+          coverPhotoUrl:
+            normalizedPhotos.find((p) => p.isCover)?.url ??
+            normalizedPhotos[0]?.url ??
+            null,
+        };
+
+        if (idx >= 0) {
+          const clone = [...prev];
+          clone[idx] = row;
+          return clone;
+        }
+        return [row, ...prev];
+      });
+    } catch (err: any) {
+      console.error("save listing error", err);
+      setError(
+        err?.message ||
+          "We couldn’t save your listing. Try again or contact support@avillo.io."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /* ------------------------------------
+   * Delete listing
+   * -----------------------------------*/
+
+  async function handleDeleteListing() {
+    if (!form.id) return;
+    const listingId = form.id;
+
+    const confirmed = window.confirm(
+      "Delete this listing and its photos? This can’t be undone."
+    );
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/listings/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: listingId }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to delete listing.");
+      }
+
+      const updatedListings = listings.filter((l) => l.id !== listingId);
+      setListings(updatedListings);
+
+      setPhotoState((prev) => {
+        const clone = { ...prev };
+        delete clone[listingId];
+        return clone;
+      });
+
+      if (updatedListings.length > 0) {
+        const next = updatedListings[0];
+        setSelectedId(next.id);
+
+        const apiLike: ListingDetail = {
+          id: next.id,
+          address: next.address,
+          mlsId: next.mlsId,
+          price: next.price,
+          status: next.status,
+          description: "",
+          sellerContactId: "",
+          buyers: [],
+          photos: photoState[next.id] ?? [],
+          aiCopy: null,
+          aiNotes: null,
+          createdAt: next.createdAt ?? null,
+          updatedAt: next.updatedAt ?? null,
+        };
+
+        hydrateFormFromApi(apiLike);
+      } else {
+        setSelectedId(null);
+        setForm(INITIAL_FORM);
+      }
+    } catch (err: any) {
+      console.error("delete listing error", err);
+      setError(
+        err?.message ||
+          "We couldn’t delete this listing. Try again or contact support@avillo.io."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /* ------------------------------------
+   * Select listing from gallery
+   * -----------------------------------*/
+
+  function handleSelectListing(row: ListingRow) {
+    setSelectedId(row.id);
+
+    const apiLike: ListingDetail = {
+      id: row.id,
+      address: row.address,
+      mlsId: row.mlsId,
+      price: row.price,
+      status: row.status,
+      description: "",
+      sellerContactId: "",
+      buyers: (form.id === row.id ? form.buyers : []).map((b) => ({
+        contactId: b.contactId,
+        role: b.role ?? null,
+      })),
+      photos: photoState[row.id] ?? [],
+      aiCopy: null,
+      aiNotes: null,
+      createdAt: row.createdAt ?? null,
+      updatedAt: row.updatedAt ?? null,
+    };
+
+    hydrateFormFromApi(apiLike);
+  }
+
+  /* ------------------------------------
+   * Derived photos for workspace
+   * -----------------------------------*/
+
+  const workspacePhotos: ListingPhoto[] =
+    (form.id && photoState[form.id]) || (selectedId && photoState[selectedId]) || [];
+
   /* ------------------------------------
    * Render
    * -----------------------------------*/
@@ -385,57 +928,80 @@ export default function ListingsPage() {
       <PageHeader
         eyebrow="Listings"
         title="My listings"
-        subtitle="Track your active, pending, and past listings — link sellers and interested buyers so your AI engines always have context."
+        subtitle="Turn each property into a living workspace — assign sellers and buyers, and keep every listing marketing-ready."
       />
 
-      {/* Top bar: summary + add button */}
       <section className="space-y-5">
+        {/* Top bar */}
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
-              Inventory & assignments
+              Inventory & workspaces
             </p>
             <p className="mt-1 max-w-xl text-xs text-[var(--avillo-cream-soft)]">
-              See your listings on the left, edit details on the right. Assign a
-              seller and tag buyer contacts so Avillo can generate tailored
-              follow-ups and scripts.
+              Each card is a listing workspace. Set a cover image, tweak
+              details, and attach the people who matter from your CRM.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleNewListing}
-            className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20"
-          >
-            + New listing
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className="hidden md:inline-flex items-center justify-center rounded-full border border-slate-600/70 bg-slate-900/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/60 hover:text-amber-50 hover:bg-slate-900/80"
+            >
+              Quick import from MLS
+            </button>
+
+            <button
+              type="button"
+              onClick={handleNewListingClick}
+              className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:opacity-60"
+              disabled={saving}
+            >
+              {saving ? "Creating…" : "+ New listing"}
+            </button>
+          </div>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StatCard label="Total listings" value={total} />
+          <StatCard label="Active" value={activeCount} tone="green" />
+          <StatCard label="Pending" value={pendingCount} tone="amber" />
+          <StatCard label="Closed" value={closedCount} tone="blue" />
         </div>
 
         {/* Filters + search */}
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="inline-flex flex-wrap gap-2 text-xs">
-            <StatusFilterPill
-              label="Active"
-              active={statusFilter === "active"}
-              onClick={() => setStatusFilter("active")}
-            />
+            {/* ✅ order: All (default), Draft, Active, Pending, Closed */}
             <StatusFilterPill
               label="All"
+              count={statusCounts.all}
               active={statusFilter === "all"}
               onClick={() => setStatusFilter("all")}
             />
             <StatusFilterPill
               label="Draft"
+              count={statusCounts.draft}
               active={statusFilter === "draft"}
               onClick={() => setStatusFilter("draft")}
             />
             <StatusFilterPill
+              label="Active"
+              count={statusCounts.active}
+              active={statusFilter === "active"}
+              onClick={() => setStatusFilter("active")}
+            />
+            <StatusFilterPill
               label="Pending"
+              count={statusCounts.pending}
               active={statusFilter === "pending"}
               onClick={() => setStatusFilter("pending")}
             />
             <StatusFilterPill
               label="Closed"
+              count={statusCounts.closed}
               active={statusFilter === "closed"}
               onClick={() => setStatusFilter("closed")}
             />
@@ -451,15 +1017,15 @@ export default function ListingsPage() {
           </div>
         </div>
 
-        {/* Main layout: list + detail */}
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1.1fr)]">
-          {/* LEFT: LIST */}
+        {/* Main grid: gallery + workspace */}
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
+          {/* LEFT: Listing gallery */}
           <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
             <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)]" />
 
-            <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
-                Listing list
+                Listing gallery
               </p>
               <p className="text-[11px] text-[var(--avillo-cream-muted)]">
                 {loadingList
@@ -470,92 +1036,296 @@ export default function ListingsPage() {
               </p>
             </div>
 
-            <div className="space-y-2">
-              {!loadingList && filteredListings.length === 0 && (
-                <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-                  No listings match this filter yet. Adjust status, search
-                  criteria, or create a new listing.
-                </p>
-              )}
+            {error && !loadingList && (
+              <p className="mb-3 text-[11px] text-red-300">{error}</p>
+            )}
 
-              {filteredListings.map((l) => {
-                const isSelected = l.id === selectedId;
-                return (
-                  <button
-                    key={l.id}
-                    type="button"
-                    onClick={() => handleSelectListing(l)}
-                    className={
-                      "w-full rounded-xl border px-4 py-3 text-left transition-colors " +
-                      (isSelected
-                        ? "border-amber-200/80 bg-slate-900/90 shadow-[0_0_28px_rgba(248,250,252,0.22)]"
-                        : "border-slate-800/80 bg-slate-900/60 hover:border-amber-100/70 hover:bg-slate-900/90")
-                    }
-                  >
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-[12px] font-semibold text-slate-50">
-                          {l.address}
-                        </p>
-                        <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-                          {l.mlsId ? `MLS #${l.mlsId}` : "No MLS ID"}
-                        </p>
-                        {l.sellerName && (
-                          <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                            Seller: {l.sellerName}
+            {loadingList && (
+              <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+                Loading your listings…
+              </p>
+            )}
+
+            {!loadingList && filteredListings.length === 0 && (
+              <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+                No listings match this filter yet. Adjust status, search
+                criteria, or create a new listing.
+              </p>
+            )}
+
+            {!loadingList && filteredListings.length > 0 && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                {filteredListings.map((l) => {
+                  const isSelected = l.id === selectedId;
+
+                  const currentPhotoUrl = getCurrentCardPhotoUrl(l);
+                  const photosForCard = getPhotosForListingCard(l);
+
+                  const priceFormatted =
+                    typeof l.price === "number"
+                      ? `$${l.price.toLocaleString("en-US", {
+                          maximumFractionDigits: 0,
+                        })}`
+                      : "Price TBD";
+
+                  const updatedLabel = l.updatedAt
+                    ? new Date(l.updatedAt).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      })
+                    : null;
+
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      onClick={() => handleSelectListing(l)}
+                      aria-pressed={isSelected}
+                      className={
+                        "group flex flex-col overflow-hidden rounded-2xl border text-left transition hover:-translate-y-0.5 " +
+                        (isSelected
+                          ? "border-amber-200/80 bg-[#050b16]/95 shadow-[0_20px_40px_rgba(0,0,0,0.9)]"
+                          : "border-slate-800/80 bg-[#050b16]/90 hover:border-amber-100/70 hover:bg-[#050b16]")
+                      }
+                    >
+                      {/* Cover / slideshow */}
+                      <div className="relative h-36 md:h-40 overflow-hidden">
+                        {currentPhotoUrl ? (
+                          <>
+                            <Image
+                              src={currentPhotoUrl}
+                              alt={l.address}
+                              fill
+                              className="object-cover transition duration-500 group-hover:scale-105 group-hover:brightness-[1.08]"
+                            />
+                            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050b16]/95 via-transparent to-transparent" />
+                          </>
+                        ) : (
+                          <div className="flex h-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                            <div className="flex flex-col items-center gap-2 text-[11px] text-[var(--avillo-cream-soft)]">
+                              <span className="rounded-full bg-black/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)]">
+                                Listing cover
+                              </span>
+                              <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+                                Add a photo from the workspace.
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Status pill */}
+                        <div className="absolute left-3 top-3 flex items-center gap-2">
+                          <span
+                            className={
+                              "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] " +
+                              statusBadgeClass(l.status)
+                            }
+                          >
+                            <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                            {statusLabel(l.status)}
+                          </span>
+                        </div>
+
+                        {/* Slideshow arrows – only if multiple photos */}
+                        {photosForCard.length > 1 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                showPrevPhoto(l.id);
+                              }}
+                              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
+                            >
+                              ‹
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                showNextPhoto(l.id);
+                              }}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
+                            >
+                              ›
+                            </button>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Card body */}
+                      <div className="flex flex-1 flex-col gap-2 px-4 py-3 text-xs text-[var(--avillo-cream-soft)]">
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                            {priceFormatted}
                           </p>
-                        )}
-                      </div>
+                          <p className="text-[13px] font-semibold text-[#f7f2e9] line-clamp-2">
+                            {l.address}
+                          </p>
+                          <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+                            {l.mlsId ? `MLS #${l.mlsId}` : "No MLS ID yet"}
+                          </p>
+                        </div>
 
-                      <div className="flex flex-col items-end gap-1">
-                        <span
-                          className={
-                            "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] " +
-                            statusBadgeClass(l.status)
-                          }
-                        >
-                          {statusLabel(l.status)}
-                        </span>
-                        {typeof l.price === "number" && (
-                          <span className="text-[11px] text-[var(--avillo-cream-soft)]">
-                            $
-                            {l.price.toLocaleString("en-US", {
-                              maximumFractionDigits: 0,
-                            })}
+                        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--avillo-cream-muted)]">
+                          <span>
+                            {l.sellerName
+                              ? `Seller: ${l.sellerName}`
+                              : "No seller linked"}
                           </span>
-                        )}
-                        {typeof l.buyerCount === "number" && l.buyerCount > 0 && (
-                          <span className="text-[10px] text-[var(--avillo-cream-muted)]">
-                            {l.buyerCount} tagged buyer
-                            {l.buyerCount === 1 ? "" : "s"}
+                          {updatedLabel && <span>Updated {updatedLabel}</span>}
+                        </div>
+
+                        <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-800/80 pt-2 text-[10px]">
+                          <span className="text-[var(--avillo-cream-muted)]">
+                            Tap to edit details & contacts
                           </span>
-                        )}
+                          {typeof l.buyerCount === "number" &&
+                          l.buyerCount > 0 ? (
+                            <span className="rounded-full border border-slate-700/80 px-2 py-1 text-[10px] text-[var(--avillo-cream-soft)]">
+                              {l.buyerCount} buyer
+                              {l.buyerCount === 1 ? "" : "s"}
+                            </span>
+                          ) : (
+                            <span className="rounded-full border border-slate-800/80 px-2 py-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                              No tagged buyers
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
-          {/* RIGHT: DETAIL FORM */}
-          <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
+          {/* RIGHT: Workspace */}
+          <div className="relative rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] overflow-visible">
             <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)]" />
 
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
-                  Listing details
+                  Listing workspace
                 </p>
                 <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                  Edit core info, assign a seller, and tag buyers. Save to log
-                  CRM activity and keep your AI engines in sync.
+                  Update the core details, attach the seller, tag buyers, and
+                  manage your listing photos.
                 </p>
               </div>
             </div>
 
             <div className="space-y-4 text-xs text-[var(--avillo-cream-soft)]">
-              {/* Address + MLS */}
+              {/* Photos */}
+              <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold text-slate-50">
+                      Listing photos
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
+                      Upload multiple photos and choose which one should be the
+                      cover in your gallery.
+                    </p>
+                  </div>
+                </div>
+
+                {form.id ? (
+                  <>
+                    {/* Hidden input + clickable / droppable zone */}
+                    <input
+                      id="listing-photos-input"
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => handleSelectFiles(e, form.id)}
+                    />
+
+                    <label
+                      htmlFor="listing-photos-input"
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                      }}
+                      onDrop={(e) => handleDropFiles(e, form.id)}
+                      className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-slate-950/70 px-4 py-4 text-center text-[11px] text-[var(--avillo-cream-muted)] hover:border-amber-200/80 hover:bg-slate-900/80"
+                    >
+                      <span className="mb-1 font-semibold text-[var(--avillo-cream-soft)]">
+                        Drop photos here or click to upload
+                      </span>
+                      <span className="text-[10px]">
+                        JPG, PNG. Multiple files allowed.
+                      </span>
+                    </label>
+
+                    {workspacePhotos.length > 0 ? (
+                      <div className="mt-3 grid grid-cols-3 gap-3 md:grid-cols-4">
+                        {workspacePhotos.map((photo) => (
+                          <div
+                            key={photo.url}
+                            className={
+                              "group relative overflow-hidden rounded-xl border transition " +
+                              (photo.isCover
+                                ? "border-amber-200/80 shadow-[0_0_22px_rgba(248,250,252,0.35)]"
+                                : "border-slate-700/80 hover:border-amber-100/70")
+                            }
+                          >
+                            <div className="relative h-20 w-full md:h-24">
+                              <Image
+                                src={photo.url}
+                                alt="Listing photo"
+                                fill
+                                className="object-cover transition group-hover:scale-[1.03]"
+                              />
+                            </div>
+
+                            {/* Delete */}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                removePhoto(form.id as string, photo.url)
+                              }
+                              className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-[10px] text-slate-50 hover:bg-red-600/80"
+                              title="Delete photo"
+                            >
+                              ✕
+                            </button>
+
+                            {/* Cover toggle */}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCoverPhoto(form.id as string, photo.url)
+                              }
+                              className={
+                                "absolute inset-x-1 bottom-1 rounded-full px-2 py-1 text-[10px] font-medium transition " +
+                                (photo.isCover
+                                  ? "bg-amber-100 text-[#050b16]"
+                                  : "bg-black/55 text-[var(--avillo-cream-soft)] hover:bg-black/75")
+                              }
+                            >
+                              {photo.isCover ? "Cover photo" : "Set as cover"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">
+                        No photos added yet. Upload at least one image to make
+                        this workspace feel alive.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="mt-3 text-[11px] text-[var(--avillo-cream-muted)]">
+                    Save or create a listing first, then you’ll be able to
+                    upload and manage photos.
+                  </p>
+                )}
+              </div>
+
+              {/* Address + MLS + Status + Price */}
               <div className="space-y-3">
                 <div>
                   <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
@@ -614,104 +1384,95 @@ export default function ListingsPage() {
                 </div>
               </div>
 
-              {/* Seller assignment */}
+              {/* Seller select */}
               <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                 <p className="text-[11px] font-semibold text-slate-50">
                   Seller contact
                 </p>
                 <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                  Paste the CRM contact ID for the seller. Later we can upgrade
-                  this to a searchable selector.
+                  Search your CRM for the seller attached to this listing.
                 </p>
-                <div className="mt-2">
-                  <input
-                    value={form.sellerContactId}
-                    onChange={(e) =>
-                      onFormChange("sellerContactId", e.target.value)
-                    }
-                    placeholder="Contact ID (e.g. from CRM)"
-                    className="avillo-input w-full"
+
+                <div className="mt-3">
+                  <SellerSelect
+                    options={sellerOptions}
+                    loading={contactsLoading}
+                    error={contactsError}
+                    valueId={form.sellerContactId}
+                    onChange={(id) => onFormChange("sellerContactId", id)}
                   />
                 </div>
+
+                {selectedSeller && (
+                  <p className="mt-2 text-[10px] text-[var(--avillo-cream-muted)]">
+                    Linked to{" "}
+                    <span className="font-medium text-[var(--avillo-cream-soft)]">
+                      {selectedSeller.name}
+                    </span>
+                    {selectedSeller.email && ` · ${selectedSeller.email}`}
+                    {selectedSeller.phone && ` · ${selectedSeller.phone}`}
+                  </p>
+                )}
               </div>
 
-              {/* Buyers */}
+              {/* Buyers select */}
               <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                 <p className="text-[11px] font-semibold text-slate-50">
                   Tagged buyers
                 </p>
                 <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                  Add contact IDs of buyers who are interested in this listing.
-                  Separate with commas or line breaks.
+                  Add buyers from your CRM who are actively watching or
+                  considering this property.
                 </p>
-                <textarea
-                  value={form.buyerContactIds}
-                  onChange={(e) =>
-                    onFormChange("buyerContactIds", e.target.value)
-                  }
-                  rows={3}
-                  placeholder="contact-id-1, contact-id-2, contact-id-3"
-                  className="avillo-textarea mt-2 w-full"
-                />
-              </div>
 
-              {/* Notes + AI fields */}
-              <div className="grid gap-3 lg:grid-cols-2">
-                <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                  <p className="text-[11px] font-semibold text-slate-50">
-                    Listing description (human)
-                  </p>
-                  <textarea
-                    value={form.description}
-                    onChange={(e) =>
-                      onFormChange("description", e.target.value)
-                    }
-                    rows={4}
-                    placeholder="Short description, key features, seller story…"
-                    className="avillo-textarea mt-2 w-full"
+                <div className="mt-3">
+                  <BuyerMultiSelect
+                    options={buyerOptions}
+                    loading={contactsLoading}
+                    error={contactsError}
+                    selectedIds={form.buyers.map((b) => b.contactId)}
+                    onToggle={toggleBuyer}
                   />
                 </div>
 
-                <div className="space-y-3">
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                    <p className="text-[11px] font-semibold text-slate-50">
-                      AI copy (optional)
-                    </p>
-                    <textarea
-                      value={form.aiCopy}
-                      onChange={(e) => onFormChange("aiCopy", e.target.value)}
-                      rows={3}
-                      placeholder="Paste generated MLS copy, social captions, etc."
-                      className="avillo-textarea mt-2 w-full"
-                    />
+                {selectedBuyers.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedBuyers.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => toggleBuyer(b.id)}
+                        className="inline-flex items-center gap-1 rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1 text-[11px] font-medium text-amber-50 shadow-[0_0_14px_rgba(248,250,252,0.25)]"
+                      >
+                        <span>{b.name}</span>
+                        <span className="ml-0.5 text-[10px] opacity-80">
+                          ✕
+                        </span>
+                      </button>
+                    ))}
                   </div>
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                    <p className="text-[11px] font-semibold text-slate-50">
-                      AI notes (optional)
-                    </p>
-                    <textarea
-                      value={form.aiNotes}
-                      onChange={(e) => onFormChange("aiNotes", e.target.value)}
-                      rows={2}
-                      placeholder="Internal notes, experiments, or reminders for future prompts."
-                      className="avillo-textarea mt-2 w-full"
-                    />
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Error + Save */}
+              {/* Error + Save/Delete */}
               {error && (
-                <p className="text-[11px] text-red-300">
-                  {error}
-                </p>
+                <p className="text-[11px] text-red-300">{error}</p>
               )}
 
-              <div className="flex justify-end">
+              <div className="flex items-center justify-between gap-3">
                 <button
                   type="button"
-                  onClick={handleSave}
-                  disabled={saving}
+                  onClick={handleDeleteListing}
+                  disabled={saving || !form.id}
+                  className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Delete listing
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveListing}
+                  disabled={saving || !form.id}
                   className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {saving ? "Saving…" : "Save listing"}
@@ -731,23 +1492,351 @@ export default function ListingsPage() {
 
 type StatusFilterPillProps = {
   label: string;
+  count?: number;
   active?: boolean;
   onClick: () => void;
 };
 
-function StatusFilterPill({ label, active, onClick }: StatusFilterPillProps) {
+function StatusFilterPill({
+  label,
+  count,
+  active,
+  onClick,
+}: StatusFilterPillProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={
-        "rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] transition-colors " +
+        "flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] transition-colors " +
         (active
           ? "border-amber-100/80 bg-amber-50/15 text-amber-50 shadow-[0_0_18px_rgba(248,250,252,0.35)]"
           : "border-slate-700/80 text-[var(--avillo-cream-muted)] hover:border-amber-100/60 hover:text-amber-50")
       }
     >
-      {label}
+      <span>{label}</span>
+      {typeof count === "number" && (
+        <span className="rounded-full bg-black/40 px-1.5 text-[10px]">
+          {count}
+        </span>
+      )}
     </button>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "green" | "amber" | "blue";
+}) {
+  const glow =
+    tone === "green"
+      ? "shadow-[0_0_25px_rgba(34,197,94,0.28)]"
+      : tone === "amber"
+      ? "shadow-[0_0_25px_rgba(245,158,11,0.22)]"
+      : tone === "blue"
+      ? "shadow-[0_0_25px_rgba(59,130,246,0.25)]"
+      : "";
+
+  return (
+    <div
+      className={`rounded-2xl border border-[#1d2940] bg-gradient-to-br from-[#050b16] to-[#0a1223] px-4 py-3 text-xs text-[#c0c9de]/90 ${glow}`}
+    >
+      <div className="text-[0.65rem] uppercase tracking-[0.22em] text-[#8f9bb8]/80">
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-semibold text-[#f7f2e9]">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------
+ * Seller & buyer selectors
+ * -----------------------------------*/
+
+type SellerSelectProps = {
+  options: ContactOption[];
+  valueId: string;
+  onChange: (id: string) => void;
+  loading?: boolean;
+  error?: string | null;
+};
+
+function SellerSelect({
+  options,
+  valueId,
+  onChange,
+  loading,
+  error,
+}: SellerSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    return options.filter((o) => o.name.toLowerCase().includes(q));
+  }, [options, query]);
+
+  const selected = options.find((o) => o.id === valueId) ?? null;
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-left text-[12px] text-[var(--avillo-cream-soft)] hover:border-amber-100/60"
+      >
+        <span
+          className={!selected ? "text-[var(--avillo-cream-muted)]" : ""}
+        >
+          {selected ? selected.name : "Search & select seller…"}
+        </span>
+        <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+          {open ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-700/80 bg-[#050b16] shadow-[0_18px_45px_rgba(0,0,0,0.85)]">
+          {/* Sticky search */}
+          <div className="border-b border-slate-800/80 px-3 py-2 sticky top-0 bg-[#050b16] z-10">
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Type a seller name…"
+              className="w-full rounded-lg bg-slate-900/80 px-2 py-1 text-[11px] text-[var(--avillo-cream-soft)] outline-none"
+            />
+          </div>
+
+          {/* scrollable list */}
+          <div className="max-h-64 overflow-y-auto text-xs">
+            {loading && (
+              <p className="px-3 py-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                Loading contacts…
+              </p>
+            )}
+
+            {error && !loading && (
+              <p className="px-3 py-2 text-[11px] text-red-300">
+                {error}
+              </p>
+            )}
+
+            {!loading && !error && filtered.length === 0 && (
+              <p className="px-3 py-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                No sellers found.
+              </p>
+            )}
+
+            {!loading &&
+              !error &&
+              filtered.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(c.id);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                  className={
+                    "flex w-full flex-col items-start px-3 py-2 text-left hover:bg-slate-900/90 " +
+                    (c.id === valueId ? "bg-slate-900/90" : "")
+                  }
+                >
+                  <span className="text-[12px] text-[#f7f2e9]">
+                    {c.name}
+                  </span>
+                  <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+                    {c.email || c.phone || c.type || "CRM contact"}
+                  </span>
+                </button>
+              ))}
+          </div>
+
+          {/* Done button */}
+          <div className="flex justify-end border-t border-slate-800/80 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded-full border border-slate-600/80 px-3 py-1 text-[10px] text-[var(--avillo-cream-soft)] hover:border-amber-100/70 hover:text-amber-50"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type BuyerMultiSelectProps = {
+  options: ContactOption[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  loading?: boolean;
+  error?: string | null;
+};
+
+function BuyerMultiSelect({
+  options,
+  selectedIds,
+  onToggle,
+  loading,
+  error,
+}: BuyerMultiSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const selectedSet = useMemo(
+    () => new Set(selectedIds),
+    [selectedIds]
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    return options.filter((o) => o.name.toLowerCase().includes(q));
+  }, [options, query]);
+
+  const selectedCount = selectedIds.length;
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-left text-[12px] text-[var(--avillo-cream-soft)] hover:border-amber-100/60"
+      >
+        <span
+          className={
+            selectedCount === 0
+              ? "text-[var(--avillo-cream-muted)]"
+              : ""
+          }
+        >
+          {selectedCount === 0
+            ? "Search & tag buyers…"
+            : `${selectedCount} buyer${
+                selectedCount === 1 ? "" : "s"
+              } tagged`}
+        </span>
+        <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+          {open ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-700/80 bg-[#050b16] shadow-[0_18px_45px_rgba(0,0,0,0.85)]">
+          {/* Sticky search */}
+          <div className="border-b border-slate-800/80 px-3 py-2 sticky top-0 bg-[#050b16] z-10">
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Type a buyer name…"
+              className="w-full rounded-lg bg-slate-900/80 px-2 py-1 text-[11px] text-[var(--avillo-cream-soft)] outline-none"
+            />
+          </div>
+
+          {/* scrollable list */}
+          <div className="max-h-64 overflow-y-auto text-xs">
+            {loading && (
+              <p className="px-3 py-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                Loading contacts…
+              </p>
+            )}
+
+            {error && !loading && (
+              <p className="px-3 py-2 text-[11px] text-red-300">
+                {error}
+              </p>
+            )}
+
+            {!loading && !error && filtered.length === 0 && (
+              <p className="px-3 py-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                No buyers found.
+              </p>
+            )}
+
+            {!loading &&
+              !error &&
+              filtered.map((c) => {
+                const checked = selectedSet.has(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => onToggle(c.id)}
+                    className={
+                      "flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-900/90 " +
+                      (checked ? "bg-slate-900/90" : "")
+                    }
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-[12px] text-[#f7f2e9]">
+                        {c.name}
+                      </span>
+                      <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+                        {c.email || c.phone || c.type || "CRM contact"}
+                      </span>
+                    </div>
+                    <span className="ml-3 flex h-4 w-4 items-center justify-center rounded border border-slate-500/70 text-[10px]">
+                      {checked ? "✓" : ""}
+                    </span>
+                  </button>
+                );
+              })}
+          </div>
+
+          {/* Done button */}
+          <div className="flex justify-end border-t border-slate-800/80 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded-full border border-slate-600/80 px-3 py-1 text-[10px] text-[var(--avillo-cream-soft)] hover:border-amber-100/70 hover:text-amber-50"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

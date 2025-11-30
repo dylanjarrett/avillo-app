@@ -11,6 +11,13 @@ type BuyerTagPayload = {
   role?: string | null; // "primary", "backup", "interested", etc.
 };
 
+type ListingPhotoPayload = {
+  id?: string; // optional – we currently overwrite, but kept for future upserts
+  url: string;
+  isCover?: boolean;
+  sortOrder?: number;
+};
+
 type ListingPayload = {
   id?: string;
   address: string;
@@ -22,6 +29,9 @@ type ListingPayload = {
   aiNotes?: string | null;
   sellerContactId?: string | null;
   buyers?: BuyerTagPayload[];
+
+  // NEW: photos for this listing
+  photos?: ListingPhotoPayload[];
 };
 
 type SaveListingBody = {
@@ -59,6 +69,7 @@ export async function POST(req: NextRequest) {
       aiNotes,
       sellerContactId,
       buyers,
+      photos,
     } = body.listing;
 
     if (!address || !address.trim()) {
@@ -147,6 +158,60 @@ export async function POST(req: NextRequest) {
     }
 
     /* ------------------------------------
+     * UPDATE LISTING PHOTOS
+     * -----------------------------------*/
+
+    if (listingId && photos) {
+      // Normalize & clean payload
+      const cleaned = photos
+        .map((p, index) => ({
+          url: p.url?.trim(),
+          isCover: !!p.isCover,
+          sortOrder:
+            typeof p.sortOrder === "number" ? p.sortOrder : index,
+        }))
+        .filter((p) => !!p.url);
+
+      // Ensure exactly one cover photo if any photos exist
+      if (cleaned.length > 0) {
+        const hasCover = cleaned.some((p) => p.isCover);
+        if (!hasCover) {
+          cleaned[0].isCover = true;
+        } else {
+          let coverSeen = false;
+          for (const p of cleaned) {
+            if (p.isCover) {
+              if (coverSeen) {
+                p.isCover = false; // only first stays true
+              } else {
+                coverSeen = true;
+              }
+            }
+          }
+        }
+
+        // Strategy: replace all existing photos for now (simpler & safe)
+        await prisma.listingPhoto.deleteMany({
+          where: { listingId },
+        });
+
+        await prisma.listingPhoto.createMany({
+          data: cleaned.map((p) => ({
+            listingId,
+            url: p.url!,
+            isCover: p.isCover,
+            sortOrder: p.sortOrder,
+          })),
+        });
+      } else {
+        // If client sent empty array, clear photos
+        await prisma.listingPhoto.deleteMany({
+          where: { listingId },
+        });
+      }
+    }
+
+    /* ------------------------------------
      * CRM ACTIVITY LOGGING
      * -----------------------------------*/
 
@@ -207,7 +272,7 @@ export async function POST(req: NextRequest) {
     }
 
     /* ------------------------------------
-     * RETURN NORMALIZED LISTING
+     * RETURN NORMALIZED LISTING (with photos)
      * -----------------------------------*/
 
     const fullListing = await prisma.listing.findUnique({
@@ -218,6 +283,9 @@ export async function POST(req: NextRequest) {
           include: {
             contact: true,
           },
+        },
+        photos: {
+          orderBy: { sortOrder: "asc" },
         },
       },
     });
@@ -237,6 +305,12 @@ export async function POST(req: NextRequest) {
         }`.trim() || fullListing.seller.email || ""
       : null;
 
+    const photoCount = fullListing.photos.length;
+    const coverPhoto =
+      fullListing.photos.find((p) => p.isCover) ??
+      fullListing.photos[0] ??
+      null;
+
     const responsePayload = {
       id: fullListing.id,
       address: fullListing.address,
@@ -246,6 +320,16 @@ export async function POST(req: NextRequest) {
       description: fullListing.description,
       aiCopy: fullListing.aiCopy,
       aiNotes: fullListing.aiNotes,
+
+      photoCount,
+      coverPhotoUrl: coverPhoto ? coverPhoto.url : null,
+      photos: fullListing.photos.map((p) => ({
+        id: p.id,
+        url: p.url,
+        isCover: p.isCover,
+        sortOrder: p.sortOrder,
+      })),
+
       seller: fullListing.seller
         ? {
             id: fullListing.seller.id,
@@ -254,10 +338,13 @@ export async function POST(req: NextRequest) {
             phone: fullListing.seller.phone,
           }
         : null,
+
       buyers: fullListing.buyers.map((b) => {
         const c = b.contact;
         const buyerName = c
-          ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || c.email || ""
+          ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() ||
+            c.email ||
+            ""
           : "";
         return {
           id: b.id,
@@ -266,6 +353,7 @@ export async function POST(req: NextRequest) {
           contactName: buyerName || null,
         };
       }),
+
       createdAt: fullListing.createdAt,
       updatedAt: fullListing.updatedAt,
     };
