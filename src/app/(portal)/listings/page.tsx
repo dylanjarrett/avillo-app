@@ -1320,69 +1320,70 @@ const savedSellerContactId =
                       }
                     >
                       {/* Cover / slideshow */}
-                      <div className="relative h-36 md:h-40 overflow-hidden">
-                        {currentPhotoUrl ? (
-                          <>
-                            <Image
-                              src={currentPhotoUrl}
-                              alt={l.address}
-                              fill
-                              className="object-cover transition duration-500 group-hover:scale-105 group-hover:brightness-[1.08]"
-                            />
-                            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050b16]/95 via-transparent to-transparent" />
-                          </>
-                        ) : (
-                          <div className="flex h-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-                            <div className="flex flex-col items-center gap-2 text-[11px] text-[var(--avillo-cream-soft)]">
-                              <span className="rounded-full bg-black/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)]">
-                                Listing cover
-                              </span>
-                              <span className="text-[10px] text-[var(--avillo-cream-muted)]">
-                                Add a photo from the workspace.
-                              </span>
-                            </div>
-                          </div>
-                        )}
+<div className="relative w-full overflow-hidden rounded-t-2xl aspect-[4/3] md:h-40 md:aspect-auto">
+  {currentPhotoUrl ? (
+    <>
+      <Image
+        src={currentPhotoUrl}
+        alt={l.address}
+        fill
+        sizes="(min-width: 1024px) 320px, 100vw"
+        className="object-cover transition duration-500 group-hover:scale-105 group-hover:brightness-[1.08]"
+      />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050b16]/95 via-transparent to-transparent" />
+    </>
+  ) : (
+    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      <div className="flex flex-col items-center gap-2 text-[11px] text-[var(--avillo-cream-soft)]">
+        <span className="rounded-full bg-black/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)]">
+          Listing cover
+        </span>
+        <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+          Add a photo from the workspace.
+        </span>
+      </div>
+    </div>
+  )}
 
-                        {/* Status pill */}
-                        <div className="absolute left-3 top-3 flex items-center gap-2">
-                          <span
-                            className={
-                              "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] " +
-                              statusBadgeClass(l.status)
-                            }
-                          >
-                            <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-                            {statusLabel(l.status)}
-                          </span>
-                        </div>
+  {/* Status pill */}
+  <div className="absolute left-3 top-3 flex items-center gap-2">
+    <span
+      className={
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] " +
+        statusBadgeClass(l.status)
+      }
+    >
+      <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+      {statusLabel(l.status)}
+    </span>
+  </div>
 
-                        {/* Slideshow arrows – only if multiple photos */}
-                        {photosForCard.length > 1 && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                showPrevPhoto(l.id);
-                              }}
-                              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
-                            >
-                              ‹
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                showNextPhoto(l.id);
-                              }}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
-                            >
-                              ›
-                            </button>
-                          </>
-                        )}
-                      </div>
+  {/* Slideshow arrows – only if multiple photos */}
+  {photosForCard.length > 1 && (
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          showPrevPhoto(l.id);
+        }}
+        className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
+      >
+        ‹
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          showNextPhoto(l.id);
+        }}
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
+      >
+        ›
+      </button>
+    </>
+  )}
+</div>
 
                       {/* Card body */}
                       <div className="flex flex-1 flex-col gap-2 px-4 py-3 text-xs text-[var(--avillo-cream-soft)]">
