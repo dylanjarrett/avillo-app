@@ -120,14 +120,23 @@ export default function ListingsPage() {
   const [contactsError, setContactsError] = useState<string | null>(null);
 
   // listingId -> photos
-  const [photoState, setPhotoState] = useState<Record<string, ListingPhoto[]>>(
-    {}
-  );
+  const [photoState, setPhotoState] = useState<
+    Record<string, ListingPhoto[]>
+  >({});
 
   // slideshow index for each listing in gallery
   const [galleryIndexByListing, setGalleryIndexByListing] = useState<
     Record<string, number>
   >({});
+
+  // ✅ full listing details from API (for buyers, price, photos, etc.)
+  const [listingDetails, setListingDetails] = useState<
+    Record<string, ListingDetail>
+  >({});
+
+  // ✅ mobile workspace toggle (always visible on md+)
+  const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
 
   /* ------------------------------------
    * Load listings
@@ -158,6 +167,41 @@ export default function ListingsPage() {
         const apiListings = data.listings ?? [];
 
         if (cancelled) return;
+
+        // ✅ build details map for workspace hydration
+        const detailsMap: Record<string, ListingDetail> = {};
+        apiListings.forEach((l: any) => {
+          detailsMap[l.id] = {
+            id: l.id,
+            address: l.address,
+            mlsId: l.mlsId ?? null,
+            price: typeof l.price === "number" ? l.price : null,
+            status: l.status,
+            description: l.description ?? "",
+            aiCopy: l.aiCopy ?? null,
+            aiNotes: l.aiNotes ?? null,
+            sellerContactId: l.seller?.id ?? l.sellerContactId ?? "",
+            buyers: Array.isArray(l.buyers)
+              ? l.buyers
+                  .map((b: any) => ({
+                    contactId: b.contactId ?? b.contact?.id ?? "",
+                    role: b.role ?? null,
+                  }))
+                  .filter((b: any) => b.contactId)
+              : [],
+            photos: Array.isArray(l.photos)
+              ? l.photos.map((p: any, index: number) => ({
+                  id: p.id,
+                  url: p.url,
+                  isCover: p.isCover,
+                  sortOrder:
+                    typeof p.sortOrder === "number" ? p.sortOrder : index,
+                }))
+              : [],
+            createdAt: l.createdAt ?? null,
+            updatedAt: l.updatedAt ?? null,
+          };
+        });
 
         const rows: ListingRow[] = apiListings.map((l: any) => {
           const cover =
@@ -193,11 +237,13 @@ export default function ListingsPage() {
 
         setListings(rows);
         setPhotoState(initialPhotos);
+        setListingDetails(detailsMap);
 
         if (rows.length > 0) {
           const first = apiListings[0];
           setSelectedId(first.id);
-          hydrateFormFromApi(first);
+          const detail = detailsMap[first.id] ?? first;
+          hydrateFormFromApi(detail);
         } else {
           setSelectedId(null);
         }
@@ -287,10 +333,7 @@ export default function ListingsPage() {
       id: l.id,
       address: l.address ?? "",
       mlsId: l.mlsId ?? "",
-      price:
-        typeof l.price === "number" && !Number.isNaN(l.price)
-          ? String(l.price)
-          : "",
+      price: formatPriceDisplay(l.price),
       status: (l.status as ListingStatus) ?? "draft",
       description: l.description ?? "",
       sellerContactId: l.seller?.id ?? l.sellerContactId ?? "",
@@ -307,11 +350,12 @@ export default function ListingsPage() {
     if (Array.isArray(l.photos)) {
       setPhotoState((prev) => ({
         ...prev,
-        [l.id]: l.photos.map((p: any) => ({
+        [l.id]: l.photos.map((p: any, index: number) => ({
           id: p.id,
           url: p.url,
           isCover: p.isCover,
-          sortOrder: p.sortOrder,
+          sortOrder:
+            typeof p.sortOrder === "number" ? p.sortOrder : index,
         })),
       }));
     }
@@ -335,6 +379,35 @@ export default function ListingsPage() {
   function onFormChange<K extends keyof typeof form>(key: K, value: any) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
+
+  function formatPriceDisplay(value?: number | null): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "";
+  return value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
+  function handlePriceChange(
+  e: React.ChangeEvent<HTMLInputElement>
+) {
+  const raw = e.target.value;
+
+  // strip everything except digits
+  const cleaned = raw.replace(/[^0-9]/g, "");
+
+  // if empty, clear the field
+  if (!cleaned) {
+    onFormChange("price", "");
+    return;
+  }
+
+  const numeric = Number(cleaned);
+
+  // format with commas for display
+  const formatted = numeric.toLocaleString("en-US", {
+    maximumFractionDigits: 0,
+  });
+
+  onFormChange("price", formatted);
+}
 
   function statusLabel(status: ListingStatus | string): string {
     switch (status) {
@@ -363,6 +436,31 @@ export default function ListingsPage() {
         return "border-sky-300/80 bg-sky-500/10 text-sky-100";
       default:
         return "border-slate-600/80 bg-slate-900/70 text-slate-200";
+    }
+  }
+
+  // ✅ nicer status select styling in workspace
+  function statusSelectClass(status: ListingStatus | string): string {
+    const base = "avillo-input w-full bg-[rgba(15,23,42,0.9)]";
+    switch (status) {
+      case "active":
+        return (
+          base +
+          " border-emerald-300/80 text-emerald-100 bg-emerald-500/5"
+        );
+      case "pending":
+        return (
+          base + " border-amber-300/80 text-amber-100 bg-amber-500/5"
+        );
+      case "closed":
+        return base + " border-sky-300/80 text-sky-100 bg-sky-500/5";
+      case "draft":
+        return base + " border-slate-600/80 text-slate-100";
+      default:
+        return (
+          base +
+          " border-slate-700/80 text-[var(--avillo-cream-soft)]"
+        );
     }
   }
 
@@ -638,6 +736,12 @@ export default function ListingsPage() {
 
       const { listing: saved } = (await res.json()) as { listing: any };
 
+      // derive seller contact id from the saved listing
+const savedSellerContactId =
+  saved.sellerContactId ??
+  saved.seller?.id ??
+  "";
+
       const newRow: ListingRow = {
         id: saved.id,
         address: saved.address,
@@ -654,20 +758,30 @@ export default function ListingsPage() {
           null,
       };
 
+      // normalize photos
+      const normalizedPhotos: ListingPhoto[] = Array.isArray(saved.photos)
+        ? saved.photos.map((p: any, index: number) => ({
+            id: p.id,
+            url: p.url,
+            isCover: p.isCover,
+            sortOrder:
+              typeof p.sortOrder === "number" ? p.sortOrder : index,
+          }))
+        : [];
+
       setListings((prev) => [newRow, ...prev]);
 
       setSelectedId(saved.id);
+      setWorkspaceOpenMobile(true);
+
       setForm({
         id: saved.id,
         address: "",
         mlsId: saved.mlsId ?? "",
-        price:
-          typeof saved.price === "number" && !Number.isNaN(saved.price)
-            ? String(saved.price)
-            : "",
+        price: formatPriceDisplay(saved.price),
         status: (saved.status as ListingStatus) ?? "draft",
         description: saved.description ?? "",
-        sellerContactId: saved.sellerContactId ?? "",
+        sellerContactId: savedSellerContactId,
         buyers: Array.isArray(saved.buyers)
           ? saved.buyers
               .map((b: any) => ({
@@ -680,15 +794,34 @@ export default function ListingsPage() {
 
       setPhotoState((prev) => ({
         ...prev,
-        [saved.id]: Array.isArray(saved.photos)
-          ? saved.photos.map((p: any, index: number) => ({
-              id: p.id,
-              url: p.url,
-              isCover: p.isCover,
-              sortOrder:
-                typeof p.sortOrder === "number" ? p.sortOrder : index,
-            }))
-          : [],
+        [saved.id]: normalizedPhotos,
+      }));
+
+      // keep details map in sync
+      setListingDetails((prev) => ({
+        ...prev,
+        [saved.id]: {
+          id: saved.id,
+          address: saved.address,
+          mlsId: saved.mlsId ?? null,
+          price: typeof saved.price === "number" ? saved.price : null,
+          status: saved.status,
+          description: saved.description ?? "",
+          aiCopy: saved.aiCopy ?? null,
+          aiNotes: saved.aiNotes ?? null,
+          sellerContactId: savedSellerContactId,
+          buyers: Array.isArray(saved.buyers)
+            ? saved.buyers
+                .map((b: any) => ({
+                  contactId: b.contactId ?? b.contact?.id ?? "",
+                  role: b.role ?? null,
+                }))
+                .filter((b: any) => b.contactId)
+            : [],
+          photos: normalizedPhotos,
+          createdAt: saved.createdAt ?? null,
+          updatedAt: saved.updatedAt ?? null,
+        },
       }));
 
       setGalleryIndexByListing((prev) => ({
@@ -720,10 +853,12 @@ export default function ListingsPage() {
         address: form.address.trim() || "Untitled listing",
         mlsId: form.mlsId || null,
         price: form.price.trim()
-          ? Number.isNaN(Number(form.price.trim()))
-            ? null
-            : Number(form.price.trim())
-          : null,
+    ? Number(
+        form.price
+          .trim()
+          .replace(/[^0-9.]/g, "")
+      ) || null
+    : null,
         status: (form.status as ListingStatus) || "draft",
         description: form.description || null,
         aiCopy: null,
@@ -754,6 +889,13 @@ export default function ListingsPage() {
 
       const { listing: saved } = (await res.json()) as { listing: any };
 
+      // derive seller contact id from the saved listing
+const savedSellerContactId =
+  saved.sellerContactId ??
+  saved.seller?.id ??
+  form.sellerContactId ??
+  "";
+
       // sync photos from backend
       const normalizedPhotos: ListingPhoto[] = Array.isArray(saved.photos)
         ? saved.photos.map((p: any, index: number) => ({
@@ -770,8 +912,32 @@ export default function ListingsPage() {
         [saved.id]: normalizedPhotos,
       }));
 
-      // update form
-      hydrateFormFromApi(saved);
+      // keep details map in sync
+      setListingDetails((prev) => ({
+        ...prev,
+        [saved.id]: {
+          id: saved.id,
+          address: saved.address,
+          mlsId: saved.mlsId ?? null,
+          price: typeof saved.price === "number" ? saved.price : null,
+          status: saved.status,
+          description: saved.description ?? "",
+          aiCopy: saved.aiCopy ?? null,
+          aiNotes: saved.aiNotes ?? null,
+          sellerContactId: savedSellerContactId,
+          buyers: Array.isArray(saved.buyers)
+            ? saved.buyers
+                .map((b: any) => ({
+                  contactId: b.contactId ?? b.contact?.id ?? "",
+                  role: b.role ?? null,
+                }))
+                .filter((b: any) => b.contactId)
+            : [],
+          photos: normalizedPhotos,
+          createdAt: saved.createdAt ?? null,
+          updatedAt: saved.updatedAt ?? null,
+        },
+      }));
 
       // update gallery row
       setListings((prev) => {
@@ -785,7 +951,9 @@ export default function ListingsPage() {
           createdAt: saved.createdAt ?? null,
           updatedAt: saved.updatedAt ?? null,
           sellerName: saved.seller?.name ?? null,
-          buyerCount: Array.isArray(saved.buyers) ? saved.buyers.length : 0,
+          buyerCount: Array.isArray(saved.buyers)
+            ? saved.buyers.length
+            : 0,
           coverPhotoUrl:
             normalizedPhotos.find((p) => p.isCover)?.url ??
             normalizedPhotos[0]?.url ??
@@ -799,6 +967,13 @@ export default function ListingsPage() {
         }
         return [row, ...prev];
       });
+
+// On mobile, close workspace and return to gallery after save
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        setWorkspaceOpenMobile(false);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+
     } catch (err: any) {
       console.error("save listing error", err);
       setError(
@@ -838,7 +1013,7 @@ export default function ListingsPage() {
         throw new Error(data?.error || "Failed to delete listing.");
       }
 
-      const updatedListings = listings.filter((l) => l.id !== listingId);
+       const updatedListings = listings.filter((l) => l.id!== listingId);
       setListings(updatedListings);
 
       setPhotoState((prev) => {
@@ -847,31 +1022,60 @@ export default function ListingsPage() {
         return clone;
       });
 
-      if (updatedListings.length > 0) {
+      setGalleryIndexByListing((prev) => {
+        const clone = { ...prev };
+        delete clone[listingId];
+        return clone;
+      });
+
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        // Mobile: go back to gallery after delete
+        setWorkspaceOpenMobile(false);
+        setSelectedId(null);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } else if (updatedListings.length > 0) {
+        // Desktop: keep current behavior (auto-select next listing)
         const next = updatedListings[0];
         setSelectedId(next.id);
 
-        const apiLike: ListingDetail = {
-          id: next.id,
-          address: next.address,
-          mlsId: next.mlsId,
-          price: next.price,
-          status: next.status,
-          description: "",
-          sellerContactId: "",
-          buyers: [],
-          photos: photoState[next.id] ?? [],
-          aiCopy: null,
-          aiNotes: null,
-          createdAt: next.createdAt ?? null,
-          updatedAt: next.updatedAt ?? null,
-        };
+        const nextDetail = listingDetails[next.id];
 
-        hydrateFormFromApi(apiLike);
+        if (nextDetail) {
+          hydrateFormFromApi({
+            ...nextDetail,
+            photos: photoState[next.id] ?? nextDetail.photos ?? [],
+          });
+        } else {
+          const apiLike: ListingDetail = {
+            id: next.id,
+            address: next.address,
+            mlsId: next.mlsId,
+            price: next.price,
+            status: next.status,
+            description: "",
+            sellerContactId: "",
+            buyers: [],
+            photos: photoState[next.id] ?? [],
+            aiCopy: null,
+            aiNotes: null,
+            createdAt: next.createdAt ?? null,
+            updatedAt: next.updatedAt ?? null,
+          };
+          hydrateFormFromApi(apiLike);
+        }
       } else {
+        // No listings left at all
         setSelectedId(null);
         setForm(INITIAL_FORM);
       }
+
+      // remove deleted listing from details map
+      setListingDetails((prev) => {
+        const clone: Record<string, ListingDetail> = { ...prev };
+        delete clone[listingId];
+        return clone;
+      });
+
     } catch (err: any) {
       console.error("delete listing error", err);
       setError(
@@ -889,27 +1093,44 @@ export default function ListingsPage() {
 
   function handleSelectListing(row: ListingRow) {
     setSelectedId(row.id);
+    setWorkspaceOpenMobile(true);
 
-    const apiLike: ListingDetail = {
-      id: row.id,
-      address: row.address,
-      mlsId: row.mlsId,
-      price: row.price,
-      status: row.status,
-      description: "",
-      sellerContactId: "",
-      buyers: (form.id === row.id ? form.buyers : []).map((b) => ({
-        contactId: b.contactId,
-        role: b.role ?? null,
-      })),
-      photos: photoState[row.id] ?? [],
-      aiCopy: null,
-      aiNotes: null,
-      createdAt: row.createdAt ?? null,
-      updatedAt: row.updatedAt ?? null,
-    };
+       // Smooth-scroll to the workspace on mobile *after* layout updates
+  if (typeof window !== "undefined" && window.innerWidth < 1024) {
+    setTimeout(() => {
+      const el = workspaceRef.current;
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }
 
-    hydrateFormFromApi(apiLike);
+
+    const full = listingDetails[row.id];
+
+    if (full) {
+      hydrateFormFromApi({
+        ...full,
+        photos: photoState[row.id] ?? full.photos ?? [],
+      });
+    } else {
+      const apiLike: ListingDetail = {
+        id: row.id,
+        address: row.address,
+        mlsId: row.mlsId,
+        price: row.price,
+        status: row.status,
+        description: "",
+        sellerContactId: "",
+        buyers: [],
+        photos: photoState[row.id] ?? [],
+        aiCopy: null,
+        aiNotes: null,
+        createdAt: row.createdAt ?? null,
+        updatedAt: row.updatedAt ?? null,
+      };
+
+      hydrateFormFromApi(apiLike);
+    }
   }
 
   /* ------------------------------------
@@ -917,7 +1138,9 @@ export default function ListingsPage() {
    * -----------------------------------*/
 
   const workspacePhotos: ListingPhoto[] =
-    (form.id && photoState[form.id]) || (selectedId && photoState[selectedId]) || [];
+    (form.id && photoState[form.id]) ||
+    (selectedId && photoState[selectedId]) ||
+    [];
 
   /* ------------------------------------
    * Render
@@ -1019,8 +1242,16 @@ export default function ListingsPage() {
 
         {/* Main grid: gallery + workspace */}
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
+
+
           {/* LEFT: Listing gallery */}
-          <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
+          <div
+  className={
+    "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
+    (workspaceOpenMobile ? "hidden" : "block") +
+    " md:block"
+  }
+>
             <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)]" />
 
             <div className="mb-4 flex items-center justify-between gap-3">
@@ -1178,7 +1409,7 @@ export default function ListingsPage() {
 
                         <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-800/80 pt-2 text-[10px]">
                           <span className="text-[var(--avillo-cream-muted)]">
-                            Tap to edit details & contacts
+                            Select to edit 
                           </span>
                           {typeof l.buyerCount === "number" &&
                           l.buyerCount > 0 ? (
@@ -1198,23 +1429,42 @@ export default function ListingsPage() {
                 })}
               </div>
             )}
+
           </div>
 
           {/* RIGHT: Workspace */}
-          <div className="relative rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] overflow-visible">
+<div
+  ref={workspaceRef}
+  id="listing-workspace"
+  className={
+    "relative rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] overflow-visible scroll-mt-24 " +
+    (workspaceOpenMobile ? "block" : "hidden") +
+    " md:block"
+  }
+>
             <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)]" />
 
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
-                  Listing workspace
-                </p>
-                <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                  Update the core details, attach the seller, tag buyers, and
-                  manage your listing photos.
-                </p>
-              </div>
-            </div>
+  <div>
+    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
+      Listing workspace
+    </p>
+    <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
+      Update the core details, attach the seller, tag buyers, and manage your
+      listing photos.
+    </p>
+  </div>
+
+  {/* Mobile back to gallery */}
+  <button
+    type="button"
+    onClick={() => setWorkspaceOpenMobile(false)}
+    className="inline-flex items-center gap-2 rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.20em] text-[var(--avillo-cream-soft)] shadow-[0_0_18px_rgba(15,23,42,0.9)] hover:border-amber-100/80 hover:text-amber-50 hover:bg-slate-900/95 md:hidden"
+  >
+    <span className="text-xs">←</span>
+    <span>Back</span>
+  </button>
+</div>
 
             <div className="space-y-4 text-xs text-[var(--avillo-cream-soft)]">
               {/* Photos */}
@@ -1361,7 +1611,7 @@ export default function ListingsPage() {
                       onChange={(e) =>
                         onFormChange("status", e.target.value as any)
                       }
-                      className="avillo-input w-full bg-[rgba(15,23,42,0.9)]"
+                      className={statusSelectClass(form.status)}
                     >
                       <option value="draft">Draft</option>
                       <option value="active">Active</option>
@@ -1375,9 +1625,9 @@ export default function ListingsPage() {
                       Price (optional)
                     </label>
                     <input
-                      value={form.price}
-                      onChange={(e) => onFormChange("price", e.target.value)}
-                      placeholder="1450000"
+                      value={form.price ?? ""}
+                      onChange={handlePriceChange}
+                      placeholder="1,450,000"
                       className="avillo-input w-full"
                     />
                   </div>
@@ -1639,9 +1889,7 @@ function SellerSelect({
             )}
 
             {error && !loading && (
-              <p className="px-3 py-2 text-[11px] text-red-300">
-                {error}
-              </p>
+              <p className="px-3 py-2 text-[11px] text-red-300">{error}</p>
             )}
 
             {!loading && !error && filtered.length === 0 && (
@@ -1784,9 +2032,7 @@ function BuyerMultiSelect({
             )}
 
             {error && !loading && (
-              <p className="px-3 py-2 text-[11px] text-red-300">
-                {error}
-              </p>
+              <p className="px-3 py-2 text-[11px] text-red-300">{error}</p>
             )}
 
             {!loading && !error && filtered.length === 0 && (
