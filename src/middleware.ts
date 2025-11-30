@@ -4,7 +4,17 @@ import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 
 // All routes that should require a logged-in user
-const PROTECTED_PATHS = ["/dashboard", "/intelligence", "/crm", "/billing", "/account"];
+// (root of the app + all core portal pages)
+const PROTECTED_PATHS = [
+  "/",
+  "/dashboard",
+  "/intelligence",
+  "/crm",
+  "/listings",
+  "/billing",
+  "/account",
+  "/admin",
+];
 
 function isProtectedPath(pathname: string) {
   return PROTECTED_PATHS.some(
@@ -17,13 +27,12 @@ export async function middleware(req: NextRequest) {
 
   // ---- Public / always-allowed paths ----
   if (
-    pathname === "/" ||                      // landing if you have one
     pathname === "/login" ||
     pathname === "/signup" ||
     pathname === "/forgot-password" ||
     pathname === "/reset-password" ||
-    pathname.startsWith("/api/auth") ||      // NextAuth internals
-    pathname.startsWith("/_next") ||         // next.js assets
+    pathname.startsWith("/api/auth") || // NextAuth internals
+    pathname.startsWith("/_next") || // next.js assets
     pathname.startsWith("/static") ||
     pathname === "/favicon.ico"
   ) {
@@ -41,7 +50,6 @@ export async function middleware(req: NextRequest) {
   // No session → send to login with callbackUrl
   if (!token) {
     const loginUrl = new URL("/login", req.url);
-    // where to send them back after logging in
     loginUrl.searchParams.set("callbackUrl", pathname || "/dashboard");
     return NextResponse.redirect(loginUrl);
   }

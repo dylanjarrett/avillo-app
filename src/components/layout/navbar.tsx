@@ -36,8 +36,14 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const initials = getInitials(session?.user?.name || session?.user?.email || "DJ");
+  const initials = getInitials(
+    session?.user?.name || session?.user?.email || "DJ"
+  );
   const emailLabel = session?.user?.email || "Signed in to Avillo";
+
+  // NEW: derive role / isAdmin from the session
+  const role = (session?.user as any)?.role as "USER" | "ADMIN" | undefined;
+  const isAdmin = role === "ADMIN";
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -101,9 +107,10 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
                 className={`
                   absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]
                   transition-transform duration-200 ease-out
-                  ${sidebarOpen
-                    ? "top-1.5 rotate-45"
-                    : "top-0 translate-y-0"
+                  ${
+                    sidebarOpen
+                      ? "top-1.5 rotate-45"
+                      : "top-0 translate-y-0"
                   }
                 `}
               />
@@ -120,9 +127,10 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
                 className={`
                   absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]
                   transition-transform duration-200 ease-out
-                  ${sidebarOpen
-                    ? "top-1.5 -rotate-45"
-                    : "bottom-0 translate-y-0"
+                  ${
+                    sidebarOpen
+                      ? "top-1.5 -rotate-45"
+                      : "bottom-0 translate-y-0"
                   }
                 `}
               />
@@ -188,6 +196,17 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
               >
                 Help &amp; support
               </a>
+
+              {/* Admin link – admins only */}
+              {isAdmin && (
+                <Link
+                  href="/admin"
+                  onClick={() => setOpen(false)}
+                  className="block px-4 py-1.5 text-[13px] text-[#f7f0d8] hover:bg-[#101729] hover:text-[#fefce8]"
+                >
+                  Admin
+                </Link>
+              )}
 
               <div className="my-2 h-px bg-[rgba(148,163,184,0.22)]" />
 

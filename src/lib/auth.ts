@@ -5,6 +5,8 @@ import type { AdapterUser } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
+import crypto from "crypto";
+
 import { prisma } from "@/lib/prisma";
 
 export const authOptions: NextAuthOptions = {
@@ -50,15 +52,43 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
+    // Runs when a new JWT is created or updated.
     async jwt({ token, user }) {
+      // On initial sign-in, `user` is defined
       if (user) {
-        token.id = (user as User).id;
+        const dbUser = await prisma.user.update({
+          where: { id: (user as User).id },
+          data: {
+            // Rotate session key on every new login
+            currentSessionKey: crypto.randomUUID(),
+            lastLoginAt: new Date(),
+          },
+          select: {
+            id: true,
+            role: true,
+            plan: true,
+            currentSessionKey: true,
+          },
+        });
+
+        token.id = dbUser.id;
+        (token as any).role = dbUser.role;
+        (token as any).plan = dbUser.plan;
+        (token as any).sessionKey = dbUser.currentSessionKey;
+
+        return token;
       }
+
+      // For existing sessions, just keep current token as-is
       return token;
     },
+
+    // Controls what goes into `session` on the client
     async session({ session, token }) {
-      if (token?.id && session.user) {
+      if (session.user && token) {
         (session.user as any).id = token.id;
+        (session.user as any).role = (token as any).role;
+        (session.user as any).plan = (token as any).plan;
       }
       return session;
     },
