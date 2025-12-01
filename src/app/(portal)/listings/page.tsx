@@ -754,6 +754,15 @@ export default function ListingsPage() {
       setSelectedId(saved.id);
       setWorkspaceOpenMobile(true);
 
+      // On mobile, scroll down to the workspace (same behavior as clicking a card)
+if (typeof window !== "undefined" && window.innerWidth < 1024) {
+  setTimeout(() => {
+    const el = workspaceRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 50);
+}
+
       setForm({
         id: saved.id,
         address: "",
@@ -1051,7 +1060,6 @@ setListingDetails((prev) => {
     // Mobile: close workspace & scroll to top after save
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       setWorkspaceOpenMobile(false);
-      window.scrollTo({ top: 0, behavior: "smooth" });
     }
   } catch (err: any) {
     console.error("save listing error", err);
@@ -1110,7 +1118,7 @@ setListingDetails((prev) => {
         // Mobile: go back to gallery after delete
         setWorkspaceOpenMobile(false);
         setSelectedId(null);
-        window.scrollTo({ top: 0, behavior: "smooth" });
+
       } else if (updatedListings.length > 0) {
         // Desktop: keep current behavior (auto-select next listing)
         const next = updatedListings[0];

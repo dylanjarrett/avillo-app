@@ -433,6 +433,11 @@ export default function CrmPage() {
       setSelectedId(saved.id!);
       setActiveContact(saved);
 
+      if (window.innerWidth < 1024){
+        scrollBackToContacts();
+      }
+
+
       return saved;
     } catch (err: any) {
       console.error("Save contact error", err);
@@ -477,6 +482,11 @@ export default function CrmPage() {
       const remaining = contacts.filter((c) => c.id !== activeContact.id);
       setActiveContact(remaining[0] ?? null);
       setSelectedId(remaining[0]?.id ?? null);
+
+      if (window.innerWidth < 1024){
+        scrollBackToContacts();
+      }
+
     } catch (err: any) {
       console.error("Delete contact error", err);
       setError(
@@ -1354,28 +1364,41 @@ function scrollBackToContacts() {
                   </div>
                 </div>
 
-                {/* Footer buttons */}
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    disabled={deleting}
-                    className="inline-flex items-center justify-center rounded-full border border-rose-400/70 bg-rose-900/40 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-rose-50 hover:bg-rose-800/60 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {activeContact.id ? "Delete contact" : "Discard new contact"}
-                  </button>
+                {/* Footer buttons — EXACT match to Listings */}
+<div className="flex items-center justify-between gap-3">
+  {/* Delete contact */}
+  <button
+    type="button"
+    onClick={handleDelete}
+    disabled={deleting}
+    className="
+      inline-flex items-center justify-center rounded-full
+      border border-red-400/80 bg-red-500/5
+      px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
+      text-red-200 hover:bg-red-500/15
+      disabled:cursor-not-allowed disabled:opacity-40
+    "
+  >
+    {activeContact.id ? "Delete contact" : "Discard new contact"}
+  </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleSave();
-                    }}
-                    disabled={saving}
-                    className="inline-flex items-center justify-center rounded-full border border-amber-100/80 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-50 shadow-[0_0_22px_rgba(248,250,252,0.28)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {saving ? "Saving…" : "Save changes"}
-                  </button>
-                </div>
+  {/* Save contact */}
+  <button
+    type="button"
+    onClick={() => void handleSave()}
+    disabled={saving}
+    className="
+      inline-flex items-center justify-center rounded-full
+      border border-amber-100/70 bg-amber-50/10
+      px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
+      text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)]
+      hover:bg-amber-50/20
+      disabled:cursor-not-allowed disabled:opacity-60
+    "
+  >
+    {saving ? "Saving…" : "Save changes"}
+  </button>
+</div>
               </div>
             )}
           </div>
