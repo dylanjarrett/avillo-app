@@ -130,6 +130,7 @@ export default function ListingsPage() {
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryScrollYRef = useRef<number | null>(null);
 
   /* ------------------------------------
    * Load listings
@@ -689,6 +690,25 @@ export default function ListingsPage() {
     });
   }
 
+/* ------------------------------------
+ * Mobile gallery scroll helper
+ * -----------------------------------*/
+function scrollBackToGallery() {
+  if (typeof window === "undefined" || window.innerWidth >= 1024) return;
+
+  const y = galleryScrollYRef.current;
+
+  setWorkspaceOpenMobile(false);
+
+  if (y == null) return;
+
+  setTimeout(() => {
+    window.scrollTo({ top: y, behavior: "auto" }); // or "smooth" if you prefer
+    galleryScrollYRef.current = null;
+  }, 50);
+}
+
+
   /* ------------------------------------
    * New listing
    * -----------------------------------*/
@@ -751,10 +771,16 @@ export default function ListingsPage() {
         : [];
 
       setListings((prev) => [newRow, ...prev]);
-      setSelectedId(saved.id);
-      setWorkspaceOpenMobile(true);
 
-      // On mobile, scroll down to the workspace (same behavior as clicking a card)
+// 🌟 remember where the gallery was when "+ New listing" was tapped
+if (typeof window !== "undefined" && window.innerWidth < 1024) {
+  galleryScrollYRef.current = window.scrollY;
+}
+
+setSelectedId(saved.id);
+setWorkspaceOpenMobile(true);
+
+// On mobile, scroll down to the workspace
 if (typeof window !== "undefined" && window.innerWidth < 1024) {
   setTimeout(() => {
     const el = workspaceRef.current;
@@ -1057,10 +1083,10 @@ setListingDetails((prev) => {
       return [row, ...prev];
     });
 
-    // Mobile: close workspace & scroll to top after save
-    if (typeof window !== "undefined" && window.innerWidth < 1024) {
-      setWorkspaceOpenMobile(false);
-    }
+    // 🌟 Mobile: close workspace & return to the same spot in the gallery
+if (typeof window !== "undefined" && window.innerWidth < 1024) {
+  scrollBackToGallery();
+}
   } catch (err: any) {
     console.error("save listing error", err);
     setError(
@@ -1115,9 +1141,9 @@ setListingDetails((prev) => {
       });
 
       if (typeof window !== "undefined" && window.innerWidth < 1024) {
-        // Mobile: go back to gallery after delete
-        setWorkspaceOpenMobile(false);
-        setSelectedId(null);
+  // 🌟 Mobile: go back to gallery at the same scroll position after delete
+  setSelectedId(null);
+  scrollBackToGallery();
 
       } else if (updatedListings.length > 0) {
         // Desktop: keep current behavior (auto-select next listing)
@@ -1172,46 +1198,50 @@ setListingDetails((prev) => {
   }
 
   /* ------------------------------------
-   * Select listing from gallery
-   * -----------------------------------*/
-  function handleSelectListing(row: ListingRow) {
-    setSelectedId(row.id);
-    setWorkspaceOpenMobile(true);
-
-    // Smooth-scroll to the workspace on mobile *after* layout updates
-    if (typeof window !== "undefined" && window.innerWidth < 1024) {
-      setTimeout(() => {
-        const el = workspaceRef.current;
-        if (!el) return;
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 50);
-    }
-
-    const full = listingDetails[row.id];
-    if (full) {
-      hydrateFormFromApi({
-        ...full,
-        photos: photoState[row.id] ?? full.photos ?? [],
-      });
-    } else {
-      const apiLike: ListingDetail = {
-        id: row.id,
-        address: row.address,
-        mlsId: row.mlsId,
-        price: row.price,
-        status: row.status,
-        description: "",
-        sellerContactId: "",
-        buyers: [],
-        photos: photoState[row.id] ?? [],
-        aiCopy: null,
-        aiNotes: null,
-        createdAt: row.createdAt ?? null,
-        updatedAt: row.updatedAt ?? null,
-      };
-      hydrateFormFromApi(apiLike);
-    }
+  * Select listing from gallery
+  * -----------------------------------*/
+function handleSelectListing(row: ListingRow) {
+  // 🌟 Remember current gallery scroll before jumping to workspace
+  if (typeof window !== "undefined" && window.innerWidth < 1024) {
+    galleryScrollYRef.current = window.scrollY;
   }
+
+  setSelectedId(row.id);
+  setWorkspaceOpenMobile(true);
+
+  if (typeof window !== "undefined" && window.innerWidth < 1024) {
+    setTimeout(() => {
+      const el = workspaceRef.current;
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }
+
+  const full = listingDetails[row.id];
+  if (full) {
+    hydrateFormFromApi({
+      ...full,
+      photos: photoState[row.id] ?? full.photos ?? [],
+    });
+  } else {
+    const apiLike: ListingDetail = {
+      id: row.id,
+      address: row.address,
+      mlsId: row.mlsId,
+      price: row.price,
+      status: row.status,
+      description: "",
+      sellerContactId: "",
+      buyers: [],
+      photos: photoState[row.id] ?? [],
+      aiCopy: null,
+      aiNotes: null,
+      createdAt: row.createdAt ?? null,
+      updatedAt: row.updatedAt ?? null,
+    };
+    hydrateFormFromApi(apiLike);
+  }
+}
 
   /* ------------------------------------
    * Derived photos for workspace
@@ -1534,7 +1564,7 @@ setListingDetails((prev) => {
               {/* Mobile back to gallery */}
               <button
                 type="button"
-                onClick={() => setWorkspaceOpenMobile(false)}
+                onClick={scrollBackToGallery}
                 className="inline-flex items-center gap-2 rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.20em] text-[var(--avillo-cream-soft)] shadow-[0_0_18px_rgba(15,23,42,0.9)] hover:border-amber-100/80 hover:text-amber-50 hover:bg-slate-900/95 md:hidden"
               >
                 <span className="text-xs">←</span>
