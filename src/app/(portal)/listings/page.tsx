@@ -232,14 +232,9 @@ export default function ListingsPage() {
         setPhotoState(initialPhotos);
         setListingDetails(detailsMap);
 
-        if (rows.length > 0) {
-          const first = apiListings[0];
-          setSelectedId(first.id);
-          const detail = detailsMap[first.id] ?? first;
-          hydrateFormFromApi(detail);
-        } else {
           setSelectedId(null);
-        }
+          setForm(INITIAL_FORM);
+        
       } catch (err: any) {
         console.error("load listings error", err);
         if (!cancelled) {
