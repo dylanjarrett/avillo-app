@@ -1,7 +1,7 @@
 // src/app/(portal)/crm/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageHeader from "@/components/layout/page-header";
 
@@ -19,6 +19,13 @@ type ContactNote = {
   reminderAt?: string | null;
 };
 
+type LinkedListing = {
+  id: string;
+  address: string;
+  status: string | null;
+  role: "buyer" | "seller";
+};
+
 type Contact = {
   id?: string; // undefined = not yet saved
   name: string;
@@ -32,12 +39,33 @@ type Contact = {
   email: string;
   phone: string;
   notes: ContactNote[];
+  linkedListings: LinkedListing[];
 };
 
 type ListingOption = {
   id: string;
   label: string; // usually the address
 };
+
+/* ------------------------------------
+ * Small helpers
+ * -----------------------------------*/
+
+function upsertLinkedListing(
+  existing: LinkedListing[] | undefined,
+  next: LinkedListing
+): LinkedListing[] {
+  const current = existing ?? [];
+  const found = current.some(
+    (l) => l.id === next.id && l.role === next.role
+  );
+  if (!found) {
+    return [...current, next];
+  }
+  return current.map((l) =>
+    l.id === next.id && l.role === next.role ? { ...l, ...next } : l
+  );
+}
 
 /* ------------------------------------
  * Page
@@ -59,15 +87,16 @@ export default function CrmPage() {
   // Listings for tagging
   const [listings, setListings] = useState<ListingOption[]>([]);
   const [listingsLoading, setListingsLoading] = useState(true);
-  const [selectedListingId, setSelectedListingId] = useState<string | null>(
-    null
-  );
 
   // Notes (per contact) drafts + saving state
   const [noteDrafts, setNoteDrafts] = useState<
     Record<string, { text: string; reminderAt: string }>
   >({});
   const [noteSaving, setNoteSaving] = useState(false);
+
+  // Refs for mobile scroll behavior
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const detailRef = useRef<HTMLDivElement | null>(null);
 
   // ---------- Load contacts & listings on mount ----------
   useEffect(() => {
@@ -98,13 +127,16 @@ export default function CrmPage() {
           email: c.email ?? "",
           phone: c.phone ?? "",
           notes: Array.isArray(c.notes) ? c.notes : [],
+          linkedListings: Array.isArray(c.linkedListings)
+            ? c.linkedListings
+            : [],
         }));
 
         if (!cancelled) {
           setContacts(loaded);
           if (loaded[0]) {
-            setSelectedId(loaded[0].id!);
-            setActiveContact(loaded[0]);
+            setSelectedId(null);
+            setActiveContact(null);
           }
         }
       } catch (err: any) {
@@ -134,7 +166,6 @@ export default function CrmPage() {
       } catch (err) {
         console.error("Load listings error", err);
         if (!cancelled) {
-          // Silent fail in UI: just show “no listings” state
           setListings([]);
         }
       } finally {
@@ -170,11 +201,17 @@ export default function CrmPage() {
           .join(" ")
           .toLowerCase();
 
+        const linkedListingAddresses = (c.linkedListings ?? [])
+          .map((l) => l.address || "")
+          .join(" ")
+          .toLowerCase();
+
         return (
           c.name.toLowerCase().includes(q) ||
           c.areas.toLowerCase().includes(q) ||
           c.priceRange.toLowerCase().includes(q) ||
-          notesText.includes(q)
+          notesText.includes(q) ||
+          linkedListingAddresses.includes(q)
         );
       });
     }
@@ -205,6 +242,25 @@ export default function CrmPage() {
     setActiveContact(found);
   }, [selectedId, contacts]);
 
+  // Helper: scroll detail panel into view on mobile with offset for navbar
+  function scrollToDetail() {
+    if (!detailRef.current || typeof window === "undefined") return;
+    const isMobile = window.innerWidth < 1024;
+    if (!isMobile) return;
+
+    const rect = detailRef.current.getBoundingClientRect();
+    const top = rect.top + window.scrollY - 95; // offset so the card header is visible
+    window.scrollTo({ top, behavior: "smooth" });
+  }
+
+  // Mobile: when a contact is selected, scroll detail section into view
+  useEffect(() => {
+    if (!activeContact) return;
+    if (typeof window === "undefined") return;
+    scrollToDetail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, activeContact?.id]);
+
   // ---------- Actions ----------
 
   function handleAddContact() {
@@ -221,10 +277,10 @@ export default function CrmPage() {
       email: "",
       phone: "",
       notes: [],
+      linkedListings: [],
     };
     setSelectedId("new");
     setActiveContact(fresh);
-    setSelectedListingId(null);
   }
 
   function handleFieldChange<K extends keyof Contact>(key: K, value: Contact[K]) {
@@ -360,6 +416,9 @@ export default function CrmPage() {
         email: data.contact.email ?? "",
         phone: data.contact.phone ?? "",
         notes: Array.isArray(data.contact.notes) ? data.contact.notes : [],
+        linkedListings: Array.isArray(data.contact.linkedListings)
+          ? data.contact.linkedListings
+          : [],
       };
 
       // Update in-memory list
@@ -375,33 +434,6 @@ export default function CrmPage() {
 
       setSelectedId(saved.id!);
       setActiveContact(saved);
-
-      // If a listing is selected, tag contact to that listing
-      if (selectedListingId && saved.id) {
-        const isSeller =
-          saved.type === "Seller" || saved.type === "Buyer & Seller";
-        const isBuyer =
-          saved.type === "Buyer" || saved.type === "Buyer & Seller";
-
-        const body: any = {
-          id: selectedListingId,
-        };
-        if (isSeller) body.sellerContactId = saved.id;
-        if (isBuyer) body.buyerIds = [saved.id];
-
-        try {
-          const linkRes = await fetch("/api/listings/save", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          if (!linkRes.ok) {
-            console.error("Failed to tag contact to listing");
-          }
-        } catch (err) {
-          console.error("Tag listing error", err);
-        }
-      }
 
       return saved;
     } catch (err: any) {
@@ -420,7 +452,6 @@ export default function CrmPage() {
       // If the new, unsaved contact is showing, just clear it
       setActiveContact(null);
       setSelectedId(contacts[0]?.id ?? null);
-      setSelectedListingId(null);
       return;
     }
 
@@ -448,22 +479,223 @@ export default function CrmPage() {
       const remaining = contacts.filter((c) => c.id !== activeContact.id);
       setActiveContact(remaining[0] ?? null);
       setSelectedId(remaining[0]?.id ?? null);
-      setSelectedListingId(null);
     } catch (err: any) {
       console.error("Delete contact error", err);
       setError(
-        err?.message || "We couldn’t delete this contact. Try again in a moment."
+        err?.message ||
+          "We couldn’t delete this contact. Try again in a moment."
       );
     } finally {
       setDeleting(false);
     }
   }
 
-  async function handleSaveAndCreateListing() {
+  // Ensure a contact has an id before linking/unlinking listings
+  async function ensureContactSaved(): Promise<Contact | null> {
+    if (!activeContact) return null;
+    if (activeContact.id) return activeContact;
     const saved = await handleSave();
-    if (saved?.id) {
-      router.push(`/listings/new?contactId=${saved.id}`);
+    return saved;
+  }
+
+  // Refresh contacts after linking/unlinking so CRM & Listings stay in sync
+  async function refreshContactsAndSelect(contactId: string) {
+    try {
+      // IMPORTANT: do NOT toggle `loading` here, so the left column
+      // does not flash "Loading your contacts…" after each tag change.
+      const res = await fetch("/api/crm/contacts");
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to reload contacts.");
+      }
+      const data = await res.json();
+      const loaded: Contact[] = (data.contacts ?? []).map((c: any) => ({
+        id: c.id,
+        name: c.name ?? "",
+        label: c.label ?? "",
+        stage: (c.stage as Stage) ?? "new",
+        type:
+          (c.type as "Buyer" | "Seller" | "Buyer & Seller" | null) ??
+          ("Buyer" as const),
+        priceRange: c.priceRange ?? "",
+        areas: c.areas ?? "",
+        timeline: c.timeline ?? "",
+        source: c.source ?? "",
+        email: c.email ?? "",
+        phone: c.phone ?? "",
+        notes: Array.isArray(c.notes) ? c.notes : [],
+        linkedListings: Array.isArray(c.linkedListings)
+          ? c.linkedListings
+          : [],
+      }));
+
+      setContacts(loaded);
+      const found = loaded.find((c) => c.id === contactId) ?? null;
+      setSelectedId(found?.id ?? null);
+      setActiveContact(found);
+    } catch (err: any) {
+      console.error("refreshContactsAndSelect error", err);
+      setError(
+        err?.message ||
+          "We updated this contact, but couldn’t refresh the view."
+      );
     }
+  }
+
+  // Toggle linking of this contact to a listing (buyer/seller based on contact.type)
+  async function toggleListingLink(listingId: string) {
+    try {
+      const saved = await ensureContactSaved();
+      if (!saved?.id) return;
+
+      const relType = saved.type ?? "Buyer";
+
+      const wantsSeller =
+        relType === "Seller" || relType === "Buyer & Seller";
+      const wantsBuyer =
+        relType === "Buyer" || relType === "Buyer & Seller";
+
+      if (!wantsSeller && !wantsBuyer) {
+        // default to buyer if somehow no type set
+        return;
+      }
+
+      const links = saved.linkedListings ?? [];
+      const linkedAsSeller = links.some(
+        (l) => l.id === listingId && l.role === "seller"
+      );
+      const linkedAsBuyer = links.some(
+        (l) => l.id === listingId && l.role === "buyer"
+      );
+
+      const currentlyLinked =
+        (wantsSeller && linkedAsSeller) || (wantsBuyer && linkedAsBuyer);
+
+      const tasks: Promise<Response>[] = [];
+
+      if (!currentlyLinked) {
+        // LINK
+        if (wantsSeller && !linkedAsSeller) {
+          tasks.push(
+            fetch("/api/listings/assign-contact", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                listingId,
+                contactId: saved.id,
+                relationship: "seller",
+              }),
+            })
+          );
+        }
+        if (wantsBuyer && !linkedAsBuyer) {
+          tasks.push(
+            fetch("/api/listings/assign-contact", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                listingId,
+                contactId: saved.id,
+                relationship: "buyer",
+              }),
+            })
+          );
+        }
+      } else {
+        // UNLINK
+        if (wantsSeller && linkedAsSeller) {
+          tasks.push(
+            fetch("/api/listings/unlink-contact", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                listingId,
+                contactId: saved.id,
+                relationship: "seller",
+              }),
+            })
+          );
+        }
+        if (wantsBuyer && linkedAsBuyer) {
+          tasks.push(
+            fetch("/api/listings/unlink-contact", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                listingId,
+                contactId: saved.id,
+                relationship: "buyer",
+              }),
+            })
+          );
+        }
+      }
+
+      if (tasks.length > 0) {
+        const responses = await Promise.all(tasks);
+        const failed = responses.find((r) => !r.ok);
+        if (failed) {
+          const data = await failed.json().catch(() => null);
+          throw new Error(
+            data?.error || "We couldn’t update this contact’s listings."
+          );
+        }
+      }
+
+      await refreshContactsAndSelect(saved.id);
+    } catch (err: any) {
+      console.error("toggleListingLink error", err);
+      setError(
+        err?.message ||
+          "We couldn’t update which listings this contact is linked to."
+      );
+    }
+  }
+
+  // Unlink a specific role (buyer/seller) from the summary pill "X"
+  async function handleUnlinkListing(listingId: string, role: "buyer" | "seller") {
+    try {
+      const saved = await ensureContactSaved();
+      if (!saved?.id) return;
+
+      const res = await fetch("/api/listings/unlink-contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listingId,
+          contactId: saved.id,
+          relationship: role,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(
+          data?.error || "We couldn’t remove this link from the listing."
+        );
+      }
+
+      await refreshContactsAndSelect(saved.id);
+    } catch (err: any) {
+      console.error("handleUnlinkListing error", err);
+      setError(
+        err?.message || "We couldn’t unlink this contact from that listing."
+      );
+    }
+  }
+
+  // Mobile: back from detail → clear selection + scroll up to list header
+  function scrollBackToContacts() {
+    setActiveContact(null);
+    setSelectedId(null);
+
+    if (!listRef.current || typeof window === "undefined") return;
+    const isMobile = window.innerWidth < 1024;
+    if (!isMobile) return;
+
+    const rect = listRef.current.getBoundingClientRect();
+    const top = rect.top + window.scrollY - 280; 
+    window.scrollTo({ top, behavior: "smooth" });
   }
 
   /* ------------------------------------
@@ -471,7 +703,7 @@ export default function CrmPage() {
    * -----------------------------------*/
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-12">
       <PageHeader
         eyebrow="CRM"
         title="Pipeline & relationships"
@@ -551,7 +783,10 @@ export default function CrmPage() {
         {/* Main layout: list + detail */}
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)]">
           {/* LEFT: CONTACT LIST */}
-          <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
+          <div
+            ref={listRef}
+            className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]"
+          >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)] opacity-40 blur-3xl" />
 
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -604,9 +839,10 @@ export default function CrmPage() {
                     <button
                       key={contact.id ?? "new-contact-row"}
                       type="button"
-                      onClick={() =>
-                        setSelectedId(contact.id ?? ("new" as const))
-                      }
+                      onClick={() => {
+                        setSelectedId(contact.id ?? ("new" as const));
+                        scrollToDetail();
+                      }}
                       className={
                         "w-full rounded-xl border px-4 py-3 text-left transition-colors " +
                         (isSelected
@@ -675,7 +911,10 @@ export default function CrmPage() {
           </div>
 
           {/* RIGHT: DETAIL PANEL */}
-          <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
+          <div
+            ref={detailRef}
+            className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]"
+          >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
 
             {!activeContact && (
@@ -692,6 +931,20 @@ export default function CrmPage() {
 
             {activeContact && (
               <div className="space-y-4 text-xs text-[var(--avillo-cream-soft)]">
+
+                {/* Mobile Back Button (top-right, unified with Listings) */}
+    <div className="relative mb-2 lg:hidden">
+      <button
+        type="button"
+        onClick={scrollBackToContacts}
+        className="absolute right-0 top-0 inline-flex items-center gap-2 rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.20em] text-[var(--avillo-cream-soft)] shadow-[0_0_18px_rgba(15,23,42,0.9)] hover:border-amber-100/80 hover:text-amber-50 hover:bg-slate-900/95"
+      >
+        <span className="text-xs">←</span>
+        <span>Back</span>
+      </button>
+    </div>
+    <div className="h-3 lg:hidden"></div>
+
                 {/* Header: Contact name + lead status */}
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="w-full sm:max-w-xs">
@@ -706,11 +959,6 @@ export default function CrmPage() {
                       placeholder="Start here — add a name"
                       className="avillo-input w-full text-slate-50"
                     />
-                    {activeContact.label && (
-                      <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
-                        {activeContact.label}
-                      </p>
-                    )}
                   </div>
 
                   {/* Stage selector inside detail panel */}
@@ -847,10 +1095,55 @@ export default function CrmPage() {
                   />
                 </div>
 
-                {/* Tag to listing */}
+                {/* Linked listings summary (pills with X) */}
+                {activeContact.linkedListings &&
+                  activeContact.linkedListings.length > 0 && (
+                    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                      <p className="text-[11px] font-semibold text-amber-100/90">
+                        Linked listings
+                      </p>
+                      <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                        This contact is connected to the listings below. Remove a
+                        link with the “×”.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {activeContact.linkedListings.map((l) => (
+                          <span
+                            key={`${l.id}-${l.role}`}
+                            className="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-700/80 bg-slate-950/70 px-3 py-1.5 text-[10px] text-[var(--avillo-cream-soft)]"
+                          >
+                            <span className="truncate max-w-[160px] sm:max-w-[220px]">
+                              {l.address || "Unnamed listing"}
+                            </span>
+                            <span
+                              className={
+                                "rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] " +
+                                (l.role === "seller"
+                                  ? "border-amber-200/90 bg-amber-400/15 text-amber-50"
+                                  : "border-sky-200/90 bg-sky-500/15 text-sky-50")
+                              }
+                            >
+                              {l.role === "seller" ? "Seller" : "Buyer"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleUnlinkListing(l.id, l.role)
+                              }
+                              className="rounded-full border border-slate-700/80 bg-slate-900/80 px-1.5 text-[9px] leading-none text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/50 hover:text-rose-50"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                {/* Tag to listing (multi-select, 2-way with listings panel) */}
                 <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                   <p className="text-[11px] font-semibold text-amber-100/90">
-                    Tag contact to listing
+                    Tag contact to listings
                   </p>
                   {listingsLoading ? (
                     <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
@@ -864,48 +1157,58 @@ export default function CrmPage() {
                   ) : (
                     <>
                       <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                        Choose an existing listing to associate this buyer or
-                        seller with.
+                        Tap any listing below to link or unlink this contact as a{" "}
+                        <span className="font-semibold">
+                          buyer, seller, or both
+                        </span>{" "}
+                        based on the relationship type above.
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {listings.map((l) => (
-                          <button
-                            key={l.id}
-                            type="button"
-                            onClick={() =>
-                              setSelectedListingId(
-                                selectedListingId === l.id ? null : l.id
-                              )
-                            }
-                            className={
-                              "rounded-full border px-3 py-1.5 text-[10px] font-semibold tracking-[0.16em] " +
-                              (selectedListingId === l.id
-                                ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
-                                : "border-slate-700/80 bg-slate-900/80 text-[var(--avillo-cream-soft)] hover:border-amber-100/70 hover:text-amber-50")
-                            }
-                          >
-                            {l.label}
-                          </button>
-                        ))}
+                        {listings.map((l) => {
+                          const relType = activeContact.type ?? "Buyer";
+                          const wantsSeller =
+                            relType === "Seller" ||
+                            relType === "Buyer & Seller";
+                          const wantsBuyer =
+                            relType === "Buyer" ||
+                            relType === "Buyer & Seller";
+
+                          const links = activeContact.linkedListings ?? [];
+                          const linkedAsSeller = links.some(
+                            (link) =>
+                              link.id === l.id && link.role === "seller"
+                          );
+                          const linkedAsBuyer = links.some(
+                            (link) =>
+                              link.id === l.id && link.role === "buyer"
+                          );
+
+                          const isLinked =
+                            (wantsSeller && linkedAsSeller) ||
+                            (wantsBuyer && linkedAsBuyer);
+
+                          return (
+                            <button
+                              key={l.id}
+                              type="button"
+                              onClick={() => toggleListingLink(l.id)}
+                              className={
+                                "rounded-full border px-3 py-1.5 text-[10px] font-semibold tracking-[0.16em] " +
+                                (isLinked
+                                  ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
+                                  : "border-slate-700/80 bg-slate-900/80 text-[var(--avillo-cream-soft)] hover:border-amber-100/70 hover:text-amber-50")
+                              }
+                            >
+                              {l.label}
+                            </button>
+                          );
+                        })}
                       </div>
                     </>
                   )}
-
-                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                      Or create a brand-new listing from this contact.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleSaveAndCreateListing}
-                      className="inline-flex items-center justify-center rounded-full border border-sky-300/80 bg-sky-500/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-50 hover:bg-sky-500/20"
-                    >
-                      Save & create new listing
-                    </button>
-                  </div>
                 </div>
 
-                {/* Notes & reminders (replaces Timeline & touchpoints + Working notes) */}
+                {/* Notes & reminders */}
                 <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                   <p className="text-[11px] font-semibold text-amber-100/90">
                     Notes & reminders
@@ -953,15 +1256,14 @@ export default function CrmPage() {
                                 {note.reminderAt && (
                                   <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
                                     Reminder{" "}
-                                    {new Date(note.reminderAt).toLocaleString(
-                                      undefined,
-                                      {
-                                        month: "short",
-                                        day: "numeric",
-                                        hour: "numeric",
-                                        minute: "2-digit",
-                                      }
-                                    )}
+                                    {new Date(
+                                      note.reminderAt
+                                    ).toLocaleString(undefined, {
+                                      month: "short",
+                                      day: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                    })}
                                   </span>
                                 )}
                               </div>
@@ -983,7 +1285,11 @@ export default function CrmPage() {
                           }
                           onChange={(e) =>
                             activeContact.id &&
-                            updateNoteDraft(activeContact.id, "text", e.target.value)
+                            updateNoteDraft(
+                              activeContact.id,
+                              "text",
+                              e.target.value
+                            )
                           }
                           placeholder="Log a quick note, call summary, or next steps…"
                           className="w-full resize-none rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
@@ -996,7 +1302,8 @@ export default function CrmPage() {
                               type="datetime-local"
                               value={
                                 activeContact.id
-                                  ? noteDrafts[activeContact.id]?.reminderAt ?? ""
+                                  ? noteDrafts[activeContact.id]?.reminderAt ??
+                                    ""
                                   : ""
                               }
                               onChange={(e) =>
@@ -1120,7 +1427,7 @@ function DetailInput({ label, value, onChange, placeholder }: DetailInputProps) 
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="mt-0.5 w-full border-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] pt-0.5"
+        className="mt-0.5 w-full border-none bg-transparent pt-0.5 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
       />
     </div>
   );

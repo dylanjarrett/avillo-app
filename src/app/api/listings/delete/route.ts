@@ -1,9 +1,23 @@
+// src/app/api/listings/delete/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma"; // keep your existing prisma import path
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    const { id } = await req.json();
+    const session = await getServerSession(authOptions);
+
+    if (!session?.user?.email) {
+      return NextResponse.json(
+        { error: "Not authenticated." },
+        { status: 401 }
+      );
+    }
+
+    const { id } = await req.json().catch(() => ({} as { id?: string }));
 
     if (!id) {
       return NextResponse.json(
@@ -12,16 +26,41 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // If you have related tables (photos, buyers, etc.)
-    // and they are NOT set to cascade in the DB, delete them here first:
-    //
-    // await prisma.listingPhoto.deleteMany({ where: { listingId: id } });
-    // await prisma.listingBuyer.deleteMany({ where: { listingId: id } });
-    //
-    // Otherwise, rely on ON DELETE CASCADE and just delete the listing.
+    const { prisma } = await import("@/lib/prisma");
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
+
+    if (!user) {
+      return NextResponse.json(
+        { error: "Account not found." },
+        { status: 404 }
+      );
+    }
+
+    const listing = await prisma.listing.findFirst({
+      where: { id, userId: user.id },
+    });
+
+    if (!listing) {
+      return NextResponse.json(
+        { error: "Listing not found." },
+        { status: 404 }
+      );
+    }
+
+    // Clean up related rows so CRM views stay accurate
+    await prisma.listingBuyerLink.deleteMany({
+      where: { listingId: listing.id },
+    });
+
+    await prisma.listingPhoto.deleteMany({
+      where: { listingId: listing.id },
+    });
 
     await prisma.listing.delete({
-      where: { id },
+      where: { id: listing.id },
     });
 
     return NextResponse.json({ ok: true });

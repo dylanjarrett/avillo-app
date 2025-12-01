@@ -6,13 +6,8 @@ import { authOptions } from "@/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type BuyerTagPayload = {
-  contactId: string;
-  role?: string | null; // "primary", "backup", "interested", etc.
-};
-
 type ListingPhotoPayload = {
-  id?: string; // optional – we currently overwrite, but kept for future upserts
+  id?: string; // kept for future upserts; currently we replace all
   url: string;
   isCover?: boolean;
   sortOrder?: number;
@@ -23,14 +18,12 @@ type ListingPayload = {
   address: string;
   mlsId?: string | null;
   price?: number | null;
-  status?: string; // "draft", "active", "pending", "closed", etc.
+  status?: string | null; // "draft", "active", "pending", "closed", etc.
   description?: string | null;
   aiCopy?: string | null;
   aiNotes?: string | null;
-  sellerContactId?: string | null;
-  buyers?: BuyerTagPayload[];
 
-  // NEW: photos for this listing
+  // Photos are the only related records handled here
   photos?: ListingPhotoPayload[];
 };
 
@@ -58,27 +51,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const {
-      id,
-      address,
-      mlsId,
-      price,
-      status,
-      description,
-      aiCopy,
-      aiNotes,
-      sellerContactId,
-      buyers,
-      photos,
-    } = body.listing;
-
-    if (!address || !address.trim()) {
-      return NextResponse.json(
-        { error: "Address is required to save a listing." },
-        { status: 400 }
-      );
-    }
-
     const { prisma } = await import("@/lib/prisma");
 
     const user = await prisma.user.findUnique({
@@ -92,6 +64,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const {
+      id,
+      address,
+      mlsId,
+      price,
+      status,
+      description,
+      aiCopy,
+      aiNotes,
+      photos,
+    } = body.listing;
+
+    if (!address || !address.trim()) {
+      return NextResponse.json(
+        { error: "Address is required to save a listing." },
+        { status: 400 }
+      );
+    }
+
     /* ------------------------------------
      * CREATE or UPDATE LISTING
      * -----------------------------------*/
@@ -99,12 +90,11 @@ export async function POST(req: NextRequest) {
     const listingData = {
       address: address.trim(),
       mlsId: mlsId ?? null,
-      price: price ?? null,
+      price: typeof price === "number" ? price : null,
       status: status ?? "draft",
       description: description ?? null,
       aiCopy: aiCopy ?? null,
       aiNotes: aiNotes ?? null,
-      sellerContactId: sellerContactId ?? null,
     };
 
     let listingId = id;
@@ -112,13 +102,25 @@ export async function POST(req: NextRequest) {
 
     if (id) {
       // UPDATE existing listing – ensure it belongs to this user
-      listingRecord = await prisma.listing.update({
+      const existing = await prisma.listing.findFirst({
         where: {
           id,
+          userId: user.id,
         },
+      });
+
+      if (!existing) {
+        return NextResponse.json(
+          { error: "Listing not found." },
+          { status: 404 }
+        );
+      }
+
+      listingRecord = await prisma.listing.update({
+        where: { id: existing.id },
         data: {
           ...listingData,
-          // userId is not changed
+          // userId unchanged
         },
       });
 
@@ -133,28 +135,6 @@ export async function POST(req: NextRequest) {
       });
 
       listingId = listingRecord.id;
-    }
-
-    /* ------------------------------------
-     * UPDATE BUYER TAGS (join table)
-     * -----------------------------------*/
-
-    if (buyers && listingId) {
-      // Clear existing tags
-      await prisma.listingBuyerLink.deleteMany({
-        where: { listingId },
-      });
-
-      // Add the new set
-      if (buyers.length > 0) {
-        await prisma.listingBuyerLink.createMany({
-          data: buyers.map((b) => ({
-            listingId,
-            contactId: b.contactId,
-            role: b.role ?? null,
-          })),
-        });
-      }
     }
 
     /* ------------------------------------
@@ -212,67 +192,9 @@ export async function POST(req: NextRequest) {
     }
 
     /* ------------------------------------
-     * CRM ACTIVITY LOGGING
-     * -----------------------------------*/
-
-    const activitiesToCreate: {
-      userId: string;
-      contactId?: string | null;
-      type: string;
-      summary: string;
-      data?: any;
-    }[] = [];
-
-    const isNew = !id;
-
-    // Seller activity
-    if (sellerContactId) {
-      activitiesToCreate.push({
-        userId: user.id,
-        contactId: sellerContactId,
-        type: isNew ? "listing_created" : "listing_updated",
-        summary: isNew
-          ? `New listing created at ${address}`
-          : `Listing updated at ${address}`,
-        data: {
-          listingId,
-          address,
-          status: listingData.status,
-        },
-      });
-    }
-
-    // Buyer tag activities
-    if (buyers && buyers.length > 0) {
-      buyers.forEach((b) => {
-        activitiesToCreate.push({
-          userId: user.id,
-          contactId: b.contactId,
-          type: "listing_buyer_tagged",
-          summary: `Tagged as buyer on listing at ${address}`,
-          data: {
-            listingId,
-            address,
-            role: b.role ?? null,
-          },
-        });
-      });
-    }
-
-    if (activitiesToCreate.length > 0) {
-      await prisma.cRMActivity.createMany({
-        data: activitiesToCreate.map((a) => ({
-          userId: a.userId,
-          contactId: a.contactId ?? null,
-          type: a.type,
-          summary: a.summary,
-          data: a.data ?? {},
-        })),
-      });
-    }
-
-    /* ------------------------------------
      * RETURN NORMALIZED LISTING (with photos)
+     * - Note: relationships (seller/buyers) are read-only here.
+     *   They are managed exclusively via assign/unlink endpoints.
      * -----------------------------------*/
 
     const fullListing = await prisma.listing.findUnique({
@@ -330,6 +252,7 @@ export async function POST(req: NextRequest) {
         sortOrder: p.sortOrder,
       })),
 
+      // Relationships are included for display only
       seller: fullListing.seller
         ? {
             id: fullListing.seller.id,

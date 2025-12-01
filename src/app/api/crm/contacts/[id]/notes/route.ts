@@ -1,3 +1,4 @@
+// src/app/api/crm/contacts/[id]/notes/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
@@ -58,6 +59,7 @@ export async function POST(
     }
 
     const body = (await req.json().catch(() => null)) as CreateNoteBody | null;
+
     if (!body?.text || !body.text.trim()) {
       return NextResponse.json(
         { error: "Note text is required." },
@@ -87,7 +89,9 @@ export async function POST(
         userId: user.id,
         contactId: contact.id,
         type: "note",
-        summary: `New note logged for ${(contact.firstName ?? "").trim()} ${(contact.lastName ?? "").trim()}`.trim() || "New contact note",
+        summary:
+          `New note logged for ${(contact.firstName ?? "").trim()} ${(contact.lastName ?? "")
+            .trim()}`.trim() || "New contact note",
         data: {
           hasReminder: !!reminderDate,
         },
