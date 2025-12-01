@@ -3,6 +3,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 import React from "react";
 import Providers from "./providers"; // Session provider stays here
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
