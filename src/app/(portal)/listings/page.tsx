@@ -1534,6 +1534,22 @@ setListingDetails((prev) => {
               </button>
             </div>
 
+            {!form.id && !selectedId ? (
+  // 🔹 Empty state – nothing selected yet
+  <div className="flex h-[420px] items-center justify-center text-center text-[11px] text-[var(--avillo-cream-muted)]">
+    <div>
+      <p className="font-semibold text-[var(--avillo-cream-soft)]">
+        No listing selected
+      </p>
+      <p className="mt-1 max-w-xs">
+        Choose a listing card from the gallery on the left, or click
+        <span className="font-semibold"> “+ New listing”</span> to start a
+        fresh workspace.
+      </p>
+    </div>
+  </div>
+) : (
+
             <div className="space-y-4 text-xs text-[var(--avillo-cream-soft)]">
               {/* Photos */}
               <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
@@ -1810,11 +1826,12 @@ setListingDetails((prev) => {
                 </button>
               </div>
             </div>
-          </div>
+           )}
+        </div>
         </div>
       </section>
     </div>
-  );
+  )
 }
 
 /* ------------------------------------
