@@ -416,9 +416,7 @@ export default function CrmPage() {
         email: data.contact.email ?? "",
         phone: data.contact.phone ?? "",
         notes: Array.isArray(data.contact.notes) ? data.contact.notes : [],
-        linkedListings: Array.isArray(data.contact.linkedListings)
-          ? data.contact.linkedListings
-          : activeContact.linkedListings ?? [],
+        linkedListings: activeContact.linkedListings ?? [],
       };
 
       // Update in-memory list
