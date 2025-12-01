@@ -1,4 +1,4 @@
-// src/app/(portal)/intelligence/page.tsx
+//src/app/(portal)/intelligence/page.tsx
 "use client";
 
 import { useState } from "react";
