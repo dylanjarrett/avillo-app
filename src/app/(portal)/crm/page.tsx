@@ -683,18 +683,22 @@ export default function CrmPage() {
   }
 
   // Mobile: back from detail → clear selection + scroll up to list header
-  function scrollBackToContacts() {
-    setActiveContact(null);
-    setSelectedId(null);
-
-    if (!listRef.current || typeof window === "undefined") return;
-    const isMobile = window.innerWidth < 1024;
-    if (!isMobile) return;
-
+function scrollBackToContacts() {
+  if (typeof window !== "undefined" && listRef.current && window.innerWidth < 1024) {
     const rect = listRef.current.getBoundingClientRect();
-    const top = rect.top + window.scrollY - 280; 
-    window.scrollTo({ top, behavior: "smooth" });
+    const HEADER_OFFSET = 280; // matches scrollToDetail offset (tweak if you want)
+    const targetY = window.scrollY + rect.top - HEADER_OFFSET;
+
+    window.scrollTo({
+      top: targetY,
+      behavior: "smooth",
+    });
   }
+
+  // Clear the selection after triggering the scroll
+  setActiveContact(null);
+  setSelectedId(null);
+}
 
   /* ------------------------------------
    * Render
