@@ -702,10 +702,10 @@ function scrollBackToGallery() {
 
   if (y == null) return;
 
-  setTimeout(() => {
+  requestAnimationFrame(() => {
     window.scrollTo({ top: y, behavior: "auto" }); // or "smooth" if you prefer
     galleryScrollYRef.current = null;
-  }, 50);
+  });
 }
 
 
