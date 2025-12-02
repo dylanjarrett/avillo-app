@@ -124,6 +124,9 @@ export default function ListingsPage() {
 
   // ✅ mobile workspace toggle (always visible on md+)
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
+  
+  const isMobile =
+    typeof window !== "undefined" && window.innerWidth < 1024;
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -806,6 +809,14 @@ export default function ListingsPage() {
    * -----------------------------------*/
   async function handleSaveListing() {
     if (!form.id) return;
+    
+    // 🔹 1. On mobile: immediately bounce back to the list
+  if (isMobile) {
+    setSelectedId(null);
+    setWorkspaceOpenMobile(false);
+    scrollBackToLastListPosition(); // uses saved Y
+  }
+    
     setSaving(true);
     setError(null);
 
@@ -1020,15 +1031,6 @@ export default function ListingsPage() {
         return [row, ...prev];
       });
 
-      // ✅ Mobile: close workspace & go back to exact previous list scroll
-      if (
-        typeof window !== "undefined" &&
-        window.innerWidth < 1024
-      ) {
-        setSelectedId(null);
-        setWorkspaceOpenMobile(false);
-        scrollBackToLastListPosition();
-      }
     } catch (err: any) {
       console.error("save listing error", err);
       setError(
@@ -1051,6 +1053,14 @@ export default function ListingsPage() {
       "Delete this listing and its photos? This can’t be undone."
     );
     if (!confirmed) return;
+
+     // 🔹 1. On mobile: bounce back to list immediately
+    if (isMobile) {
+      setSelectedId(null);
+      setWorkspaceOpenMobile(false);
+      setForm(INITIAL_FORM);
+      scrollBackToLastListPosition();
+    }
 
     setSaving(true);
     setError(null);
@@ -1087,12 +1097,6 @@ export default function ListingsPage() {
         typeof window !== "undefined" &&
         window.innerWidth < 1024
       ) {
-        // ✅ Mobile: close workspace & scroll back to where you were in the list
-        setSelectedId(null);
-        setWorkspaceOpenMobile(false);
-        setForm(INITIAL_FORM);
-        scrollBackToLastListPosition();
-      } else if (updatedListings.length > 0) {
         // Desktop: keep current behavior (auto-select next listing)
         const next = updatedListings[0];
         setSelectedId(next.id);
