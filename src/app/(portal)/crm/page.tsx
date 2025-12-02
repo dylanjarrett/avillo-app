@@ -79,6 +79,10 @@ export default function CrmPage() {
     scrollBackToListHeader,
   } = useCrmMobileWorkspaceScroll();
 
+const isMobile = () =>
+    typeof window !== "undefined" && window.innerWidth < 1024;
+
+
   const [stageFilter, setStageFilter] = useState<StageFilter>("active");
   const [search, setSearch] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -252,10 +256,12 @@ export default function CrmPage() {
   }, [selectedId, contacts]);
 
   // Mobile: when a contact is selected, scroll detail section into view (hook)
-  useEffect(() => {
-    if (!activeContact) return;
-    scrollToWorkspace();
-  }, [selectedId, activeContact?.id, scrollToWorkspace]);
+useEffect(() => {
+  if (!isMobile()) return;
+  if (!activeContact) return;
+
+  scrollToWorkspace();
+}, [selectedId, activeContact?.id, scrollToWorkspace]);
 
   // ---------- Actions ----------
 
@@ -277,7 +283,6 @@ export default function CrmPage() {
     };
     setSelectedId("new");
     setActiveContact(fresh);
-    scrollToWorkspace();
   }
 
   function handleFieldChange<K extends keyof Contact>(key: K, value: Contact[K]) {
@@ -833,7 +838,6 @@ export default function CrmPage() {
                       type="button"
                       onClick={() => {
                         setSelectedId(contact.id ?? ("new" as const));
-                        scrollToWorkspace();
                       }}
                       className={
                         "w-full rounded-xl border px-4 py-3 text-left transition-colors " +

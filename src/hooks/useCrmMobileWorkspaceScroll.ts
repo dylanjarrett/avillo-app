@@ -24,8 +24,10 @@ export function useCrmMobileWorkspaceScroll(options: Options = {}) {
     typeof window !== "undefined" && window.innerWidth < 1024;
 
   const scrollToDetail = useCallback(() => {
-    if (!isMobile() || !detailRef.current) return;
+  if (!isMobile() || !detailRef.current) return;
 
+  requestAnimationFrame(() => {
+    if (!detailRef.current) return;
     const rect = detailRef.current.getBoundingClientRect();
     const targetY = window.scrollY + rect.top - downOffset;
 
@@ -33,7 +35,8 @@ export function useCrmMobileWorkspaceScroll(options: Options = {}) {
       top: targetY,
       behavior: "smooth",
     });
-  }, [downOffset]);
+  });
+}, [downOffset]);
 
   const scrollBackToListHeader = useCallback(
     (afterStateUpdate?: () => void) => {
