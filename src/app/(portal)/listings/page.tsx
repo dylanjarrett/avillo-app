@@ -125,7 +125,7 @@ export default function ListingsPage() {
   // ✅ mobile workspace toggle (always visible on md+)
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
   
-  const isMobile =
+  const isMobile = () =>
     typeof window !== "undefined" && window.innerWidth < 1024;
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -137,6 +137,13 @@ export default function ListingsPage() {
     scrollToWorkspaceTop,
     scrollBackToLastListPosition,
   } = useListingsMobileWorkspaceScroll();
+
+  useEffect(() => {
+  if (!isMobile()) return;
+  if (!workspaceOpenMobile) return;
+
+  scrollToWorkspaceTop();
+}, [workspaceOpenMobile]);
 
   /* ------------------------------------
    * Load listings
@@ -796,7 +803,6 @@ export default function ListingsPage() {
       }));
 
       // ✅ scroll the workspace into view on mobile
-      scrollToWorkspaceTop();
     } catch (err) {
       console.error("New listing error", err);
     } finally {
@@ -1181,9 +1187,6 @@ export default function ListingsPage() {
       };
       hydrateFormFromApi(apiLike);
     }
-
-    // ✅ now scroll the workspace card to the top of the viewport on mobile
-    scrollToWorkspaceTop();
   }
 
   /* ------------------------------------
