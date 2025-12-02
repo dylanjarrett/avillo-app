@@ -1,9 +1,9 @@
 // src/app/(portal)/crm/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
+import { useCrmMobileWorkspaceScroll } from "@/hooks/useCrmMobileWorkspaceScroll";
 
 /* ------------------------------------
  * Types
@@ -72,7 +72,12 @@ function upsertLinkedListing(
  * -----------------------------------*/
 
 export default function CrmPage() {
-  const router = useRouter();
+  const {
+    listHeaderRef,
+    workspaceRef,
+    scrollToWorkspace, 
+    scrollBackToListHeader,
+  } = useCrmMobileWorkspaceScroll();
 
   const [stageFilter, setStageFilter] = useState<StageFilter>("active");
   const [search, setSearch] = useState("");
@@ -94,9 +99,13 @@ export default function CrmPage() {
   >({});
   const [noteSaving, setNoteSaving] = useState(false);
 
-  // Refs for mobile scroll behavior
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const detailRef = useRef<HTMLDivElement | null>(null);
+  // Convenience: go back to list & clear selection using the hook scroll
+  function backToListAndClearSelection() {
+    scrollBackToListHeader(() => {
+      setActiveContact(null);
+      setSelectedId(null);
+    });
+  }
 
   // ---------- Load contacts & listings on mount ----------
   useEffect(() => {
@@ -242,24 +251,11 @@ export default function CrmPage() {
     setActiveContact(found);
   }, [selectedId, contacts]);
 
-  // Helper: scroll detail panel into view on mobile with offset for navbar
-  function scrollToDetail() {
-    if (!detailRef.current || typeof window === "undefined") return;
-    const isMobile = window.innerWidth < 1024;
-    if (!isMobile) return;
-
-    const rect = detailRef.current.getBoundingClientRect();
-    const top = rect.top + window.scrollY - 95; // offset so the card header is visible
-    window.scrollTo({ top, behavior: "smooth" });
-  }
-
-  // Mobile: when a contact is selected, scroll detail section into view
+  // Mobile: when a contact is selected, scroll detail section into view (hook)
   useEffect(() => {
     if (!activeContact) return;
-    if (typeof window === "undefined") return;
-    scrollToDetail();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, activeContact?.id]);
+    scrollToWorkspace();
+  }, [selectedId, activeContact?.id, scrollToWorkspace]);
 
   // ---------- Actions ----------
 
@@ -281,6 +277,7 @@ export default function CrmPage() {
     };
     setSelectedId("new");
     setActiveContact(fresh);
+    scrollToWorkspace();
   }
 
   function handleFieldChange<K extends keyof Contact>(key: K, value: Contact[K]) {
@@ -433,10 +430,10 @@ export default function CrmPage() {
       setSelectedId(saved.id!);
       setActiveContact(saved);
 
-      if (window.innerWidth < 1024){
-        scrollBackToContacts();
+      // On mobile, go back to list header and clear
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        backToListAndClearSelection();
       }
-
 
       return saved;
     } catch (err: any) {
@@ -455,6 +452,9 @@ export default function CrmPage() {
       // If the new, unsaved contact is showing, just clear it
       setActiveContact(null);
       setSelectedId(contacts[0]?.id ?? null);
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        backToListAndClearSelection();
+      }
       return;
     }
 
@@ -483,10 +483,9 @@ export default function CrmPage() {
       setActiveContact(remaining[0] ?? null);
       setSelectedId(remaining[0]?.id ?? null);
 
-      if (window.innerWidth < 1024){
-        scrollBackToContacts();
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        backToListAndClearSelection();
       }
-
     } catch (err: any) {
       console.error("Delete contact error", err);
       setError(
@@ -509,8 +508,7 @@ export default function CrmPage() {
   // Refresh contacts after linking/unlinking so CRM & Listings stay in sync
   async function refreshContactsAndSelect(contactId: string) {
     try {
-      // IMPORTANT: do NOT toggle `loading` here, so the left column
-      // does not flash "Loading your contacts…" after each tag change.
+      // IMPORTANT: do NOT toggle `loading` here
       const res = await fetch("/api/crm/contacts");
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -692,24 +690,6 @@ export default function CrmPage() {
     }
   }
 
-  // Mobile: back from detail → clear selection + scroll up to list header
-function scrollBackToContacts() {
-  if (typeof window !== "undefined" && listRef.current && window.innerWidth < 1024) {
-    const rect = listRef.current.getBoundingClientRect();
-    const HEADER_OFFSET = 280; // matches scrollToDetail offset (tweak if you want)
-    const targetY = window.scrollY + rect.top - HEADER_OFFSET;
-
-    window.scrollTo({
-      top: targetY,
-      behavior: "smooth",
-    });
-  }
-
-  // Clear the selection after triggering the scroll
-  setActiveContact(null);
-  setSelectedId(null);
-}
-
   /* ------------------------------------
    * Render
    * -----------------------------------*/
@@ -796,7 +776,7 @@ function scrollBackToContacts() {
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)]">
           {/* LEFT: CONTACT LIST */}
           <div
-            ref={listRef}
+            ref={listHeaderRef}
             className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]"
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)] opacity-40 blur-3xl" />
@@ -853,7 +833,7 @@ function scrollBackToContacts() {
                       type="button"
                       onClick={() => {
                         setSelectedId(contact.id ?? ("new" as const));
-                        scrollToDetail();
+                        scrollToWorkspace();
                       }}
                       className={
                         "w-full rounded-xl border px-4 py-3 text-left transition-colors " +
@@ -924,7 +904,7 @@ function scrollBackToContacts() {
 
           {/* RIGHT: DETAIL PANEL */}
           <div
-            ref={detailRef}
+            ref={workspaceRef}
             className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]"
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
@@ -943,19 +923,18 @@ function scrollBackToContacts() {
 
             {activeContact && (
               <div className="space-y-4 text-xs text-[var(--avillo-cream-soft)]">
-
-                {/* Mobile Back Button (top-right, unified with Listings) */}
-    <div className="relative mb-2 lg:hidden">
-      <button
-        type="button"
-        onClick={scrollBackToContacts}
-        className="absolute right-0 top-0 inline-flex items-center gap-2 rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.20em] text-[var(--avillo-cream-soft)] shadow-[0_0_18px_rgba(15,23,42,0.9)] hover:border-amber-100/80 hover:text-amber-50 hover:bg-slate-900/95"
-      >
-        <span className="text-xs">←</span>
-        <span>Back</span>
-      </button>
-    </div>
-    <div className="h-3 lg:hidden"></div>
+                {/* Mobile Back Button */}
+                <div className="relative mb-2 lg:hidden">
+                  <button
+                    type="button"
+                    onClick={backToListAndClearSelection}
+                    className="absolute right-0 top-0 inline-flex items-center gap-2 rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.20em] text-[var(--avillo-cream-soft)] shadow-[0_0_18px_rgba(15,23,42,0.9)] hover:border-amber-100/80 hover:text-amber-50 hover:bg-slate-900/95"
+                  >
+                    <span className="text-xs">←</span>
+                    <span>Back</span>
+                  </button>
+                </div>
+                <div className="h-3 lg:hidden" />
 
                 {/* Header: Contact name + lead status */}
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1152,7 +1131,7 @@ function scrollBackToContacts() {
                     </div>
                   )}
 
-                {/* Tag to listing (multi-select, 2-way with listings panel) */}
+                {/* Tag to listing */}
                 <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                   <p className="text-[11px] font-semibold text-amber-100/90">
                     Tag contact to listings
@@ -1364,41 +1343,41 @@ function scrollBackToContacts() {
                   </div>
                 </div>
 
-                {/* Footer buttons — EXACT match to Listings */}
-<div className="flex items-center justify-between gap-3">
-  {/* Delete contact */}
-  <button
-    type="button"
-    onClick={handleDelete}
-    disabled={deleting}
-    className="
-      inline-flex items-center justify-center rounded-full
-      border border-red-400/80 bg-red-500/5
-      px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
-      text-red-200 hover:bg-red-500/15
-      disabled:cursor-not-allowed disabled:opacity-40
-    "
-  >
-    {activeContact.id ? "Delete contact" : "Discard new contact"}
-  </button>
+                {/* Footer buttons — match Listings */}
+                <div className="flex items-center justify-between gap-3">
+                  {/* Delete contact */}
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    className="
+                      inline-flex items-center justify-center rounded-full
+                      border border-red-400/80 bg-red-500/5
+                      px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
+                      text-red-200 hover:bg-red-500/15
+                      disabled:cursor-not-allowed disabled:opacity-40
+                    "
+                  >
+                    {activeContact.id ? "Delete contact" : "Discard new contact"}
+                  </button>
 
-  {/* Save contact */}
-  <button
-    type="button"
-    onClick={() => void handleSave()}
-    disabled={saving}
-    className="
-      inline-flex items-center justify-center rounded-full
-      border border-amber-100/70 bg-amber-50/10
-      px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
-      text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)]
-      hover:bg-amber-50/20
-      disabled:cursor-not-allowed disabled:opacity-60
-    "
-  >
-    {saving ? "Saving…" : "Save changes"}
-  </button>
-</div>
+                  {/* Save contact */}
+                  <button
+                    type="button"
+                    onClick={() => void handleSave()}
+                    disabled={saving}
+                    className="
+                      inline-flex items-center justify-center rounded-full
+                      border border-amber-100/70 bg-amber-50/10
+                      px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
+                      text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)]
+                      hover:bg-amber-50/20
+                      disabled:cursor-not-allowed disabled:opacity-60
+                    "
+                  >
+                    {saving ? "Saving…" : "Save changes"}
+                  </button>
+                </div>
               </div>
             )}
           </div>
