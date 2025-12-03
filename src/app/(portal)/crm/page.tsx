@@ -75,13 +75,12 @@ export default function CrmPage() {
   const {
     listHeaderRef,
     workspaceRef,
-    scrollToWorkspace, 
+    scrollToWorkspace,
     scrollBackToListHeader,
   } = useCrmMobileWorkspaceScroll();
 
-const isMobile = () =>
+  const isMobile = () =>
     typeof window !== "undefined" && window.innerWidth < 1024;
-
 
   const [stageFilter, setStageFilter] = useState<StageFilter>("active");
   const [search, setSearch] = useState("");
@@ -103,8 +102,14 @@ const isMobile = () =>
   >({});
   const [noteSaving, setNoteSaving] = useState(false);
 
+  // Mobile: whether the right-hand workspace is showing (like Listings page)
+  const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
+
   // Convenience: go back to list & clear selection using the hook scroll
   function backToListAndClearSelection() {
+    // hide workspace on mobile first
+    setWorkspaceOpenMobile(false);
+
     scrollBackToListHeader(() => {
       setActiveContact(null);
       setSelectedId(null);
@@ -255,13 +260,21 @@ const isMobile = () =>
     setActiveContact(found);
   }, [selectedId, contacts]);
 
-  // Mobile: when a contact is selected, scroll detail section into view (hook)
-useEffect(() => {
-  if (!isMobile()) return;
-  if (!activeContact) return;
+  // Mobile: when a contact is selected, show workspace + scroll detail into view
+  useEffect(() => {
+    if (!isMobile()) {
+      setWorkspaceOpenMobile(false);
+      return;
+    }
 
-  scrollToWorkspace();
-}, [selectedId, activeContact?.id, scrollToWorkspace]);
+    if (!activeContact) {
+      setWorkspaceOpenMobile(false);
+      return;
+    }
+
+    setWorkspaceOpenMobile(true);
+    scrollToWorkspace();
+  }, [activeContact?.id, scrollToWorkspace]);
 
   // ---------- Actions ----------
 
@@ -283,6 +296,12 @@ useEffect(() => {
     };
     setSelectedId("new");
     setActiveContact(fresh);
+
+    // On mobile, immediately show the workspace like Listings page
+    if (isMobile()) {
+      setWorkspaceOpenMobile(true);
+      scrollToWorkspace();
+    }
   }
 
   function handleFieldChange<K extends keyof Contact>(key: K, value: Contact[K]) {
@@ -435,8 +454,8 @@ useEffect(() => {
       setSelectedId(saved.id!);
       setActiveContact(saved);
 
-      // On mobile, go back to list header and clear
-      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      // On mobile, go back to list header and clear (same behavior as Listings)
+      if (isMobile()) {
         backToListAndClearSelection();
       }
 
@@ -457,7 +476,7 @@ useEffect(() => {
       // If the new, unsaved contact is showing, just clear it
       setActiveContact(null);
       setSelectedId(contacts[0]?.id ?? null);
-      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      if (isMobile()) {
         backToListAndClearSelection();
       }
       return;
@@ -488,7 +507,7 @@ useEffect(() => {
       setActiveContact(remaining[0] ?? null);
       setSelectedId(remaining[0]?.id ?? null);
 
-      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      if (isMobile()) {
         backToListAndClearSelection();
       }
     } catch (err: any) {
@@ -782,7 +801,11 @@ useEffect(() => {
           {/* LEFT: CONTACT LIST */}
           <div
             ref={listHeaderRef}
-            className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]"
+            className={
+              "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
+              (workspaceOpenMobile ? "hidden" : "block") +
+              " lg:block"
+            }
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)] opacity-40 blur-3xl" />
 
@@ -797,7 +820,7 @@ useEffect(() => {
             </div>
 
             {/* DESKTOP-ONLY scroll wrapper for the contact list */}
-    <div className="space-y-2 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto lg:pr-1">
+            <div className="space-y-2 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto lg:pr-1">
               {loading && (
                 <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
                   Loading your contacts…
@@ -910,7 +933,11 @@ useEffect(() => {
           {/* RIGHT: DETAIL PANEL */}
           <div
             ref={workspaceRef}
-            className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]"
+            className={
+              "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
+              (workspaceOpenMobile ? "block" : "hidden") +
+              " lg:block"
+            }
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
 
@@ -940,6 +967,7 @@ useEffect(() => {
                   </button>
                 </div>
                 <div className="h-3 lg:hidden" />
+
 
                 {/* Header: Contact name + lead status */}
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
