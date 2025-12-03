@@ -796,7 +796,8 @@ useEffect(() => {
               </p>
             </div>
 
-            <div className="space-y-2">
+            {/* DESKTOP-ONLY scroll wrapper for the contact list */}
+    <div className="space-y-2 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto lg:pr-1">
               {loading && (
                 <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
                   Loading your contacts…
