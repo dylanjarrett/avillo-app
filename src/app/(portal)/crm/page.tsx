@@ -388,7 +388,7 @@ export default function CrmPage() {
     }
   }
 
-  async function handleSave(): Promise<Contact | null> {
+  async function handleSave(skipScrollBack?: boolean): Promise<Contact | null> {
     if (!activeContact) return null;
 
     try {
@@ -454,8 +454,13 @@ export default function CrmPage() {
       setSelectedId(saved.id!);
       setActiveContact(saved);
 
-      // On mobile, go back to list header and clear (same behavior as Listings)
-      if (isMobile()) {
+      // On mobile, optionally go back to list header & clear selection
+      // skipScrollBack === true => "silent save" (used by tag-to-listing flows)
+      if (
+        !skipScrollBack &&
+        typeof window !== "undefined" &&
+        window.innerWidth < 1024
+      ) {
         backToListAndClearSelection();
       }
 
@@ -470,6 +475,7 @@ export default function CrmPage() {
       setSaving(false);
     }
   }
+
 
   async function handleDelete() {
     if (!activeContact?.id) {
@@ -525,7 +531,9 @@ export default function CrmPage() {
   async function ensureContactSaved(): Promise<Contact | null> {
     if (!activeContact) return null;
     if (activeContact.id) return activeContact;
-    const saved = await handleSave();
+
+    // Silent save: do NOT scroll back or clear the detail panel
+    const saved = await handleSave(true);
     return saved;
   }
 
