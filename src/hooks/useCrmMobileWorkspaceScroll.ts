@@ -1,15 +1,14 @@
-// src/hooks/useCrmMobileWorkspaceScroll.ts
 "use client";
 
 import { useRef, useCallback } from "react";
 
 type Options = {
-  downOffset?: number; // how far below the top the detail panel should land
-  upOffset?: number;   // how far below the top the list header should land
+  downOffset?: number; 
+  upOffset?: number;
 };
 
-const DEFAULT_DOWN_OFFSET = 95;  // tweak if you want it higher/lower
-const DEFAULT_UP_OFFSET = 280;   // tweak if you want to see more / less above
+const DEFAULT_DOWN_OFFSET = 95;     // good for scrolling INTO detail
+const DEFAULT_UP_OFFSET = 480;      // UPDATED — fixes Save/Delete landing zone
 
 export function useCrmMobileWorkspaceScroll(options: Options = {}) {
   const {
@@ -24,19 +23,19 @@ export function useCrmMobileWorkspaceScroll(options: Options = {}) {
     typeof window !== "undefined" && window.innerWidth < 1024;
 
   const scrollToDetail = useCallback(() => {
-  if (!isMobile() || !detailRef.current) return;
+    if (!isMobile() || !detailRef.current) return;
 
-  requestAnimationFrame(() => {
-    if (!detailRef.current) return;
-    const rect = detailRef.current.getBoundingClientRect();
-    const targetY = window.scrollY + rect.top - downOffset;
+    requestAnimationFrame(() => {
+      if (!detailRef.current) return;
+      const rect = detailRef.current.getBoundingClientRect();
+      const targetY = window.scrollY + rect.top - downOffset;
 
-    window.scrollTo({
-      top: targetY,
-      behavior: "smooth",
+      window.scrollTo({
+        top: targetY,
+        behavior: "smooth",
+      });
     });
-  });
-}, [downOffset]);
+  }, [downOffset]);
 
   const scrollBackToListHeader = useCallback(
     (afterStateUpdate?: () => void) => {
@@ -45,7 +44,6 @@ export function useCrmMobileWorkspaceScroll(options: Options = {}) {
         return;
       }
 
-      // apply state changes first (clear selection, etc.)
       afterStateUpdate?.();
 
       requestAnimationFrame(() => {
