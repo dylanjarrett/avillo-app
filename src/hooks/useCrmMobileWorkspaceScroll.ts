@@ -8,7 +8,7 @@ type Options = {
 };
 
 const DEFAULT_DOWN_OFFSET = 95;     // good for scrolling INTO detail
-const DEFAULT_UP_OFFSET = 480;      // UPDATED — fixes Save/Delete landing zone
+const DEFAULT_UP_OFFSET = 370;      // UPDATED — fixes Save/Delete landing zone
 
 export function useCrmMobileWorkspaceScroll(options: Options = {}) {
   const {

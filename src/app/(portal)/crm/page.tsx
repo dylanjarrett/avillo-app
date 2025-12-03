@@ -388,144 +388,152 @@ export default function CrmPage() {
     }
   }
 
-  async function handleSave(skipScrollBack?: boolean): Promise<Contact | null> {
-    if (!activeContact) return null;
+ async function handleSave(silent: boolean = false): Promise<Contact | null> {
+  if (!activeContact) return null;
 
-    try {
-      setSaving(true);
-      setError(null);
+  const isMobileView =
+    typeof window !== "undefined" && window.innerWidth < 1024;
 
-      const { firstName, lastName } = splitName(activeContact.name);
+  // --- MOBILE: scroll back *before* saving ---
+  if (isMobileView && !silent) {
+    backToListAndClearSelection(); 
+  }
 
-      const res = await fetch("/api/crm/contacts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: activeContact.id,
-          firstName,
-          lastName,
-          email: activeContact.email || undefined,
-          phone: activeContact.phone || undefined,
-          stage: activeContact.stage,
-          label: activeContact.label || undefined,
-          type: activeContact.type,
-          priceRange: activeContact.priceRange || undefined,
-          areas: activeContact.areas || undefined,
-          timeline: activeContact.timeline || undefined,
-          source: activeContact.source || undefined,
-        }),
-      });
+  try {
+    setSaving(true);
+    setError(null);
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Failed to save contact.");
-      }
+    const { firstName, lastName } = splitName(activeContact.name);
 
-      const data = await res.json();
-      const saved: Contact = {
-        id: data.contact.id,
-        name: data.contact.name ?? "",
-        label: data.contact.label ?? "",
-        stage: (data.contact.stage as Stage) ?? "new",
-        type:
-          (data.contact.type as "Buyer" | "Seller" | "Buyer & Seller" | null) ??
-          ("Buyer" as const),
-        priceRange: data.contact.priceRange ?? "",
-        areas: data.contact.areas ?? "",
-        timeline: data.contact.timeline ?? "",
-        source: data.contact.source ?? "",
-        email: data.contact.email ?? "",
-        phone: data.contact.phone ?? "",
-        notes: Array.isArray(data.contact.notes) ? data.contact.notes : [],
-        linkedListings: activeContact.linkedListings ?? [],
-      };
+    const res = await fetch("/api/crm/contacts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: activeContact.id,
+        firstName,
+        lastName,
+        email: activeContact.email || undefined,
+        phone: activeContact.phone || undefined,
+        stage: activeContact.stage,
+        label: activeContact.label || undefined,
+        type: activeContact.type,
+        priceRange: activeContact.priceRange || undefined,
+        areas: activeContact.areas || undefined,
+        timeline: activeContact.timeline || undefined,
+        source: activeContact.source || undefined,
+      }),
+    });
 
-      // Update in-memory list
-      setContacts((prev) => {
-        const existingIndex = prev.findIndex((c) => c.id === saved.id);
-        if (existingIndex === -1) {
-          return [saved, ...prev];
-        }
-        const next = [...prev];
-        next[existingIndex] = saved;
-        return next;
-      });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || "Failed to save contact.");
+    }
 
+    const data = await res.json();
+
+    const saved: Contact = {
+      id: data.contact.id,
+      name: data.contact.name ?? "",
+      label: data.contact.label ?? "",
+      stage: (data.contact.stage as Stage) ?? "new",
+      type:
+        (data.contact.type as "Buyer" | "Seller" | "Buyer & Seller" | null) ??
+        ("Buyer" as const),
+      priceRange: data.contact.priceRange ?? "",
+      areas: data.contact.areas ?? "",
+      timeline: data.contact.timeline ?? "",
+      source: data.contact.source ?? "",
+      email: data.contact.email ?? "",
+      phone: data.contact.phone ?? "",
+      notes: Array.isArray(data.contact.notes) ? data.contact.notes : [],
+      linkedListings: activeContact.linkedListings ?? [],
+    };
+
+    // Update local list
+    setContacts((prev) => {
+      const index = prev.findIndex((c) => c.id === saved.id);
+      if (index === -1) return [saved, ...prev];
+      const next = [...prev];
+      next[index] = saved;
+      return next;
+    });
+
+    // Desktop OR silent save keeps detail panel open
+    if (!isMobileView || silent) {
       setSelectedId(saved.id!);
       setActiveContact(saved);
-
-      // On mobile, optionally go back to list header & clear selection
-      // skipScrollBack === true => "silent save" (used by tag-to-listing flows)
-      if (
-        !skipScrollBack &&
-        typeof window !== "undefined" &&
-        window.innerWidth < 1024
-      ) {
-        backToListAndClearSelection();
-      }
-
-      return saved;
-    } catch (err: any) {
-      console.error("Save contact error", err);
-      setError(
-        err?.message || "We couldn’t save this contact. Try again in a moment."
-      );
-      return null;
-    } finally {
-      setSaving(false);
     }
+
+    return saved;
+  } catch (err: any) {
+    console.error("Save contact error", err);
+    setError(
+      err?.message || "We couldn’t save this contact. Try again in a moment."
+    );
+    return null;
+  } finally {
+    setSaving(false);
   }
+}
 
 
   async function handleDelete() {
-    if (!activeContact?.id) {
-      // If the new, unsaved contact is showing, just clear it
-      setActiveContact(null);
-      setSelectedId(contacts[0]?.id ?? null);
-      if (isMobile()) {
-        backToListAndClearSelection();
-      }
-      return;
+  if (!activeContact?.id) {
+    // Unsaved new contact
+    setActiveContact(null);
+    setSelectedId(contacts[0]?.id ?? null);
+
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      backToListAndClearSelection();
+    }
+    return;
+  }
+
+  const confirmed = window.confirm(
+    "Delete this contact from your CRM? This can’t be undone."
+  );
+  if (!confirmed) return;
+
+  const isMobileView =
+    typeof window !== "undefined" && window.innerWidth < 1024;
+
+  // --- MOBILE: scroll back BEFORE deleting (fix the jump) ---
+  if (isMobileView) {
+    backToListAndClearSelection();
+  }
+
+  try {
+    setDeleting(true);
+    setError(null);
+
+    const res = await fetch("/api/crm/contacts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: activeContact.id }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || "Failed to delete contact.");
     }
 
-    const confirmed = window.confirm(
-      "Delete this contact from your CRM? This can’t be undone."
-    );
-    if (!confirmed) return;
+    setContacts((prev) => prev.filter((c) => c.id !== activeContact.id));
+    const remaining = contacts.filter((c) => c.id !== activeContact.id);
 
-    try {
-      setDeleting(true);
-      setError(null);
-
-      const res = await fetch("/api/crm/contacts", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: activeContact.id }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Failed to delete contact.");
-      }
-
-      setContacts((prev) => prev.filter((c) => c.id !== activeContact.id));
-      const remaining = contacts.filter((c) => c.id !== activeContact.id);
+    // Desktop fallback
+    if (!isMobileView) {
       setActiveContact(remaining[0] ?? null);
       setSelectedId(remaining[0]?.id ?? null);
-
-      if (isMobile()) {
-        backToListAndClearSelection();
-      }
-    } catch (err: any) {
-      console.error("Delete contact error", err);
-      setError(
-        err?.message ||
-          "We couldn’t delete this contact. Try again in a moment."
-      );
-    } finally {
-      setDeleting(false);
     }
+  } catch (err: any) {
+    console.error("Delete contact error", err);
+    setError(
+      err?.message || "We couldn’t delete this contact. Try again in a moment."
+    );
+  } finally {
+    setDeleting(false);
   }
+}
 
   // Ensure a contact has an id before linking/unlinking listings
   async function ensureContactSaved(): Promise<Contact | null> {
