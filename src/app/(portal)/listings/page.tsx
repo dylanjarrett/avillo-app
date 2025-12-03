@@ -1289,198 +1289,201 @@ export default function ListingsPage() {
         </div>
 
         {/* Main grid: gallery + workspace */}
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
-          {/* LEFT: Listing gallery */}
-          <div
-            className={
-              "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
-              (workspaceOpenMobile ? "hidden" : "block") +
-              " md:block"
-            }
-          >
-            <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)]" />
+<div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
+  {/* LEFT: Listing gallery */}
+  <div
+    className={
+      "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
+      (workspaceOpenMobile ? "hidden" : "block") +
+      " md:block"
+    }
+  >
+    <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)]" />
 
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
-                Listing gallery
-              </p>
-              <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-                {loadingList
-                  ? "Loading…"
-                  : `${filteredListings.length} ${
-                      filteredListings.length === 1 ? "result" : "results"
-                    }`}
-              </p>
-            </div>
+    <div className="mb-4 flex items-center justify-between gap-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
+        Listing gallery
+      </p>
+      <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+        {loadingList
+          ? "Loading…"
+          : `${filteredListings.length} ${
+              filteredListings.length === 1 ? "result" : "results"
+            }`}
+      </p>
+    </div>
 
-            {error && !loadingList && (
-              <p className="mb-3 text-[11px] text-red-300">{error}</p>
-            )}
+    {/* DESKTOP-ONLY scroll wrapper for the gallery body */}
+    <div className="lg:max-h-[calc(100vh-190px)] lg:overflow-y-auto lg:pr-1">
+      {error && !loadingList && (
+        <p className="mb-3 text-[11px] text-red-300">{error}</p>
+      )}
 
-            {loadingList && (
-              <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-                Loading your listings…
-              </p>
-            )}
+      {loadingList && (
+        <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+          Loading your listings…
+        </p>
+      )}
 
-            {!loadingList && filteredListings.length === 0 && (
-              <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-                No listings match this filter yet. Adjust status, search
-                criteria, or create a new listing.
-              </p>
-            )}
+      {!loadingList && filteredListings.length === 0 && (
+        <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+          No listings match this filter yet. Adjust status, search
+          criteria, or create a new listing.
+        </p>
+      )}
 
-            {!loadingList && filteredListings.length > 0 && (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                {filteredListings.map((l) => {
-                  const isSelected = l.id === selectedId;
-                  const currentPhotoUrl = getCurrentCardPhotoUrl(l);
-                  const photosForCard = getPhotosForListingCard(l);
+      {!loadingList && filteredListings.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+          {filteredListings.map((l) => {
+            const isSelected = l.id === selectedId;
+            const currentPhotoUrl = getCurrentCardPhotoUrl(l);
+            const photosForCard = getPhotosForListingCard(l);
 
-                  const priceFormatted =
-                    typeof l.price === "number"
-                      ? `$${l.price.toLocaleString("en-US", {
-                          maximumFractionDigits: 0,
-                        })}`
-                      : "Price TBD";
+            const priceFormatted =
+              typeof l.price === "number"
+                ? `$${l.price.toLocaleString("en-US", {
+                    maximumFractionDigits: 0,
+                  })}`
+                : "Price TBD";
 
-                  const updatedLabel = l.updatedAt
-                    ? new Date(l.updatedAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                      })
-                    : null;
+            const updatedLabel = l.updatedAt
+              ? new Date(l.updatedAt).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                })
+              : null;
 
-                  return (
-                    <div
-                      key={l.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleSelectListing(l)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleSelectListing(l);
-                        }
-                      }}
-                      aria-pressed={isSelected}
-                      className={
-                        "group flex flex-col overflow-hidden rounded-2xl border text-left transition hover:-translate-y-0.5 " +
-                        (isSelected
-                          ? "border-amber-200/80 bg-[#050b16]/95 shadow-[0_20px_40px_rgba(0,0,0,0.9)]"
-                          : "border-slate-800/80 bg-[#050b16]/90 hover:border-amber-100/70 hover:bg-[#050b16]")
-                      }
-                    >
-                      {/* Cover / slideshow */}
-                      <div className="relative w-full overflow-hidden rounded-t-2xl aspect-[4/3] md:h-40 md:aspect-auto">
-                        {currentPhotoUrl ? (
-                          <>
-                            <Image
-                              src={currentPhotoUrl}
-                              alt={l.address}
-                              fill
-                              sizes="(min-width: 1024px) 320px, 100vw"
-                              className="object-cover transition duration-500 group-hover:scale-105 group-hover:brightness-[1.08]"
-                            />
-                            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050b16]/95 via-transparent to-transparent" />
-                          </>
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-                            <div className="flex flex-col items-center gap-2 text-[11px] text-[var(--avillo-cream-soft)]">
-                              <span className="rounded-full bg-black/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)]">
-                                Listing cover
-                              </span>
-                              <span className="text-[10px] text-[var(--avillo-cream-muted)]">
-                                Add a photo from the workspace.
-                              </span>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Status pill */}
-                        <div className="absolute left-3 top-3 flex items-center gap-2">
-                          <span
-                            className={
-                              "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] " +
-                              statusBadgeClass(l.status)
-                            }
-                          >
-                            <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-                            {statusLabel(l.status)}
-                          </span>
-                        </div>
-
-                        {/* Slideshow arrows – only if multiple photos */}
-                        {photosForCard.length > 1 && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                showPrevPhoto(l.id);
-                              }}
-                              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
-                            >
-                              ‹
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                showNextPhoto(l.id);
-                              }}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
-                            >
-                              ›
-                            </button>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Card body */}
-                      <div className="flex flex-1 flex-col gap-2 px-4 py-3 text-xs text-[var(--avillo-cream-soft)]">
-                        <div className="space-y-1">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                            {priceFormatted}
-                          </p>
-                          <p className="text-[13px] font-semibold text-[#f7f2e9] line-clamp-2">
-                            {l.address}
-                          </p>
-                          <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-                            {l.mlsId ? `MLS #${l.mlsId}` : "No MLS ID yet"}
-                          </p>
-                        </div>
-                        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--avillo-cream-muted)]">
-                          <span>
-                            {l.sellerName
-                              ? `Seller: ${l.sellerName}`
-                              : "No seller linked"}
-                          </span>
-                          {updatedLabel && <span>Updated {updatedLabel}</span>}
-                        </div>
-                        <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-800/80 pt-2 text-[10px]">
-                          <span className="text-[var(--avillo-cream-muted)]">
-                            Select to edit
-                          </span>
-                          {typeof l.buyerCount === "number" &&
-                          l.buyerCount > 0 ? (
-                            <span className="rounded-full border border-slate-700/80 px-2 py-1 text-[10px] text-[var(--avillo-cream-soft)]">
-                              {l.buyerCount} buyer
-                              {l.buyerCount === 1 ? "" : "s"}
-                            </span>
-                          ) : (
-                            <span className="rounded-full border border-slate-800/80 px-2 py-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                              No tagged buyers
-                            </span>
-                          )}
-                        </div>
+            return (
+              <div
+                key={l.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleSelectListing(l)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleSelectListing(l);
+                  }
+                }}
+                aria-pressed={isSelected}
+                className={
+                  "group flex flex-col overflow-hidden rounded-2xl border text-left transition hover:-translate-y-0.5 " +
+                  (isSelected
+                    ? "border-amber-200/80 bg-[#050b16]/95 shadow-[0_20px_40px_rgba(0,0,0,0.9)]"
+                    : "border-slate-800/80 bg-[#050b16]/90 hover:border-amber-100/70 hover:bg-[#050b16]")
+                }
+              >
+                {/* Cover / slideshow */}
+                <div className="relative w-full overflow-hidden rounded-t-2xl aspect-[4/3] md:h-40 md:aspect-auto">
+                  {currentPhotoUrl ? (
+                    <>
+                      <Image
+                        src={currentPhotoUrl}
+                        alt={l.address}
+                        fill
+                        sizes="(min-width: 1024px) 320px, 100vw"
+                        className="object-cover transition duration-500 group-hover:scale-105 group-hover:brightness-[1.08]"
+                      />
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050b16]/95 via-transparent to-transparent" />
+                    </>
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                      <div className="flex flex-col items-center gap-2 text-[11px] text-[var(--avillo-cream-soft)]">
+                        <span className="rounded-full bg-black/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)]">
+                          Listing cover
+                        </span>
+                        <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+                          Add a photo from the workspace.
+                        </span>
                       </div>
                     </div>
-                  );
-                })}
+                  )}
+
+                  {/* Status pill */}
+                  <div className="absolute left-3 top-3 flex items-center gap-2">
+                    <span
+                      className={
+                        "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] " +
+                        statusBadgeClass(l.status)
+                      }
+                    >
+                      <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                      {statusLabel(l.status)}
+                    </span>
+                  </div>
+
+                  {/* Slideshow arrows – only if multiple photos */}
+                  {photosForCard.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          showPrevPhoto(l.id);
+                        }}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
+                      >
+                        ‹
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          showNextPhoto(l.id);
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-2 py-1 text-[12px] text-slate-50 hover:bg-black/80"
+                      >
+                        ›
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* Card body */}
+                <div className="flex flex-1 flex-col gap-2 px-4 py-3 text-xs text-[var(--avillo-cream-soft)]">
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                      {priceFormatted}
+                    </p>
+                    <p className="text-[13px] font-semibold text-[#f7f2e9] line-clamp-2">
+                      {l.address}
+                    </p>
+                    <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+                      {l.mlsId ? `MLS #${l.mlsId}` : "No MLS ID yet"}
+                    </p>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--avillo-cream-muted)]">
+                    <span>
+                      {l.sellerName
+                        ? `Seller: ${l.sellerName}`
+                        : "No seller linked"}
+                    </span>
+                    {updatedLabel && <span>Updated {updatedLabel}</span>}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-800/80 pt-2 text-[10px]">
+                    <span className="text-[var(--avillo-cream-muted)]">
+                      Select to edit
+                    </span>
+                    {typeof l.buyerCount === "number" &&
+                    l.buyerCount > 0 ? (
+                      <span className="rounded-full border border-slate-700/80 px-2 py-1 text-[10px] text-[var(--avillo-cream-soft)]">
+                        {l.buyerCount} buyer
+                        {l.buyerCount === 1 ? "" : "s"}
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-slate-800/80 px-2 py-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                        No tagged buyers
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </div>
 
           {/* RIGHT: Workspace */}
           <div
