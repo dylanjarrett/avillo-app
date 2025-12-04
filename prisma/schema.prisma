@@ -23,40 +23,50 @@ enum SubscriptionPlan {
   FREE_TRIAL
 }
 
+enum IntelligenceEngine {
+  LISTING
+  SELLER
+  BUYER
+  NEIGHBORHOOD
+}
+
 // ---------------------------
 // USER
 // ---------------------------
 model User {
-  id             String   @id @default(cuid())
-  name           String?
-  email          String   @unique
-  emailVerified  DateTime?
-  passwordHash   String?  @map("password_hash")
-  image          String?
-  brokerage      String?
+  id                String   @id @default(cuid())
+  name              String?
+  email             String   @unique
+  emailVerified     DateTime?
+  passwordHash      String?  @map("password_hash")
+  image             String?
+  brokerage         String?
 
   // NEW: auth / billing metadata
-  role              UserRole         @default(USER)
+  role              UserRole        @default(USER)
   plan              SubscriptionPlan @default(FOUNDING_AGENT)
-  currentSessionKey String?          @db.VarChar(255)
+  currentSessionKey String?         @db.VarChar(255)
   lastLoginAt       DateTime?
-  openAITokensUsed  Int              @default(0)
+  openAITokensUsed  Int             @default(0)
 
   // Auth relations
   accounts Account[]
   sessions Session[]
 
   // App relations
-  contacts              Contact[]
-  listings              Listing[]
-  activities            Activity[]
-  CRMRecord             CRMRecord[]
-  crmActivity           CRMActivity[]
-  passwordResetTokens   PasswordResetToken[]
+  contacts               Contact[]
+  listings               Listing[]
+  activities             Activity[]
+  CRMRecord              CRMRecord[]
+  crmActivity            CRMActivity[]
+  passwordResetTokens    PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
-  stripeCustomerId      String? @db.VarChar(255)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+
+  intelligenceOutputs    IntelligenceOutput[] // <-- NEW
+
+  stripeCustomerId       String?  @db.VarChar(255)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 }
 
 // ---------------------------
@@ -89,9 +99,11 @@ model Contact {
 
   // Relationships to listings
   listingsAsSeller Listing[]        @relation("SellerListings")
-  buyerListings    ListingBuyerLink[]
-  activities       Activity[]
-  crmActivity      CRMActivity[]
+  buyerListings   ListingBuyerLink[]
+  activities      Activity[]
+  crmActivity     CRMActivity[]
+
+  intelligenceOutputs IntelligenceOutput[] // <-- NEW
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -101,9 +113,9 @@ model Contact {
 // LISTINGS
 // ---------------------------
 model Listing {
-  id        String @id @default(cuid())
-  user      User   @relation(fields: [userId], references: [id])
-  userId    String
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
 
   // Primary seller contact for this listing
   seller          Contact? @relation("SellerListings", fields: [sellerContactId], references: [id])
@@ -123,6 +135,8 @@ model Listing {
   // Listing photos (1-many)
   photos     ListingPhoto[]
   activities Activity[]
+
+  intelligenceOutputs IntelligenceOutput[] // <-- NEW
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -190,6 +204,39 @@ model CRMActivity {
 }
 
 // ---------------------------
+// INTELLIGENCE OUTPUTS (ENGINE RUNS)
+// ---------------------------
+model IntelligenceOutput {
+  id       String             @id @default(cuid())
+
+  // owner
+  userId   String
+  user     User               @relation(fields: [userId], references: [id])
+
+  // which engine
+  engine   IntelligenceEngine
+
+  // optional context
+  listingId String?
+  listing   Listing?          @relation(fields: [listingId], references: [id])
+
+  contactId String?
+  contact   Contact?          @relation(fields: [contactId], references: [id])
+
+  // request + response blobs
+  engineInput  Json?
+  inputSummary String?        // short line of what the user typed / selected
+  payload      Json?          // full pack
+  preview      String?        // short preview of output
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, listingId, createdAt])
+  @@index([userId, contactId, createdAt])
+}
+
+// ---------------------------
 // CONTACT NOTES (STRUCTURED)
 // ---------------------------
 model ContactNote {
@@ -205,18 +252,18 @@ model ContactNote {
 // NEXTAUTH
 // ---------------------------
 model Account {
-  id                String @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
+  id                 String @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
 
   user User @relation(fields: [userId], references: [id])
 

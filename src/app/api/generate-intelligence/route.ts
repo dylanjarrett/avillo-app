@@ -106,28 +106,45 @@ Return JSON exactly shaped as:
     // BUYER ENGINE
     // ----------------------------
     if (engine === "buyer") {
-      prompt = `
-You are an AI agent that helps real estate buyers with summaries, tours, and offers. Tool = ${tool}.
+  prompt = `
+You are an AI agent that helps real estate buyers across the full journey:
+- onboarding / search recaps
+- tour follow-ups
+- offer strategy & negotiation
 
-Context from the agent:
+The current focus tool is: ${tool}.
+You MUST still return a complete object for ALL three stages
+("search", "tour", and "offer") so the agent can reuse the outputs later.
+
+Context from the agent (buyer brief, tour notes, offer details, etc.):
 ${JSON.stringify(context, null, 2)}
 
 Return JSON exactly shaped as:
+
 {
   "search": {
-    "summary": "...",
-    "nextSteps": "...",
-    "smsFollowUp": "..."
+    "recapEmail": "Polished email the agent can send the buyer recapping their search criteria, momentum, and agent plan.",
+    "bulletSummary": "Bullet-point summary of budget, areas, must-haves, nice-to-haves, and any constraints.",
+    "nextSteps": "Clear recommended next steps for the buyer (and what the agent will do next).",
+    "smsFollowUp": "1–2 short SMS/DM style follow-up messages to keep the search warm.",
+
+    // Backwards-compat: keep these for older canvases
+    "summary": "Same or similar content as recapEmail, for legacy clients using the 'summary' field.",
+    "questionsToAsk": "Optional list of questions the agent can ask on the next check-in."
   },
   "tour": {
-    "recapEmail": "...",
-    "highlights": "...",
-    "concerns": "..."
+    "recapEmail": "Email summarizing each home toured, how it landed for the buyer, and recommended direction.",
+    "highlights": "Bulleted highlights from the tour (what resonated, what didn’t).",
+    "concerns": "Bulleted list of concerns and open questions the buyer raised.",
+    "decisionFrame": "Short narrative framing of options (pros/cons, tradeoffs, recommended path).",
+    "nextSteps": "What happens after this tour (revisits, new searches, regroup call, etc.)."
   },
   "offer": {
-    "offerEmail": "...",
-    "strategySummary": "...",
-    "negotiationPoints": "..."
+    "offerEmail": "Email template to the buyer summarizing strategy and terms (or to the listing agent if appropriate).",
+    "strategySummary": "Plain-language explanation of the offer strategy given the market and competition.",
+    "negotiationPoints": "Bulleted list of talking points and levers (price, terms, credits, timelines, etc.).",
+    "riskNotes": "Balanced explanation of risk, contingencies, and ways to protect the buyer.",
+    "smsUpdate": "Short, reassuring SMS/DM the agent can send while drafting / submitting the offer."
   }
 }`;
     }

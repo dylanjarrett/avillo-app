@@ -81,19 +81,29 @@ export type BuyerToolId = "search" | "tour" | "offer";
 
 export type BuyerPack = {
   search?: {
-    summary?: string;
+    // NEW richer fields
+    recapEmail?: string;
+    bulletSummary?: string;
     nextSteps?: string;
     smsFollowUp?: string;
+    questionsToAsk?: string;
+
+    // backwards-compat
+    summary?: string;
   };
   tour?: {
     recapEmail?: string;
     highlights?: string;
     concerns?: string;
+    decisionFrame?: string;
+    nextSteps?: string;
   };
   offer?: {
     offerEmail?: string;
     strategySummary?: string;
     negotiationPoints?: string;
+    riskNotes?: string;
+    smsUpdate?: string;
   };
 };
 

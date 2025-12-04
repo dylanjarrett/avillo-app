@@ -1,7 +1,6 @@
-// src/components/intelligence/engines/BuyerEngine.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BuyerOutputCanvas } from "@/components/intelligence/OutputCard";
 
 export type BuyerToolId = "search" | "tour" | "offer";
@@ -24,11 +23,22 @@ export type BuyerPack = {
   };
 };
 
+type RestoreRequest =
+  | {
+      engine: "listing" | "seller" | "buyer" | "neighborhood";
+      prompt: string;
+    }
+  | null;
+
 type BuyerEngineProps = {
   isGenerating: boolean;
   setIsGenerating: (value: boolean) => void;
   setOutput: (pack: BuyerPack | null) => void;
   setError: (message: string | null) => void;
+  restoreRequest?: RestoreRequest;
+  contextType?: "listing" | "contact" | "none" | null;
+  contextId?: string | null;
+  onSavedRun?: () => void;
 };
 
 export default function BuyerEngine({
@@ -36,68 +46,66 @@ export default function BuyerEngine({
   setIsGenerating,
   setOutput,
   setError,
+  restoreRequest,
+  contextType,
+  contextId,
+  onSavedRun,
 }: BuyerEngineProps) {
   const [activeTool, setActiveTool] = useState<BuyerToolId>("search");
 
-  // ---- Search recap state ----
-  const [buyerNameSearch, setBuyerNameSearch] = useState("");
-  const [criteriaSearch, setCriteriaSearch] = useState("");
-  const [contextSearch, setContextSearch] = useState("");
+  // -------- Shared buyer brief (single canvas) --------
+  const [buyerName, setBuyerName] = useState("");
+  const [budget, setBudget] = useState("");
+  const [areas, setAreas] = useState("");
+  const [mustHaves, setMustHaves] = useState("");
+  const [timeline, setTimeline] = useState("");
+  const [financing, setFinancing] = useState("");
+  const [extraContext, setExtraContext] = useState("");
 
-  // ---- Tour follow-up state ----
-  const [buyerNameTour, setBuyerNameTour] = useState("");
-  const [propertiesTour, setPropertiesTour] = useState("");
-  const [contextTour, setContextTour] = useState("");
-
-  // ---- Offer strategy state ----
-  const [buyerNameOffer, setBuyerNameOffer] = useState("");
-  const [propertyOffer, setPropertyOffer] = useState("");
-  const [priceOffer, setPriceOffer] = useState("");
-  const [contextOffer, setContextOffer] = useState("");
-
-  // ---- Result + CRM ----
   const [pack, setPack] = useState<BuyerPack | null>(null);
-  const [savingCrm, setSavingCrm] = useState(false);
+  const [savingOutput, setSavingOutput] = useState(false);
 
-  // ----------------------------
-  // Validation
-  // ----------------------------
-  function validateCurrentTool(): boolean {
-    if (activeTool === "search") {
-      if (!buyerNameSearch || !criteriaSearch) {
-        setError(
-          "Please add the buyer name and what they’re looking for to generate a search recap."
-        );
-        return false;
-      }
+  /* ------------------------------------
+   * RESTORE HANDLER (from history)
+   * -----------------------------------*/
+  useEffect(() => {
+    if (!restoreRequest) return;
+    if (restoreRequest.engine !== "buyer") return;
+
+    const raw = restoreRequest.prompt.trim();
+    if (!raw) return;
+
+    // Lightweight detection for which tool this came from
+    if (/offer|counter|escalation/i.test(raw)) {
+      setActiveTool("offer");
+    } else if (/tour|showing|we saw|we viewed/i.test(raw)) {
+      setActiveTool("tour");
+    } else {
+      setActiveTool("search");
     }
 
-    if (activeTool === "tour") {
-      if (!buyerNameTour || !propertiesTour) {
-        setError(
-          "Please add the buyer name and which homes you toured to generate a follow-up."
-        );
-        return false;
-      }
-    }
+    // Very simple hydration: drop the whole prompt into extra context
+    setExtraContext(raw);
+  }, [restoreRequest]);
 
-    if (activeTool === "offer") {
-      if (!buyerNameOffer || !propertyOffer || !priceOffer) {
-        setError(
-          "Please add the buyer name, property, and target price to generate an offer strategy."
-        );
-        return false;
-      }
+  /* ------------------------------------
+   * VALIDATION
+   * -----------------------------------*/
+  function validateBrief(): boolean {
+    if (!buyerName || !budget || !areas || !mustHaves) {
+      setError(
+        "Please fill buyer name, budget, areas, and must-haves before generating Buyer Studio outputs."
+      );
+      return false;
     }
-
     return true;
   }
 
-  // ----------------------------
-  // Generate via /api/generate-intelligence
-  // ----------------------------
+  /* ------------------------------------
+   * GENERATE VIA /api/generate-intelligence
+   * -----------------------------------*/
   async function handleGenerate() {
-    if (!validateCurrentTool()) return;
+    if (!validateBrief()) return;
 
     setIsGenerating(true);
     setError(null);
@@ -106,26 +114,14 @@ export default function BuyerEngine({
       const body: any = {
         engine: "buyer",
         tool: activeTool,
+        buyerName,
+        budget,
+        areas,
+        mustHaves,
+        timeline,
+        financing,
+        extraContext,
       };
-
-      if (activeTool === "search") {
-        body.buyerName = buyerNameSearch;
-        body.criteria = criteriaSearch;
-        body.context = contextSearch;
-      }
-
-      if (activeTool === "tour") {
-        body.buyerName = buyerNameTour;
-        body.properties = propertiesTour;
-        body.context = contextTour;
-      }
-
-      if (activeTool === "offer") {
-        body.buyerName = buyerNameOffer;
-        body.property = propertyOffer;
-        body.price = priceOffer;
-        body.context = contextOffer;
-      }
 
       const res = await fetch("/api/generate-intelligence", {
         method: "POST",
@@ -139,11 +135,7 @@ export default function BuyerEngine({
       }
 
       const data = await res.json();
-
-      const nextPack: BuyerPack = {
-        ...(pack || {}),
-        ...(data || {}),
-      };
+      const nextPack: BuyerPack = { ...(pack || {}), ...(data || {}) };
 
       setPack(nextPack);
       setOutput(nextPack);
@@ -155,58 +147,82 @@ export default function BuyerEngine({
     }
   }
 
-  // ----------------------------
-  // Save to CRM
-  // ----------------------------
-  async function handleSaveToCrm() {
+  /* ------------------------------------
+   * SAVE OUTPUT (DB history)
+   * -----------------------------------*/
+  async function handleSaveOutput() {
     if (!pack) return;
 
-    setSavingCrm(true);
+    setSavingOutput(true);
     try {
-      await fetch("/api/crm/save", {
+      const userInput = (
+        [
+          `Buyer: ${buyerName}`,
+          `Budget: ${budget}`,
+          `Areas: ${areas}`,
+          `Must-haves: ${mustHaves}`,
+          timeline ? `Timeline: ${timeline}` : "",
+          financing ? `Financing: ${financing}` : "",
+          extraContext ? `Notes: ${extraContext}` : "",
+          `Tool: ${activeTool === "search" ? "Search recap" : activeTool === "tour" ? "Tour follow-up" : "Offer strategy"}`,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      ).trim();
+
+      const res = await fetch("/api/intelligence/save-output", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           engine: "buyer",
-          tool: activeTool,
-          payload: pack,
+          userInput,
+          outputs: pack,
+          contextType: (contextType ?? "none") as "listing" | "contact" | "none",
+          contextId: contextId ?? null,
         }),
       });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        console.error("Save buyer output failed", data);
+      } else {
+        onSavedRun?.();
+      }
     } catch (err) {
-      console.error("Failed to save buyer pack to CRM", err);
+      console.error("Failed to save buyer pack", err);
     } finally {
-      setSavingCrm(false);
+      setSavingOutput(false);
     }
   }
 
-  // ----------------------------
-  // Render
-  // ----------------------------
+  /* ------------------------------------
+   * RENDER
+   * -----------------------------------*/
   return (
     <section className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.5fr)]">
-      {/* ---------- LEFT: INPUT CARD (CRM styling) ---------- */}
+      {/* LEFT: INPUT CARD */}
       <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
-        <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)]" />
+        <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)] opacity-40 blur-3xl" />
 
         <h2 className="mb-1 text-sm font-semibold text-slate-50">
           Buyer Studio
         </h2>
         <p className="mb-4 text-xs text-slate-200/90">
-          Turn search criteria, tours, and offers into clean summaries and
-          follow-up emails.
+          Fill out one buyer brief once. Generate search recaps, tour
+          follow-ups, and offer strategy language from the same canvas.
         </p>
 
-        {/* Tool selector pills (CRM accent) */}
-        <div className="mb-4 flex flex-col gap-2 text-xs sm:inline-flex sm:flex-row sm:flex-wrap">
+        {/* Tool selector – match Seller pill style */}
+        <div className="mb-4 flex flex-col gap-2 text-xs sm:flex-row sm:flex-wrap">
           <BuyerToolPill
             label="Search Recap"
-            description="Weekly search summary."
+            description="Weekly or milestone check-ins."
             active={activeTool === "search"}
             onClick={() => setActiveTool("search")}
           />
           <BuyerToolPill
             label="Tour Follow-Up"
-            description="Tour recap + notes."
+            description="Recap showings + next steps."
             active={activeTool === "tour"}
             onClick={() => setActiveTool("tour")}
           />
@@ -218,127 +234,96 @@ export default function BuyerEngine({
           />
         </div>
 
-        {/* Active tool input fields */}
+        {/* Buyer brief fields */}
         <div className="space-y-3 text-xs text-slate-100">
-          {activeTool === "search" && (
-            <>
-              <InputField
-                label="Buyer name"
-                value={buyerNameSearch}
-                onChange={setBuyerNameSearch}
-                placeholder="Jordan"
-              />
-              <TextareaField
-                label="What they’re looking for"
-                value={criteriaSearch}
-                onChange={setCriteriaSearch}
-                placeholder="Budget, areas, beds/baths, non-negotiables…"
-                rows={3}
-              />
-              <TextareaField
-                label="Context / notes (optional)"
-                value={contextSearch}
-                onChange={setContextSearch}
-                placeholder="How long they’ve been searching, timing, other notes…"
-                rows={3}
-              />
-            </>
-          )}
+          <InputField
+            label="Buyer name"
+            value={buyerName}
+            onChange={setBuyerName}
+            placeholder="Jordan & Alex"
+          />
 
-          {activeTool === "tour" && (
-            <>
-              <InputField
-                label="Buyer name"
-                value={buyerNameTour}
-                onChange={setBuyerNameTour}
-                placeholder="Jordan"
-              />
-              <TextareaField
-                label="Homes you toured"
-                value={propertiesTour}
-                onChange={setPropertiesTour}
-                placeholder="Addresses, key pros/cons, which ones they liked…"
-                rows={3}
-              />
-              <TextareaField
-                label="Context / notes (optional)"
-                value={contextTour}
-                onChange={setContextTour}
-                placeholder="Their reactions, questions, timing, financing status…"
-                rows={3}
-              />
-            </>
-          )}
+          <InputField
+            label="Budget"
+            value={budget}
+            onChange={setBudget}
+            placeholder="$900k–$1.1M or up to $850k…"
+          />
 
-          {activeTool === "offer" && (
-            <>
-              <InputField
-                label="Buyer name"
-                value={buyerNameOffer}
-                onChange={setBuyerNameOffer}
-                placeholder="Jordan"
-              />
-              <InputField
-                label="Property"
-                value={propertyOffer}
-                onChange={setPropertyOffer}
-                placeholder="1234 Ocean View Dr, San Diego, CA"
-              />
-              <InputField
-                label="Target offer price"
-                value={priceOffer}
-                onChange={setPriceOffer}
-                placeholder="$1,250,000"
-              />
-              <TextareaField
-                label="Context / notes"
-                value={contextOffer}
-                onChange={setContextOffer}
-                placeholder="Comps, list price, competition level, buyer risk tolerance, terms you’re considering…"
-                rows={3}
-              />
-            </>
-          )}
+          <InputField
+            label="Areas"
+            value={areas}
+            onChange={setAreas}
+            placeholder="North Park, Normal Heights, Mission Hills…"
+          />
+
+          <TextareaField
+            label="Must-haves"
+            value={mustHaves}
+            onChange={setMustHaves}
+            rows={2}
+            placeholder="3+ beds, at least 1.5 baths, walkable to coffee, quiet street, yard for dog…"
+          />
+
+          <InputField
+            label="Timeline (optional)"
+            value={timeline}
+            onChange={setTimeline}
+            placeholder="Ideally in a new home by May; lease ends in July…"
+          />
+
+          <InputField
+            label="Financing (optional)"
+            value={financing}
+            onChange={setFinancing}
+            placeholder="Pre-approved with XYZ Mortgage at 5% fixed; 20% down; contingent on sale of condo…"
+          />
+
+          <TextareaField
+            label="Additional context (optional)"
+            value={extraContext}
+            onChange={setExtraContext}
+            rows={3}
+            placeholder="How you met, motivation (first home, upsizing, relocating), any tour notes or specific homes they loved/hated…"
+          />
         </div>
 
         <button
           type="button"
           onClick={handleGenerate}
           disabled={isGenerating}
-          className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:opacity-60"
         >
           {isGenerating ? "Generating…" : "Generate Buyer Outputs"}
         </button>
       </div>
 
-      {/* ---------- RIGHT: OUTPUT CANVAS (delegated, uses CRM-style OutputShell) ---------- */}
+      {/* RIGHT: OUTPUT CANVAS */}
       <BuyerOutputCanvas
         pack={pack}
         activeTool={activeTool}
-        onSaveToCrm={handleSaveToCrm}
-        savingCrm={savingCrm}
+        onSaveOutput={handleSaveOutput}
+        savingOutput={savingOutput}
       />
     </section>
   );
 }
 
-// --------------------
-// Small sub-components
-// --------------------
-
-type BuyerToolPillProps = {
-  label: string;
-  description: string;
-  active?: boolean;
-  onClick: () => void;
-};
+/* ------------------------------------
+ * SUB COMPONENTS
+ * -----------------------------------*/
 
 function BuyerToolPill({
   label,
   description,
   active,
   onClick,
-}: BuyerToolPillProps) {
+}: {
+  label: string;
+  description: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
@@ -356,14 +341,17 @@ function BuyerToolPill({
   );
 }
 
-type InputFieldProps = {
+function InputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
-};
-
-function InputField({ label, value, onChange, placeholder }: InputFieldProps) {
+}) {
   return (
     <div>
       <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
@@ -373,19 +361,11 @@ function InputField({ label, value, onChange, placeholder }: InputFieldProps) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-100/70 focus:border-amber-100/70"
+        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-100/70 focus:ring-1 focus:ring-amber-100/70"
       />
     </div>
   );
 }
-
-type TextareaFieldProps = {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  rows?: number;
-};
 
 function TextareaField({
   label,
@@ -393,7 +373,13 @@ function TextareaField({
   onChange,
   placeholder,
   rows = 3,
-}: TextareaFieldProps) {
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
   return (
     <div>
       <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
@@ -404,7 +390,7 @@ function TextareaField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows}
-        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-100/70 focus:border-amber-100/70"
+        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-100/70 focus:ring-1 focus:ring-amber-100/70"
       />
     </div>
   );

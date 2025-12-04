@@ -43,19 +43,29 @@ export type BuyerToolId = "search" | "tour" | "offer";
 
 export type BuyerPack = {
   search?: {
-    summary?: string;
+    // NEW richer fields
+    recapEmail?: string;
+    bulletSummary?: string;
     nextSteps?: string;
     smsFollowUp?: string;
+    questionsToAsk?: string;
+
+    // backwards-compat
+    summary?: string;
   };
   tour?: {
     recapEmail?: string;
     highlights?: string;
     concerns?: string;
+    decisionFrame?: string;
+    nextSteps?: string;
   };
   offer?: {
     offerEmail?: string;
     strategySummary?: string;
     negotiationPoints?: string;
+    riskNotes?: string;
+    smsUpdate?: string;
   };
 };
 
@@ -65,11 +75,11 @@ export type BuyerPack = {
 
 type OutputShellProps = {
   children: ReactNode;
-  onSaveToCrm: () => void;
-  savingCrm: boolean;
+  onSaveOutput: () => void;
+  savingOutput: boolean;
 };
 
-function OutputShell({ children, onSaveToCrm, savingCrm }: OutputShellProps) {
+function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps) {
   return (
     <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
       {/* subtle glow */}
@@ -86,11 +96,11 @@ function OutputShell({ children, onSaveToCrm, savingCrm }: OutputShellProps) {
 
         <button
           type="button"
-          onClick={onSaveToCrm}
-          disabled={savingCrm}
+          onClick={onSaveOutput}
+          disabled={savingOutput}
           className="inline-flex items-center rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {savingCrm ? "Saving…" : "Save to CRM"}
+          {savingOutput ? "Saving…" : "Save Output"}
         </button>
       </div>
 
@@ -168,19 +178,19 @@ type ListingOutputCanvasProps = {
   pack: IntelligencePack | null;
   activeTab: ListingTabId;
   setActiveTab: (tab: ListingTabId) => void;
-  onSaveToCrm: () => void;
-  savingCrm: boolean;
+  onSaveOutput: () => void;
+  savingOutput: boolean;
 };
 
 export function ListingOutputCanvas({
   pack,
   activeTab,
   setActiveTab,
-  onSaveToCrm,
-  savingCrm,
+  onSaveOutput,
+  savingOutput,
 }: ListingOutputCanvasProps) {
   return (
-    <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
+    <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
       {/* Tab pills */}
       <div className="mb-4 inline-flex flex-wrap gap-1 text-xs">
         {LISTING_TABS.map((tab) => (
@@ -348,18 +358,18 @@ export function ListingOutputCanvas({
 type SellerOutputCanvasProps = {
   pack: SellerPack | null;
   activeTool: SellerToolId;
-  onSaveToCrm: () => void;
-  savingCrm: boolean;
+  onSaveOutput: () => void;
+  savingOutput: boolean;
 };
 
 export function SellerOutputCanvas({
   pack,
   activeTool,
-  onSaveToCrm,
-  savingCrm,
+  onSaveOutput,
+  savingOutput,
 }: SellerOutputCanvasProps) {
   return (
-    <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
+    <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
       <div className="space-y-3 text-xs text-slate-100/90">
         {activeTool === "prelisting" && (
           <>
@@ -438,74 +448,103 @@ export function SellerOutputCanvas({
 type BuyerOutputCanvasProps = {
   pack: BuyerPack | null;
   activeTool: BuyerToolId;
-  onSaveToCrm: () => void;
-  savingCrm: boolean;
+  onSaveOutput: () => void;
+  savingOutput: boolean;
 };
 
 export function BuyerOutputCanvas({
   pack,
   activeTool,
-  onSaveToCrm,
-  savingCrm,
+  onSaveOutput,
+  savingOutput,
 }: BuyerOutputCanvasProps) {
+  const search = pack?.search;
+  const tour = pack?.tour;
+  const offer = pack?.offer;
+
   return (
-    <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
+    <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
       <div className="space-y-3 text-xs text-slate-100/90">
+        {/* SEARCH RECAP */}
         {activeTool === "search" && (
           <>
             <OutputRow
               title="Search recap email"
-              value={pack?.search?.summary}
+              value={search?.recapEmail ?? search?.summary}
+            />
+            <OutputRow
+              title="Snapshot of criteria"
+              value={search?.bulletSummary}
             />
             <OutputRow
               title="Recommended next steps"
-              value={pack?.search?.nextSteps}
+              value={search?.nextSteps}
             />
             <OutputRow
               title="Text / DM follow-up"
-              value={pack?.search?.smsFollowUp}
+              value={search?.smsFollowUp}
+            />
+            <OutputRow
+              title="Questions for next check-in"
+              value={search?.questionsToAsk}
             />
           </>
         )}
 
+        {/* TOUR FOLLOW-UP */}
         {activeTool === "tour" && (
           <>
             <OutputRow
               title="Tour follow-up email"
-              value={pack?.tour?.recapEmail}
+              value={tour?.recapEmail}
             />
             <OutputRow
               title="Highlights & standouts"
-              value={pack?.tour?.highlights}
+              value={tour?.highlights}
             />
             <OutputRow
               title="Concerns / open questions"
-              value={pack?.tour?.concerns}
+              value={tour?.concerns}
             />
+            <OutputRow
+              title="Decision framing"
+              value={tour?.decisionFrame}
+            />
+            <OutputRow title="Next steps" value={tour?.nextSteps} />
           </>
         )}
 
+        {/* OFFER STRATEGY */}
         {activeTool === "offer" && (
           <>
             <OutputRow
               title="Offer-prep email"
-              value={pack?.offer?.offerEmail}
+              value={offer?.offerEmail}
             />
             <OutputRow
               title="Strategy summary"
-              value={pack?.offer?.strategySummary}
+              value={offer?.strategySummary}
             />
             <OutputRow
               title="Negotiation points"
-              value={pack?.offer?.negotiationPoints}
+              value={offer?.negotiationPoints}
+            />
+            <OutputRow
+              title="Risk & contingency notes"
+              value={offer?.riskNotes}
+            />
+            <OutputRow
+              title="Quick SMS / DM update"
+              value={offer?.smsUpdate}
             />
           </>
         )}
 
         {!pack && (
           <p className="pt-2 text-[11px] text-slate-300/90">
-            Run a Buyer Studio tool to populate this canvas with recaps, tour
-            follow-ups, or offer strategy language.
+            Run a Buyer Studio tool to populate this canvas with search
+            recaps, tour follow-ups, and offer strategy language you can
+            reuse across email, text, and calls.
           </p>
         )}
       </div>
@@ -529,19 +568,19 @@ type NeighborhoodOutputCanvasProps = {
   pack: NeighborhoodPack | null;
   activeTab: NeighborhoodTabId;
   setActiveTab: (tab: NeighborhoodTabId) => void;
-  onSaveToCrm: () => void;
-  savingCrm: boolean;
+  onSaveOutput: () => void;
+  savingOutput: boolean;
 };
 
 export function NeighborhoodOutputCanvas({
   pack,
   activeTab,
   setActiveTab,
-  onSaveToCrm,
-  savingCrm,
+  onSaveOutput,
+  savingOutput,
 }: NeighborhoodOutputCanvasProps) {
   return (
-    <OutputShell onSaveToCrm={onSaveToCrm} savingCrm={savingCrm}>
+    <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
       {/* Tab pills */}
       <div className="mb-4 inline-flex flex-wrap gap-1 text-xs">
         {NEIGHBORHOOD_TABS.map((tab) => (

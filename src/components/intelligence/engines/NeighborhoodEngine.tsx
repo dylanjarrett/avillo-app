@@ -1,15 +1,23 @@
-// src/components/intelligence/engines/NeighborhoodEngine.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { NeighborhoodPack, NeighborhoodTabId } from "@/lib/intelligence";
 import { NeighborhoodOutputCanvas } from "@/components/intelligence/OutputCard";
+
+type RestoreRequest = {
+  engine: "listing" | "seller" | "buyer" | "neighborhood";
+  prompt: string;
+} | null;
 
 type NeighborhoodEngineProps = {
   isGenerating: boolean;
   setIsGenerating: (value: boolean) => void;
   setOutput: (pack: NeighborhoodPack | null) => void;
   setError: (message: string | null) => void;
+  restoreRequest?: RestoreRequest;
+  contextType?: "listing" | "contact" | "none" | null;
+  contextId?: string | null;
+  onSavedRun?: () => void;
 };
 
 export default function NeighborhoodEngine({
@@ -17,16 +25,37 @@ export default function NeighborhoodEngine({
   setIsGenerating,
   setOutput,
   setError,
+  restoreRequest,
+  contextType,
+  contextId,
+  onSavedRun,
 }: NeighborhoodEngineProps) {
   const [areaFocus, setAreaFocus] = useState("");
   const [contextNotes, setContextNotes] = useState("");
   const [pack, setPack] = useState<NeighborhoodPack | null>(null);
-  const [savingCrm, setSavingCrm] = useState(false);
-  const [activeTab, setActiveTab] = useState<NeighborhoodTabId>("overview");
+  const [savingOutput, setSavingOutput] = useState(false);
+  const [activeTab, setActiveTab] =
+    useState<NeighborhoodTabId>("overview");
 
-  // ----------------------------
-  // Generate via /api/generate-intelligence
-  // ----------------------------
+  /* ------------------------------------
+   * RESTORE HANDLER
+   * -----------------------------------*/
+  useEffect(() => {
+    if (!restoreRequest) return;
+    if (restoreRequest.engine !== "neighborhood") return;
+
+    const restored = restoreRequest.prompt.trim();
+    if (!restored) return;
+
+    // Put the restored text into Area focus for now
+    setAreaFocus(restored);
+    setContextNotes("");
+    setActiveTab("overview");
+  }, [restoreRequest]);
+
+  /* ------------------------------------
+   * GENERATE SNAPSHOT
+   * -----------------------------------*/
   async function handleGenerate() {
     if (!areaFocus.trim()) {
       setError("Add a ZIP code, city, or neighborhood before generating.");
@@ -55,8 +84,8 @@ export default function NeighborhoodEngine({
       }
 
       const data = await res.json();
-
-      const nextPack: NeighborhoodPack = data.pack ?? data.neighborhood ?? data;
+      const nextPack: NeighborhoodPack =
+        data.pack ?? data.neighborhood ?? data;
 
       setPack(nextPack);
       setOutput(nextPack);
@@ -68,52 +97,62 @@ export default function NeighborhoodEngine({
     }
   }
 
-  // ----------------------------
-  // Save to CRM
-  // ----------------------------
-  async function handleSaveToCrm() {
+  /* ------------------------------------
+   * SAVE TO HISTORY (DB)
+   * -----------------------------------*/
+  async function handleSaveOutput() {
     if (!pack) return;
 
-    setSavingCrm(true);
+    setSavingOutput(true);
     try {
-      await fetch("/api/crm/save", {
+      const userInput = `${areaFocus}\n${contextNotes}`.trim();
+
+      const res = await fetch("/api/intelligence/save-output", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           engine: "neighborhood",
-          payload: pack,
+          userInput,
+          outputs: pack,
+          contextType: (contextType ?? "none") as "listing" | "contact" | "none",
+          contextId: contextId ?? null,
         }),
       });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        console.error("Save neighborhood output failed", data);
+      } else {
+        onSavedRun?.();
+      }
     } catch (err) {
-      console.error("Failed to save neighborhood pack to CRM", err);
+      console.error("Failed to save neighborhood pack", err);
     } finally {
-      setSavingCrm(false);
+      setSavingOutput(false);
     }
   }
 
-  // ----------------------------
-  // Render
-  // ----------------------------
+  /* ------------------------------------
+   * RENDER
+   * -----------------------------------*/
   return (
     <section className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.5fr)]">
-
       {/* LEFT INPUT CARD */}
       <div
         className="
-          relative overflow-hidden rounded-2xl border border-slate-700/70 
-          bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]
-          mb-8 pb-4
+          relative mb-8 overflow-hidden rounded-2xl border border-slate-700/70
+          bg-slate-950/80 px-6 pb-4 pt-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]
         "
       >
-        <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)]" />
+        <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)] opacity-40 blur-3xl" />
 
         <h2 className="mb-1 text-sm font-semibold text-slate-50">
           Neighborhood Engine
         </h2>
         <p className="mb-4 text-xs text-slate-200/90">
-          Turn any ZIP code, city, or neighborhood into a simple lifestyle
-          snapshot: schools, walk &amp; bike feel, safety context, essentials,
-          and buyer-ready talking points.
+          Turn any ZIP code, city, or neighborhood into a lifestyle snapshot:
+          schools, walk &amp; bike feel, safety context, essentials, and
+          buyer-ready talking points.
         </p>
 
         <div className="space-y-3 text-xs text-slate-100">
@@ -124,7 +163,7 @@ export default function NeighborhoodEngine({
             <input
               value={areaFocus}
               onChange={(e) => setAreaFocus(e.target.value)}
-              placeholder="92626, Costa Mesa, or Eastside Costa Mesa…"
+              placeholder="92130, Carmel Valley, or Eastside Costa Mesa…"
               className="avillo-input w-full"
             />
           </div>
@@ -143,19 +182,19 @@ export default function NeighborhoodEngine({
           </div>
 
           <p className="mt-2 text-[11px] text-slate-300/90">
-            AI predictions rely on typical local patterns. Always verify
-            schools, zoning, and crime sources before sending to clients.
+            AI predictions rely on typical local patterns. Always verify schools,
+            zoning, and crime sources before sending to clients.
           </p>
         </div>
 
         <button
-  type="button"
-  onClick={handleGenerate}
-  disabled={isGenerating}
-  className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
->
-  {isGenerating ? "Generating…" : "Generate Snapshot"}
-</button>
+          type="button"
+          onClick={handleGenerate}
+          disabled={isGenerating}
+          className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isGenerating ? "Generating…" : "Generate Snapshot"}
+        </button>
       </div>
 
       {/* RIGHT OUTPUT CANVAS */}
@@ -163,8 +202,8 @@ export default function NeighborhoodEngine({
         pack={pack}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onSaveToCrm={handleSaveToCrm}
-        savingCrm={savingCrm}
+        onSaveOutput={handleSaveOutput}
+        savingOutput={savingOutput}
       />
     </section>
   );
