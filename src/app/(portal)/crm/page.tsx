@@ -963,8 +963,7 @@ export default function CrmPage() {
                   No contact selected
                 </p>
                 <p className="mt-1 max-w-xs">
-                  Choose a contact from the list to see details, notes, and quick
-                  AI actions — or click “Add contact” to start new.
+                  Choose a contact from the list to see details, and add notes — or click “Add contact” to start new.
                 </p>
               </div>
             )}
@@ -1379,18 +1378,6 @@ export default function CrmPage() {
                   )}
                 </div>
 
-                {/* Quick AI actions */}
-                <div className="space-y-2">
-                  <p className="text-[11px] font-semibold text-slate-50">
-                    Quick AI actions
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <QuickActionChip label="Buyer Studio" />
-                    <QuickActionChip label="Seller Studio" />
-                    <QuickActionChip label="Listing Engine" />
-                    <QuickActionChip label="Neighborhood Engine" />
-                  </div>
-                </div>
 
                 {/* Footer buttons — match Listings */}
                 <div className="flex items-center justify-between gap-3">
@@ -1486,20 +1473,6 @@ function DetailInput({ label, value, onChange, placeholder }: DetailInputProps) 
   );
 }
 
-type QuickActionChipProps = {
-  label: string;
-};
-
-function QuickActionChip({ label }: QuickActionChipProps) {
-  return (
-    <button
-      type="button"
-      className="rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50"
-    >
-      {label}
-    </button>
-  );
-}
 
 type StageChipProps = {
   label: string;
