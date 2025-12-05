@@ -72,20 +72,28 @@ export default function BuyerEngine({
     if (!restoreRequest) return;
     if (restoreRequest.engine !== "buyer") return;
 
-    const raw = restoreRequest.prompt.trim();
+    const raw = (restoreRequest.prompt || "").trim();
     if (!raw) return;
 
-    // Lightweight detection for which tool this came from
-    if (/offer|counter|escalation/i.test(raw)) {
+    const brief = parseBuyerBriefFromHistory(raw);
+
+    setBuyerName(brief.buyerName || "");
+    setBudget(brief.budget || "");
+    setAreas(brief.areas || "");
+    setMustHaves(brief.mustHaves || "");
+    setTimeline(brief.timeline || "");
+    setFinancing(brief.financing || "");
+    setExtraContext(brief.extraContext || "");
+
+    if (brief.lastTool) {
+      setActiveTool(brief.lastTool);
+    } else if (brief.extraContext?.match(/offer|counter|escalation/i)) {
       setActiveTool("offer");
-    } else if (/tour|showing|we saw|we viewed/i.test(raw)) {
+    } else if (brief.extraContext?.match(/tour|showing|we saw|we viewed/i)) {
       setActiveTool("tour");
     } else {
       setActiveTool("search");
     }
-
-    // Very simple hydration: drop the whole prompt into extra context
-    setExtraContext(raw);
   }, [restoreRequest]);
 
   /* ------------------------------------
@@ -155,20 +163,16 @@ export default function BuyerEngine({
 
     setSavingOutput(true);
     try {
-      const userInput = (
-        [
-          `Buyer: ${buyerName}`,
-          `Budget: ${budget}`,
-          `Areas: ${areas}`,
-          `Must-haves: ${mustHaves}`,
-          timeline ? `Timeline: ${timeline}` : "",
-          financing ? `Financing: ${financing}` : "",
-          extraContext ? `Notes: ${extraContext}` : "",
-          `Tool: ${activeTool === "search" ? "Search recap" : activeTool === "tour" ? "Tour follow-up" : "Offer strategy"}`,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      ).trim();
+      const userInput = formatBuyerBriefForHistory({
+        buyerName,
+        budget,
+        areas,
+        mustHaves,
+        timeline,
+        financing,
+        extraContext,
+        lastTool: activeTool,
+      });
 
       const res = await fetch("/api/intelligence/save-output", {
         method: "POST",
@@ -177,7 +181,10 @@ export default function BuyerEngine({
           engine: "buyer",
           userInput,
           outputs: pack,
-          contextType: (contextType ?? "none") as "listing" | "contact" | "none",
+          contextType: (contextType ?? "none") as
+            | "listing"
+            | "contact"
+            | "none",
           contextId: contextId ?? null,
         }),
       });
@@ -394,4 +401,142 @@ function TextareaField({
       />
     </div>
   );
+}
+
+/* ------------------------------------
+ * HISTORY HELPERS (save + restore)
+ * -----------------------------------*/
+
+type BuyerBrief = {
+  buyerName?: string;
+  budget?: string;
+  areas?: string;
+  mustHaves?: string;
+  timeline?: string;
+  financing?: string;
+  extraContext?: string;
+  lastTool?: BuyerToolId;
+};
+
+function formatBuyerBriefForHistory(brief: BuyerBrief): string {
+  return [
+    brief.buyerName && `Buyer: ${brief.buyerName}`,
+    brief.budget && `Budget: ${brief.budget}`,
+    brief.areas && `Areas: ${brief.areas}`,
+    brief.mustHaves && `Must-haves: ${brief.mustHaves}`,
+    brief.timeline && `Timeline: ${brief.timeline}`,
+    brief.financing && `Financing: ${brief.financing}`,
+    brief.extraContext && `Additional context: ${brief.extraContext}`,
+    brief.lastTool && `Tool: ${brief.lastTool}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Parse the saved buyer brief string back into fields.
+ * Any line without a ":" is treated as a continuation of the last labeled field.
+ */
+function parseBuyerBriefFromHistory(raw: string): BuyerBrief {
+  const brief: BuyerBrief = {};
+  if (!raw) return brief;
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let currentKey: keyof BuyerBrief | null = null;
+
+  for (const line of lines) {
+    // labeled line
+    if (line.includes(":")) {
+      const [labelPart, ...rest] = line.split(":");
+      const value = rest.join(":").trim();
+      const key = labelPart.toLowerCase().replace(/[^a-z]/g, "");
+
+      switch (key) {
+        case "buyer":
+        case "buyername":
+          brief.buyerName = value;
+          currentKey = "buyerName";
+          break;
+        case "budget":
+          brief.budget = value;
+          currentKey = "budget";
+          break;
+        case "areas":
+        case "searchareas":
+          brief.areas = value;
+          currentKey = "areas";
+          break;
+        case "musthaves":
+        case "must-haves":
+          brief.mustHaves = value;
+          currentKey = "mustHaves";
+          break;
+        case "timeline":
+          brief.timeline = value;
+          currentKey = "timeline";
+          break;
+        case "financing":
+          brief.financing = value;
+          currentKey = "financing";
+          break;
+        case "additionalcontext":
+        case "context":
+        case "notes":
+          brief.extraContext = value;
+          currentKey = "extraContext";
+          break;
+        case "tool": {
+          const v = value.toLowerCase();
+          if (v.includes("search")) brief.lastTool = "search";
+          else if (v.includes("tour")) brief.lastTool = "tour";
+          else if (v.includes("offer")) brief.lastTool = "offer";
+          currentKey = null; // don't append lines to Tool
+          break;
+        }
+        default:
+          // unknown labeled field -> treat as extra context
+          brief.extraContext =
+            (brief.extraContext ? `${brief.extraContext}\n` : "") + value;
+          currentKey = "extraContext";
+      }
+    } else {
+      // unlabeled line -> continuation of previous field (or extraContext)
+      if (!currentKey) currentKey = "extraContext";
+
+      const append = (prev?: string) =>
+        (prev ? `${prev}\n` : "") + line;
+
+      switch (currentKey) {
+        case "buyerName":
+          brief.buyerName = append(brief.buyerName);
+          break;
+        case "budget":
+          brief.budget = append(brief.budget);
+          break;
+        case "areas":
+          brief.areas = append(brief.areas);
+          break;
+        case "mustHaves":
+          brief.mustHaves = append(brief.mustHaves);
+          break;
+        case "timeline":
+          brief.timeline = append(brief.timeline);
+          break;
+        case "financing":
+          brief.financing = append(brief.financing);
+          break;
+        case "extraContext":
+        default:
+          brief.extraContext = append(brief.extraContext);
+          currentKey = "extraContext";
+          break;
+      }
+    }
+  }
+
+  return brief;
 }

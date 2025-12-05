@@ -88,7 +88,7 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
       {/* Header */}
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
             AI Output
           </p>
           <h3 className="text-sm font-semibold text-slate-50">Studio canvas</h3>
@@ -100,7 +100,7 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
           disabled={savingOutput}
           className="inline-flex items-center rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {savingOutput ? "Saving…" : "Save Output"}
+          {savingOutput ? "Saving…" : "Save output"}
         </button>
       </div>
 
@@ -342,8 +342,8 @@ export function ListingOutputCanvas({
 
         {!pack && (
           <p className="pt-2 text-[11px] text-slate-300/90">
-            Run the Listing Engine to populate this canvas with MLS copy,
-            social content, emails, and talking points.
+            Run the Listing Engine to populate this canvas with MLS copy, social
+            content, emails, and talking points.
           </p>
         )}
       </div>
@@ -542,9 +542,9 @@ export function BuyerOutputCanvas({
 
         {!pack && (
           <p className="pt-2 text-[11px] text-slate-300/90">
-            Run a Buyer Studio tool to populate this canvas with search
-            recaps, tour follow-ups, and offer strategy language you can
-            reuse across email, text, and calls.
+            Run a Buyer Studio tool to populate this canvas with search recaps,
+            tour follow-ups, and offer strategy language you can reuse across
+            email, text, and calls.
           </p>
         )}
       </div>
@@ -682,7 +682,10 @@ export function NeighborhoodOutputCanvas({
               title="Groceries & essentials"
               value={pack?.essentials?.groceries}
             />
-            <OutputRow title="Gyms & fitness" value={pack?.essentials?.gyms} />
+            <OutputRow
+              title="Gyms & fitness"
+              value={pack?.essentials?.gyms}
+            />
             <OutputRow
               title="Daily errands"
               value={pack?.essentials?.errands}

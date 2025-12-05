@@ -4,10 +4,12 @@ import { useState, useEffect } from "react";
 import type { NeighborhoodPack, NeighborhoodTabId } from "@/lib/intelligence";
 import { NeighborhoodOutputCanvas } from "@/components/intelligence/OutputCard";
 
-type RestoreRequest = {
-  engine: "listing" | "seller" | "buyer" | "neighborhood";
-  prompt: string;
-} | null;
+type RestoreRequest =
+  | {
+      engine: "listing" | "seller" | "buyer" | "neighborhood";
+      prompt: string;
+    }
+  | null;
 
 type NeighborhoodEngineProps = {
   isGenerating: boolean;
@@ -34,22 +36,22 @@ export default function NeighborhoodEngine({
   const [contextNotes, setContextNotes] = useState("");
   const [pack, setPack] = useState<NeighborhoodPack | null>(null);
   const [savingOutput, setSavingOutput] = useState(false);
-  const [activeTab, setActiveTab] =
-    useState<NeighborhoodTabId>("overview");
+  const [activeTab, setActiveTab] = useState<NeighborhoodTabId>("overview");
 
   /* ------------------------------------
-   * RESTORE HANDLER
+   * RESTORE HANDLER (from history card)
    * -----------------------------------*/
   useEffect(() => {
     if (!restoreRequest) return;
     if (restoreRequest.engine !== "neighborhood") return;
 
-    const restored = restoreRequest.prompt.trim();
-    if (!restored) return;
+    const raw = (restoreRequest.prompt || "").trim();
+    if (!raw) return;
 
-    // Put the restored text into Area focus for now
-    setAreaFocus(restored);
-    setContextNotes("");
+    const brief = parseNeighborhoodBriefFromHistory(raw);
+
+    setAreaFocus(brief.area || "");
+    setContextNotes(brief.context || "");
     setActiveTab("overview");
   }, [restoreRequest]);
 
@@ -85,7 +87,7 @@ export default function NeighborhoodEngine({
 
       const data = await res.json();
       const nextPack: NeighborhoodPack =
-        data.pack ?? data.neighborhood ?? data;
+        data.pack ?? data.neighborhood ?? (data as NeighborhoodPack);
 
       setPack(nextPack);
       setOutput(nextPack);
@@ -105,7 +107,10 @@ export default function NeighborhoodEngine({
 
     setSavingOutput(true);
     try {
-      const userInput = `${areaFocus}\n${contextNotes}`.trim();
+      const userInput = formatNeighborhoodBriefForHistory({
+        area: areaFocus,
+        context: contextNotes,
+      });
 
       const res = await fetch("/api/intelligence/save-output", {
         method: "POST",
@@ -138,12 +143,7 @@ export default function NeighborhoodEngine({
   return (
     <section className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.5fr)]">
       {/* LEFT INPUT CARD */}
-      <div
-        className="
-          relative mb-8 overflow-hidden rounded-2xl border border-slate-700/70
-          bg-slate-950/80 px-6 pb-4 pt-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]
-        "
-      >
+      <div className="relative mb-8 overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 pb-4 pt-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
         <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)] opacity-40 blur-3xl" />
 
         <h2 className="mb-1 text-sm font-semibold text-slate-50">
@@ -157,19 +157,19 @@ export default function NeighborhoodEngine({
 
         <div className="space-y-3 text-xs text-slate-100">
           <div>
-            <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
               Area focus
             </label>
             <input
               value={areaFocus}
               onChange={(e) => setAreaFocus(e.target.value)}
               placeholder="92130, Carmel Valley, or Eastside Costa Mesa…"
-              className="avillo-input w-full"
+              className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-100/70 focus:ring-1 focus:ring-amber-100/70"
             />
           </div>
 
           <div>
-            <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
               Context / client notes (optional)
             </label>
             <textarea
@@ -177,13 +177,13 @@ export default function NeighborhoodEngine({
               onChange={(e) => setContextNotes(e.target.value)}
               rows={3}
               placeholder="Buyer profile, price range, commute needs, lifestyle preferences…"
-              className="avillo-textarea w-full"
+              className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-100/70 focus:ring-1 focus:ring-amber-100/70"
             />
           </div>
 
-          <p className="mt-2 text-[11px] text-slate-300/90">
-            AI predictions rely on typical local patterns. Always verify schools,
-            zoning, and crime sources before sending to clients.
+          <p className="mt-1 text-[11px] text-slate-300/90">
+            AI predictions rely on typical local patterns. Always verify
+            schools, zoning, and crime sources before sending to clients.
           </p>
         </div>
 
@@ -207,4 +207,81 @@ export default function NeighborhoodEngine({
       />
     </section>
   );
+}
+
+/* ------------------------------------
+ * HISTORY HELPERS (save + restore)
+ * -----------------------------------*/
+
+type NeighborhoodBrief = {
+  area?: string;
+  context?: string;
+};
+
+function formatNeighborhoodBriefForHistory(brief: NeighborhoodBrief): string {
+  return [
+    brief.area && `Area: ${brief.area}`,
+    brief.context && `Context: ${brief.context}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseNeighborhoodBriefFromHistory(raw: string): NeighborhoodBrief {
+  const brief: NeighborhoodBrief = {};
+  if (!raw) return brief;
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let sawLabeled = false;
+
+  for (const line of lines) {
+    const [labelPart, ...rest] = line.split(":");
+
+    // No label (no ":" in the line)
+    if (!rest.length) {
+      // If we've already seen *any* labeled line, treat this as extra context.
+      if (sawLabeled) {
+        brief.context = (brief.context ? `${brief.context}\n` : "") + line;
+      }
+      continue;
+    }
+
+    const value = rest.join(":").trim();
+    const key = labelPart.toLowerCase().replace(/[^a-z]/g, "");
+
+    switch (key) {
+      case "area":
+      case "areafocus":
+      case "location":
+        brief.area = value;
+        sawLabeled = true;
+        break;
+      case "context":
+      case "notes":
+      case "clientnotes":
+        brief.context = value;
+        sawLabeled = true;
+        break;
+      default:
+        // Unknown label – treat as extra context as well
+        brief.context = (brief.context ? `${brief.context}\n` : "") + value;
+        sawLabeled = true;
+        break;
+    }
+  }
+
+  // If we never saw a labeled line, fall back:
+  // first line => area, rest => context
+  if (!sawLabeled && lines.length > 0) {
+    brief.area = lines[0];
+    if (lines.length > 1) {
+      brief.context = lines.slice(1).join("\n");
+    }
+  }
+
+  return brief;
 }

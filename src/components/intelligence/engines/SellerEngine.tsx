@@ -79,29 +79,29 @@ export default function SellerEngine({
     if (!restoreRequest) return;
     if (restoreRequest.engine !== "seller") return;
 
-    const raw = restoreRequest.prompt.trim();
+    const raw = (restoreRequest.prompt || "").trim();
     if (!raw) return;
 
-    // Pick a reasonable active tab based on the text
-    if (/objection|pushback|fee|commission|we want|not ready/i.test(raw)) {
+    const brief = parseSellerBriefFromHistory(raw);
+
+    setSellerName(brief.sellerName || "");
+    setAddress(brief.address || "");
+    setContextNotes(brief.context || "");
+    setAgentName(brief.agentName || "");
+    setBrandPositioning(brief.brand || "");
+    setMarketingStyle(brief.style || "");
+    setObjectionType(brief.objectionFocus || "Commission / fee");
+    setObjectionContext(brief.objectionNotes || "");
+
+    if (brief.lastTool) {
+      setActiveTool(brief.lastTool);
+    } else if (brief.objectionFocus || brief.objectionNotes) {
       setActiveTool("objection");
-    } else if (
-      /presentation|deck|pricing|marketing|timeline|story/i.test(raw)
-    ) {
+    } else if (brief.brand || brief.style) {
       setActiveTool("presentation");
     } else {
       setActiveTool("prelisting");
     }
-
-    // Reset + drop the text into context fields
-    setSellerName("");
-    setAddress("");
-    setAgentName("");
-    setBrandPositioning("");
-    setMarketingStyle("");
-    setObjectionType("Commission / fee");
-    setContextNotes(raw);
-    setObjectionContext(raw);
   }, [restoreRequest]);
 
   /* ------------------------------------
@@ -129,7 +129,7 @@ export default function SellerEngine({
     try {
       const body: any = {
         engine: "seller",
-        // we still send the activeTool so the prompt can bias tone,
+        // still send activeTool so the prompt can bias tone,
         // but the engine always returns the full seller pack
         tool: activeTool,
         sellerName,
@@ -179,16 +179,17 @@ export default function SellerEngine({
 
     setSavingOutput(true);
     try {
-      const summaryLines = [
-        sellerName && address ? `${sellerName} — ${address}` : sellerName,
-        contextNotes,
-        brandPositioning && `Brand: ${brandPositioning}`,
-        marketingStyle && `Style: ${marketingStyle}`,
-        objectionType && `Objection focus: ${objectionType}`,
-        `Agent: ${agentName || "Unknown agent"}`,
-      ].filter(Boolean);
-
-      const userInput = summaryLines.join("\n").trim();
+      const userInput = formatSellerBriefForHistory({
+        sellerName,
+        address,
+        context: contextNotes,
+        agentName,
+        brand: brandPositioning,
+        style: marketingStyle,
+        objectionFocus: objectionType,
+        objectionNotes: objectionContext,
+        lastTool: activeTool,
+      });
 
       const res = await fetch("/api/intelligence/save-output", {
         method: "POST",
@@ -231,12 +232,12 @@ export default function SellerEngine({
           Seller Studio
         </h2>
         <p className="mb-3 text-xs text-slate-200/90">
-          Fill out one seller brief. Avillo will generate pre-listing emails,
-          a listing presentation outline, and objection responses from the same
+          Fill out one seller brief. Avillo will generate pre-listing emails, a
+          listing presentation outline, and objection responses from the same
           canvas.
         </p>
 
-        {/* PILL SELECTOR – now just controls which output view is active */}
+        {/* PILL SELECTOR – controls which output view is active */}
         <div className="mb-4 flex flex-col gap-2 text-xs sm:flex-row sm:flex-wrap">
           <SellerToolPill
             label="Pre-listing Emails"
@@ -357,6 +358,7 @@ export default function SellerEngine({
 /* ------------------------------------
  * SMALL COMPONENTS
  * -----------------------------------*/
+
 function SellerToolPill({
   label,
   description,
@@ -405,7 +407,7 @@ function InputField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-100/70 focus:ring-1 focus:ring-amber-100/70"
       />
     </div>
   );
@@ -434,8 +436,183 @@ function TextareaField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows}
-        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+        className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-100/70 focus:ring-1 focus:ring-amber-100/70"
       />
     </div>
   );
+}
+
+/* ------------------------------------
+ * HISTORY HELPERS (save + restore)
+ * -----------------------------------*/
+
+type SellerBrief = {
+  sellerName?: string;
+  address?: string;
+  context?: string;
+  agentName?: string;
+  brand?: string;
+  style?: string;
+  objectionFocus?: string;
+  objectionNotes?: string;
+  lastTool?: SellerToolId;
+};
+
+function formatSellerBriefForHistory(brief: SellerBrief): string {
+  return [
+    brief.sellerName && brief.address
+      ? `Seller: ${brief.sellerName} — ${brief.address}`
+      : brief.sellerName && `Seller: ${brief.sellerName}`,
+    !brief.sellerName && brief.address && `Address: ${brief.address}`,
+    brief.context && `Context: ${brief.context}`,
+    brief.agentName && `Agent: ${brief.agentName}`,
+    brief.brand && `Brand positioning: ${brief.brand}`,
+    brief.style && `Marketing style: ${brief.style}`,
+    brief.objectionFocus && `Objection focus: ${brief.objectionFocus}`,
+    brief.objectionNotes && `Objection notes: ${brief.objectionNotes}`,
+    brief.lastTool && `Tool: ${brief.lastTool}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Parse the saved seller brief string back into fields.
+ * Multi-line values are preserved by treating unlabeled lines
+ * as continuations of the last labeled field.
+ */
+function parseSellerBriefFromHistory(raw: string): SellerBrief {
+  const brief: SellerBrief = {};
+  if (!raw) return brief;
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let currentKey:
+    | "sellerName"
+    | "address"
+    | "context"
+    | "agentName"
+    | "brand"
+    | "style"
+    | "objectionFocus"
+    | "objectionNotes"
+    | null = null;
+
+  const append = (prev: string | undefined, line: string) =>
+    (prev ? `${prev}\n` : "") + line;
+
+  for (const line of lines) {
+    // handle legacy "Name — Address" line without label
+    if (!line.includes(":") && line.includes("—") && !line.startsWith("Tool")) {
+      const [name, addr] = line.split("—");
+      if (name && !brief.sellerName) brief.sellerName = name.trim();
+      if (addr && !brief.address) brief.address = addr.trim();
+      currentKey = "context";
+      continue;
+    }
+
+    if (line.includes(":")) {
+      const [labelPart, ...rest] = line.split(":");
+      const value = rest.join(":").trim();
+      const key = labelPart.toLowerCase().replace(/[^a-z]/g, "");
+
+      switch (key) {
+        case "seller":
+        case "sellername":
+          if (value.includes("—")) {
+            const [name, addr] = value.split("—");
+            brief.sellerName = name.trim();
+            brief.address = addr.trim();
+          } else {
+            brief.sellerName = value;
+          }
+          currentKey = "sellerName";
+          break;
+        case "address":
+        case "property":
+        case "propertyaddress":
+          brief.address = value;
+          currentKey = "address";
+          break;
+        case "context":
+        case "notes":
+        case "contextnotes":
+          brief.context = value;
+          currentKey = "context";
+          break;
+        case "agent":
+        case "yourname":
+          brief.agentName = value;
+          currentKey = "agentName";
+          break;
+        case "brandpositioning":
+        case "brand":
+          brief.brand = value;
+          currentKey = "brand";
+          break;
+        case "marketingstyle":
+        case "style":
+          brief.style = value;
+          currentKey = "style";
+          break;
+        case "objectionfocus":
+        case "objection":
+          brief.objectionFocus = value;
+          currentKey = "objectionFocus";
+          break;
+        case "objectionnotes":
+          brief.objectionNotes = value;
+          currentKey = "objectionNotes";
+          break;
+        case "tool": {
+          const v = value.toLowerCase();
+          if (v.includes("pre")) brief.lastTool = "prelisting";
+          else if (v.includes("present")) brief.lastTool = "presentation";
+          else if (v.includes("object")) brief.lastTool = "objection";
+          currentKey = null; // stop attaching to Tool
+          break;
+        }
+        default:
+          brief.context = append(brief.context, value);
+          currentKey = "context";
+      }
+    } else {
+      // unlabeled continuation line
+      if (!currentKey) currentKey = "context";
+
+      switch (currentKey) {
+        case "sellerName":
+          brief.sellerName = append(brief.sellerName, line);
+          break;
+        case "address":
+          brief.address = append(brief.address, line);
+          break;
+        case "agentName":
+          brief.agentName = append(brief.agentName, line);
+          break;
+        case "brand":
+          brief.brand = append(brief.brand, line);
+          break;
+        case "style":
+          brief.style = append(brief.style, line);
+          break;
+        case "objectionFocus":
+          brief.objectionFocus = append(brief.objectionFocus, line);
+          break;
+        case "objectionNotes":
+          brief.objectionNotes = append(brief.objectionNotes, line);
+          break;
+        case "context":
+        default:
+          brief.context = append(brief.context, line);
+          currentKey = "context";
+          break;
+      }
+    }
+  }
+
+  return brief;
 }

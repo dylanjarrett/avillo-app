@@ -14,7 +14,6 @@ interface SaveOutputBody {
   contextId?: string | null;
 }
 
-// tiny helper so TS is happy about session.user.id
 interface SessionUser {
   id: string;
   email?: string | null;
@@ -22,67 +21,73 @@ interface SessionUser {
   image?: string | null;
 }
 
-// map UI engine slug -> Prisma enum value
+// Map UI engine -> prisma enum
 function mapEngineToEnum(engine: EngineWire): "LISTING" | "SELLER" | "BUYER" | "NEIGHBORHOOD" {
   switch (engine) {
-    case "listing":
-      return "LISTING";
-    case "seller":
-      return "SELLER";
-    case "buyer":
-      return "BUYER";
-    case "neighborhood":
-      return "NEIGHBORHOOD";
-    default:
-      return "LISTING";
+    case "listing": return "LISTING";
+    case "seller": return "SELLER";
+    case "buyer": return "BUYER";
+    case "neighborhood": return "NEIGHBORHOOD";
+    default: return "LISTING";
   }
 }
 
-// nice label for history / CRM
 function engineLabel(engine: EngineWire): string {
   switch (engine) {
-    case "listing":
-      return "Listing Engine";
-    case "seller":
-      return "Seller Studio";
-    case "buyer":
-      return "Buyer Studio";
-    case "neighborhood":
-      return "Neighborhood Engine";
-    default:
-      return "Engine";
+    case "listing": return "Listing Engine";
+    case "seller": return "Seller Studio";
+    case "buyer": return "Buyer Studio";
+    case "neighborhood": return "Neighborhood Engine";
+    default: return "Engine";
   }
 }
 
-// quick preview of the output blob for history cards
+// Remove undefined/null keys recursively to prevent prisma JSON errors
+function deepClean(obj: any): any {
+  if (obj === null || obj === undefined) return undefined;
+
+  if (Array.isArray(obj)) {
+    const cleaned = obj.map((v) => deepClean(v)).filter((v) => v !== undefined);
+    return cleaned.length > 0 ? cleaned : undefined;
+  }
+
+  if (typeof obj === "object") {
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      const v = deepClean(value);
+      if (v !== undefined) cleaned[key] = v;
+    }
+    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+  }
+
+  return obj;
+}
+
+// Extract a preview text
 function derivePreview(engine: EngineWire, payload: unknown): string {
   if (!payload) return "";
 
   if (typeof payload === "string") return payload.slice(0, 220);
 
-  // try to match your listing pack structure
   if (engine === "listing" && typeof payload === "object" && payload !== null) {
     const maybe: any = payload;
     const long =
-      (maybe.listing?.long as string | undefined) ||
-      (maybe.longMlsDescription as string | undefined) ||
-      (maybe.long_mls_description as string | undefined);
-
-    if (long) return long.slice(0, 220);
+      maybe?.listing?.long ||
+      maybe?.longMlsDescription ||
+      maybe?.long_mls_description;
+    if (long && typeof long === "string") return long.slice(0, 220);
   }
 
   if (typeof payload === "object" && payload !== null) {
     const anyPayload: any = payload;
-    const firstText =
+
+    const first =
       anyPayload.summary ||
       anyPayload.description ||
       anyPayload.overview ||
-      anyPayload.body ||
-      "";
+      anyPayload.body;
 
-    if (typeof firstText === "string" && firstText.length > 0) {
-      return firstText.slice(0, 220);
-    }
+    if (typeof first === "string") return first.slice(0, 220);
 
     try {
       return JSON.stringify(payload).slice(0, 220);
@@ -107,36 +112,27 @@ export async function POST(req: Request) {
     try {
       body = (await req.json()) as SaveOutputBody;
     } catch {
-      return NextResponse.json(
-        { error: "Invalid JSON body" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
     const { engine, userInput, outputs, contextType, contextId } = body;
 
-    const allowedEngines: EngineWire[] = [
-      "listing",
-      "seller",
-      "buyer",
-      "neighborhood",
-    ];
+    const allowedEngines: EngineWire[] = ["listing", "seller", "buyer", "neighborhood"];
     if (!engine || !allowedEngines.includes(engine)) {
-      return NextResponse.json(
-        { error: "Invalid engine type" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid engine type" }, { status: 400 });
     }
 
-    // ---- normalize context ----
+    // ---------------------------------------
+    // ★ DEEP CLEAN OUTPUT PAYLOAD (critical)
+    // ---------------------------------------
+    const cleanedPayload = deepClean(outputs) ?? {};
+
+    // Normalize context
     let listingId: string | null = null;
     let contactId: string | null = null;
 
-    if (contextType === "listing" && contextId) {
-      listingId = contextId;
-    } else if (contextType === "contact" && contextId) {
-      contactId = contextId;
-    }
+    if (contextType === "listing" && contextId) listingId = contextId;
+    else if (contextType === "contact" && contextId) contactId = contextId;
 
     const engineEnum = mapEngineToEnum(engine);
 
@@ -145,13 +141,13 @@ export async function POST(req: Request) {
         ? userInput.trim().slice(0, 240)
         : null;
 
-    const preview = derivePreview(engine, outputs);
+    const preview = derivePreview(engine, cleanedPayload);
 
-    // store the run
+    // Save record
     const created = await prisma.intelligenceOutput.create({
       data: {
         userId,
-        engine: engineEnum as any, // keep TS simple
+        engine: engineEnum,
         listingId,
         contactId,
         engineInput: {
@@ -160,7 +156,7 @@ export async function POST(req: Request) {
           contextId: contextId ?? null,
         },
         inputSummary,
-        payload: outputs as any,
+        payload: cleanedPayload,
         preview: preview || null,
       },
     });
@@ -175,9 +171,6 @@ export async function POST(req: Request) {
     );
   } catch (err) {
     console.error("Intelligence save-output error", err);
-    return NextResponse.json(
-      { error: "Failed to save output" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to save output" }, { status: 500 });
   }
 }
