@@ -146,9 +146,10 @@ export default function OutputHistory({
             <h3 className="mt-1 text-sm font-semibold text-slate-50">
               Click a card to reload its prompt
             </h3>
+
             <p className="mt-1 text-[11px] text-slate-300/90">
               Every time you hit “Save Output”, Avillo logs the engine, the
-              original input, and any attached listing or contact.
+              original input, and any attached listing or contact. History auto-clears after 60 days.
             </p>
           </div>
 
