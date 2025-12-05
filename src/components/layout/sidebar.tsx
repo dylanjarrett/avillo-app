@@ -8,6 +8,7 @@ const TOOL_ITEMS = [
   { href: "/intelligence", label: "Intelligence" },
   { href: "/crm", label: "CRM" },
   { href: "/listings", label: "My Listings" },
+  { href: "/automations", label: "Automations" },  
 ];
 
 const ACCOUNT_ITEMS = [
@@ -92,21 +93,21 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   return (
     <>
       {/* Desktop Sidebar */}
-<aside className="hidden lg:block w-64 border-r border-[#1d2940]/70">
-  <div
-    className="
-      fixed
-      left-0
-      top-20                 /* adjust if needed to sit below header */
-      w-64
-      h-[calc(100vh-5rem)]   /* full height minus header */
-      bg-[#050b16]/80
-      backdrop-blur-xl
-    "
-  >
-    <SidebarInner />
-  </div>
-</aside>
+      <aside className="hidden lg:block w-64 border-r border-[#1d2940]/70">
+        <div
+          className="
+            fixed
+            left-0
+            top-20
+            w-64
+            h-[calc(100vh-5rem)]
+            bg-[#050b16]/80
+            backdrop-blur-xl
+          "
+        >
+          <SidebarInner />
+        </div>
+      </aside>
 
       {/* Mobile slide-in drawer */}
       <div

@@ -8,6 +8,7 @@ import { compare } from "bcryptjs";
 import crypto from "crypto";
 
 import { prisma } from "@/lib/prisma";
+import { getServerSession } from "next-auth"; 
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as any,
@@ -95,3 +96,17 @@ export const authOptions: NextAuthOptions = {
   },
   secret: process.env.NEXTAUTH_SECRET,
 };
+
+export async function getUser() {
+  const session = await getServerSession(authOptions);
+
+  const sessionUser = session?.user as { id?: string } | undefined;
+
+  if (!sessionUser?.id) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: sessionUser.id },
+  });
+
+  return user;
+}

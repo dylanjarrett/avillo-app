@@ -329,3 +329,47 @@ model CRMRecord {
 
   user User @relation(fields: [userId], references: [id])
 }
+
+
+// ---------------------------
+// AUTOMATION
+// ---------------------------
+
+model Automation {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  trigger     String   // e.g. "NEW_CONTACT", "STAGE_CHANGE", etc.
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relation to step group
+  steps       AutomationStepGroup?
+  runs        AutomationRun[]
+
+  @@index([userId])
+}
+
+model AutomationStepGroup {
+  id            String   @id @default(cuid())
+  automationId  String   @unique
+  steps         Json     // array of step objects
+
+  automation    Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+}
+
+model AutomationRun {
+  id            String   @id @default(cuid())
+  automationId  String
+  contactId     String?
+  listingId     String?
+  
+  status        String    // "SUCCESS" | "FAILED"
+  message       String?
+  executedAt    DateTime  @default(now())
+
+  automation    Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+}
