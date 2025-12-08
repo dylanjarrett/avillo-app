@@ -2,19 +2,25 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
-import StepModal from "@/components/autopilot/StepModal";
+import StepModal, { StepType } from "@/components/autopilot/StepModal";
 import { FilterPill } from "@/components/ui/filter-pill";
 
 /* ------------------------------------
  * Types
  * -----------------------------------*/
 
-type StepType = "SMS" | "EMAIL" | "TASK" | "WAIT";
+type BranchStep = {
+  id: string;
+  type: StepType; // we won't nest IF inside IF in the UI, but shape allows it
+  config: any;
+};
 
 type AutomationStep = {
   id: string;
   type: StepType;
   config: any;
+  thenSteps?: BranchStep[];
+  elseSteps?: BranchStep[];
 };
 
 type AutomationWorkflow = {
@@ -96,7 +102,7 @@ const RECOMMENDED_TEMPLATES: {
         {
           id: crypto.randomUUID(),
           type: "WAIT",
-          config: { hours: 4 },
+          config: { hours: 4, amount: 4, unit: "hours" },
         },
         {
           id: crypto.randomUUID(),
@@ -110,7 +116,7 @@ const RECOMMENDED_TEMPLATES: {
         {
           id: crypto.randomUUID(),
           type: "WAIT",
-          config: { hours: 24 },
+          config: { hours: 24, amount: 24, unit: "hours" },
         },
         {
           id: crypto.randomUUID(),
@@ -147,7 +153,7 @@ const RECOMMENDED_TEMPLATES: {
         {
           id: crypto.randomUUID(),
           type: "WAIT",
-          config: { hours: 72 },
+          config: { hours: 72, amount: 72, unit: "hours" },
         },
         {
           id: crypto.randomUUID(),
@@ -185,7 +191,7 @@ const RECOMMENDED_TEMPLATES: {
         {
           id: crypto.randomUUID(),
           type: "WAIT",
-          config: { hours: 48 },
+          config: { hours: 48, amount: 48, unit: "hours" },
         },
         {
           id: crypto.randomUUID(),
@@ -312,14 +318,33 @@ export default function AutomationPage() {
     }
   }
 
-  function handleStepSave(config: any) {
+  function handleStepSave(
+    config: any,
+    thenSteps?: BranchStep[],
+    elseSteps?: BranchStep[]
+  ) {
     if (!activeWorkflow || !stepModalType) return;
 
     // If editing an existing step, update it
     if (editingStep) {
-      const updatedSteps = activeWorkflow.steps.map((s) =>
-        s.id === editingStep.id ? { ...s, config } : s
-      );
+      const updatedSteps = activeWorkflow.steps.map((s) => {
+        if (s.id !== editingStep.id) return s;
+
+        if (editingStep.type === "IF") {
+          return {
+            ...s,
+            config,
+            thenSteps: thenSteps ?? s.thenSteps ?? [],
+            elseSteps: elseSteps ?? s.elseSteps ?? [],
+          };
+        }
+
+        return {
+          ...s,
+          config,
+        };
+      });
+
       setActiveWorkflow({
         ...activeWorkflow,
         steps: updatedSteps,
@@ -331,6 +356,12 @@ export default function AutomationPage() {
         type: stepModalType,
         config,
       };
+
+      if (stepModalType === "IF") {
+        newStep.thenSteps = thenSteps ?? [];
+        newStep.elseSteps = elseSteps ?? [];
+      }
+
       setActiveWorkflow({
         ...activeWorkflow,
         steps: [...(activeWorkflow.steps ?? []), newStep],
@@ -389,6 +420,8 @@ export default function AutomationPage() {
               id: s.id ?? crypto.randomUUID(),
               type: s.type as StepType,
               config: s.config ?? {},
+              thenSteps: s.thenSteps ?? [],
+              elseSteps: s.elseSteps ?? [],
             })),
             createdAt: w.createdAt,
             updatedAt: w.updatedAt,
@@ -511,6 +544,8 @@ export default function AutomationPage() {
           id: s.id ?? crypto.randomUUID(),
           type: s.type as StepType,
           config: s.config ?? {},
+          thenSteps: s.thenSteps ?? [],
+          elseSteps: s.elseSteps ?? [],
         })),
         createdAt: saved.createdAt,
         updatedAt: saved.updatedAt,
@@ -529,8 +564,7 @@ export default function AutomationPage() {
     } catch (err: any) {
       console.error("Save workflow error", err);
       setError(
-        err?.message ||
-          "We couldn't save this workflow. Try again in a moment."
+        err?.message || "We couldn't save this workflow. Try again in a moment."
       );
     } finally {
       setSaving(false);
@@ -989,7 +1023,7 @@ export default function AutomationPage() {
                       >
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-[11px] font-semibold text-slate-50">
-                            Step {i + 1}: {s.type}
+                            Step {i + 1}: {s.type === "IF" ? "IF / Branch" : s.type}
                           </p>
                           <button
                             type="button"
@@ -1008,6 +1042,16 @@ export default function AutomationPage() {
                           {s.type === "TASK" && s.config?.text}
                           {s.type === "WAIT" &&
                             `Wait ${s.config?.hours ?? "?"} hours`}
+                          {s.type === "IF" &&
+                            `If ${s.config?.field ?? "field"} ${
+                              s.config?.operator ?? "is"
+                            } ${s.config?.value ?? ""} (then ${
+                              s.thenSteps?.length ?? 0
+                            } step${
+                              (s.thenSteps?.length ?? 0) === 1 ? "" : "s"
+                            }, else ${s.elseSteps?.length ?? 0} step${
+                              (s.elseSteps?.length ?? 0) === 1 ? "" : "s"
+                            })`}
                         </p>
                       </button>
                     ))}
@@ -1015,7 +1059,7 @@ export default function AutomationPage() {
 
                   {/* Add step buttons */}
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {(["SMS", "EMAIL", "TASK", "WAIT"] as StepType[]).map(
+                    {(["SMS", "EMAIL", "TASK", "WAIT", "IF"] as StepType[]).map(
                       (t) => (
                         <button
                           key={t}
@@ -1023,7 +1067,7 @@ export default function AutomationPage() {
                           onClick={() => openStepModal(t)}
                           className="rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50"
                         >
-                          + {t}
+                          + {t === "IF" ? "IF / Branch" : t}
                         </button>
                       )
                     )}
@@ -1093,6 +1137,12 @@ export default function AutomationPage() {
       <StepModal
         type={stepModalType}
         initialConfig={editingStep?.config ?? null}
+        initialThen={
+          editingStep?.type === "IF" ? editingStep.thenSteps ?? [] : null
+        }
+        initialElse={
+          editingStep?.type === "IF" ? editingStep.elseSteps ?? [] : null
+        }
         onClose={() => {
           setStepModalType(null);
           setEditingStep(null);

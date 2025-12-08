@@ -6,13 +6,13 @@ export async function POST(req: Request) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await req.json();
-  const { trigger, contactId, listingId } = body;
+  const { trigger, contactId, listingId, payload } = await req.json();
 
   await processTriggers(trigger, {
     userId: user.id,
     contactId,
     listingId,
+    payload,
   });
 
   return NextResponse.json({ success: true });

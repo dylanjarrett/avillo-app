@@ -1,44 +1,136 @@
-// src/lib/automations/types.ts
-
+// ---------------------------------------------
+// TRIGGERS (matches your Prisma + API layer)
+// ---------------------------------------------
 export type AutomationTrigger =
   | "NEW_CONTACT"
-  | "STAGE_CHANGE"
+  | "LEAD_STAGE_CHANGE"
   | "NEW_LISTING"
   | "LISTING_STATUS_CHANGE"
   | "LISTING_SELLER_ASSIGNED"
   | "LISTING_BUYER_ASSIGNED"
   | "LISTING_SELLER_UNLINKED"
-  | "LISTING_BUYER_UNLINKED";
+  | "LISTING_BUYER_UNLINKED"
+  | "TAG_ADDED"
+  | "MANUAL_RUN";
 
+// ---------------------------------------------
+// EXECUTION CONTEXT (runtime info)
+// ---------------------------------------------
 export type AutomationContext = {
   userId: string;
   contactId?: string;
   listingId?: string;
+
+  /** Enables field matching for conditional logic */
+  payload?: Record<string, any>;
 };
 
+// ---------------------------------------------
+// CONDITION CONFIG (HubSpot-style IF logic)
+// ---------------------------------------------
+export type ConditionOperator =
+  | "equals"
+  | "not_equals"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "not_contains";
+
+export type ConditionConfig = {
+  /** Field to check (supports contact.*, listing.*, payload.*) */
+  field: string;
+
+  /** equals, contains, >, <, etc. */
+  operator: ConditionOperator;
+
+  /** Compare value */
+  value: any;
+};
+
+// ---------------------------------------------
+// STEP TYPES
+// ---------------------------------------------
+
+export type StepType =
+  | "SEND_SMS"
+  | "SEND_EMAIL"
+  | "TASK"
+  | "WAIT"
+  | "UPDATE_CONTACT_STAGE"
+  | "IF";
+
+// SMS STEP
+export type AutomationStepSMS = {
+  id: string;
+  type: "SEND_SMS";
+  config: {
+    text: string;
+  };
+};
+
+// EMAIL STEP
+export type AutomationStepEmail = {
+  id: string;
+  type: "SEND_EMAIL";
+  config: {
+    subject: string;
+    body: string;
+  };
+};
+
+// TASK STEP
+export type AutomationStepTask = {
+  id: string;
+  type: "TASK";
+  config: {
+    text: string;
+  };
+};
+
+// WAIT STEP (already converted to hours in frontend)
+export type AutomationStepWait = {
+  id: string;
+  type: "WAIT";
+  config: {
+    hours: number;
+    amount?: number;
+    unit?: "hours" | "days" | "weeks" | "months";
+  };
+};
+
+// STAGE UPDATE
+export type AutomationStepUpdateStage = {
+  id: string;
+  type: "UPDATE_CONTACT_STAGE";
+  config: {
+    stage: "new" | "warm" | "hot" | "past";
+  };
+};
+
+// IF / THEN / ELSE branching
+export type AutomationStepIF = {
+  id: string;
+  type: "IF";
+  config: {
+    condition: ConditionConfig;
+
+    /** Steps to run if condition is true */
+    then: AutomationStep[];
+
+    /** Steps to run if condition is false */
+    else?: AutomationStep[];
+  };
+};
+
+// ---------------------------------------------
+// UNIFIED STEP TYPE
+// ---------------------------------------------
 export type AutomationStep =
-  | {
-      type: "SEND_SMS";
-      message: string;
-    }
-  | {
-      type: "SEND_EMAIL";
-      subject: string;
-      body: string;
-    }
-  | {
-      type: "UPDATE_CONTACT_STAGE";
-      stage: "new" | "warm" | "hot" | "past";
-    }
-  | {
-      type: "DELAY";
-      milliseconds: number;
-    }
-  | {
-      type: "WAIT_FOR_STAGE";
-      stage: "new" | "warm" | "hot" | "past";
-    }
-  | {
-      type: "CREATE_CRM_NOTE";
-      text: string;
-    };
+  | AutomationStepSMS
+  | AutomationStepEmail
+  | AutomationStepTask
+  | AutomationStepWait
+  | AutomationStepUpdateStage
+  | AutomationStepIF;

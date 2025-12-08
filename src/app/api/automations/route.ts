@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { getUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-// -----------------------------------------------------
-// GET → List all automations for logged-in user
-// -----------------------------------------------------
+// ----------------------------------------------
+// GET → all automations for logged-in user
+// ----------------------------------------------
 export async function GET() {
   const user = await getUser();
   if (!user) return NextResponse.json([], { status: 200 });
@@ -20,22 +20,45 @@ export async function GET() {
   return NextResponse.json(automations);
 }
 
-// -----------------------------------------------------
-// POST → Create a new automation
-// -----------------------------------------------------
+// ----------------------------------------------
+// POST → create a new automation
+// ----------------------------------------------
 export async function POST(req: Request) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { name, trigger, active = true, steps = [] } = body;
+  const {
+    name,
+    description,
+    trigger,
+    triggerConfig = {},
+    entryConditions = {},
+    exitConditions = {},
+    schedule = {},
+    active = true,
+    status = "draft",
+    reEnroll = true,
+    timezone,
+    folder,
+    steps = [],
+  } = body;
 
   const automation = await prisma.automation.create({
     data: {
       userId: user.id,
       name,
+      description,
       trigger,
+      triggerConfig,
+      entryConditions,
+      exitConditions,
+      schedule,
+      folder,
       active,
+      status,
+      reEnroll,
+      timezone,
     },
   });
 

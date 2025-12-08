@@ -2,47 +2,64 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUser } from "@/lib/auth";
 
-// -----------------------------------------------------
-// GET → Fetch a single automation
-// -----------------------------------------------------
-export async function GET(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+// -------------------------------
+// GET: Single automation with steps + metadata
+// -------------------------------
+export async function GET(_: Request, { params }: { params: { id: string } }) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const automation = await prisma.automation.findFirst({
     where: { id: params.id, userId: user.id },
-    include: { steps: true },
+    include: {
+      steps: true,
+      runs: { take: 20, orderBy: { executedAt: "desc" }, include: { steps: true } },
+    },
   });
 
-  if (!automation) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
+  if (!automation) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(automation);
 }
 
-// -----------------------------------------------------
-// PUT → Update automation + its step group
-// -----------------------------------------------------
-export async function PUT(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+// -------------------------------
+// PUT: Update automation + its step group
+// -------------------------------
+export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { name, trigger, active, steps } = body;
+  const {
+    name,
+    description,
+    trigger,
+    triggerConfig,
+    entryConditions,
+    exitConditions,
+    schedule,
+    active,
+    status,
+    reEnroll,
+    timezone,
+    folder,
+    steps,
+  } = body;
 
   const updated = await prisma.automation.update({
     where: { id: params.id },
     data: {
       name,
+      description,
       trigger,
+      triggerConfig,
+      entryConditions,
+      exitConditions,
+      schedule,
+      folder,
       active,
+      status,
+      reEnroll,
+      timezone,
       updatedAt: new Date(),
     },
   });
@@ -58,13 +75,10 @@ export async function PUT(
   return NextResponse.json(updated);
 }
 
-// -----------------------------------------------------
-// DELETE → Remove automation + cascade steps/runs
-// -----------------------------------------------------
-export async function DELETE(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+// -------------------------------
+// DELETE: Cascade delete automation + logs
+// -------------------------------
+export async function DELETE(_: Request, { params }: { params: { id: string } }) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
