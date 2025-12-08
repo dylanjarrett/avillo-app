@@ -6,9 +6,9 @@ import { usePathname } from "next/navigation";
 const TOOL_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/intelligence", label: "Intelligence" },
-  { href: "/crm", label: "CRM" },
-  { href: "/listings", label: "My Listings" },
-  { href: "/automations", label: "Automations" },  
+  { href: "/people", label: "People" },
+  { href: "/listings", label: "Listings" },
+  { href: "/autopilot", label: "Autopilot" },  
 ];
 
 const ACCOUNT_ITEMS = [

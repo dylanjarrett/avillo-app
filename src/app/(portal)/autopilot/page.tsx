@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
-import StepModal from "@/components/automations/StepModal";
+import StepModal from "@/components/autopilot/StepModal";
+import { FilterPill } from "@/components/ui/filter-pill";
 
 /* ------------------------------------
  * Types
@@ -200,6 +201,29 @@ const RECOMMENDED_TEMPLATES: {
 ];
 
 /* ------------------------------------
+ * Helpers
+ * -----------------------------------*/
+
+function triggerPlainSentence(trigger: string | null): string | null {
+  switch (trigger) {
+    case "NEW_CONTACT":
+      return "When I add a new contact, I want this workflow to run.";
+    case "LEAD_STAGE_CHANGE":
+      return "When I move a contact to a new stage (new, warm, hot), I want this workflow to run.";
+    case "NEW_LISTING":
+      return "When I add a new listing, I want this workflow to run.";
+    case "OPEN_HOUSE":
+      return "When I log an open house, I want this workflow to run.";
+    case "TAG_ADDED":
+      return "When I add a specific tag to a contact, I want this workflow to run.";
+    case "MANUAL_RUN":
+      return "When I choose a contact or listing and hit “Run workflow”, I want this workflow to run.";
+    default:
+      return null;
+  }
+}
+
+/* ------------------------------------
  * Page
  * -----------------------------------*/
 
@@ -208,7 +232,8 @@ export default function AutomationPage() {
   const [search, setSearch] = useState("");
   const [workflows, setWorkflows] = useState<AutomationWorkflow[]>([]);
   const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
-  const [activeWorkflow, setActiveWorkflow] = useState<AutomationWorkflow | null>(null);
+  const [activeWorkflow, setActiveWorkflow] =
+    useState<AutomationWorkflow | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -216,6 +241,17 @@ export default function AutomationPage() {
 
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
   const [stepModalType, setStepModalType] = useState<StepType | null>(null);
+  const [editingStep, setEditingStep] = useState<AutomationStep | null>(null);
+
+  // ---------- Derived counts for workflow filter pills ----------
+  const totalWorkflows = workflows.length;
+  const activeWorkflowsCount = workflows.filter((w) => w.active).length;
+  const pausedWorkflowsCount = workflows.filter((w) => !w.active).length;
+
+  // ---------- Builder completeness (for the mini progress rail) ----------
+  const builderHasName = !!activeWorkflow?.name.trim();
+  const builderHasTrigger = !!activeWorkflow?.trigger;
+  const builderHasSteps = (activeWorkflow?.steps.length ?? 0) > 0;
 
   // ------- Helpers -------
 
@@ -266,23 +302,51 @@ export default function AutomationPage() {
     openWorkspaceForSelection();
   }
 
-  function openStepModal(type: StepType) {
-    setStepModalType(type);
+  function openStepModal(type: StepType, step?: AutomationStep) {
+    if (step) {
+      setEditingStep(step);
+      setStepModalType(step.type);
+    } else {
+      setEditingStep(null);
+      setStepModalType(type);
+    }
   }
 
   function handleStepSave(config: any) {
-    if (!activeWorkflow) return;
-    const newStep: AutomationStep = {
-      id: crypto.randomUUID(),
-      type: stepModalType as StepType,
-      config,
-    };
-    const updated: AutomationWorkflow = {
-      ...activeWorkflow,
-      steps: [...(activeWorkflow.steps ?? []), newStep],
-    };
-    setActiveWorkflow(updated);
+    if (!activeWorkflow || !stepModalType) return;
+
+    // If editing an existing step, update it
+    if (editingStep) {
+      const updatedSteps = activeWorkflow.steps.map((s) =>
+        s.id === editingStep.id ? { ...s, config } : s
+      );
+      setActiveWorkflow({
+        ...activeWorkflow,
+        steps: updatedSteps,
+      });
+    } else {
+      // Otherwise, append a new step
+      const newStep: AutomationStep = {
+        id: crypto.randomUUID(),
+        type: stepModalType,
+        config,
+      };
+      setActiveWorkflow({
+        ...activeWorkflow,
+        steps: [...(activeWorkflow.steps ?? []), newStep],
+      });
+    }
+
     setStepModalType(null);
+    setEditingStep(null);
+  }
+
+  function removeStep(stepId: string) {
+    if (!activeWorkflow) return;
+    setActiveWorkflow({
+      ...activeWorkflow,
+      steps: activeWorkflow.steps.filter((s) => s.id !== stepId),
+    });
   }
 
   function applyTemplate(templateId: string) {
@@ -304,7 +368,7 @@ export default function AutomationPage() {
         setLoading(true);
         setError(null);
 
-        const res = await fetch("/api/automation/workflows").catch(() => null);
+        const res = await fetch("/api/automation").catch(() => null);
         if (!res || !res.ok) {
           // API may not exist yet; keep local-only mode
           if (!cancelled) {
@@ -341,7 +405,7 @@ export default function AutomationPage() {
         if (!cancelled) {
           setError(
             err?.message ||
-              "We couldn’t load your workflows yet. You can still design new ones."
+              "We couldn't load your workflows yet. You can still design new ones."
           );
           setWorkflows([]);
         }
@@ -371,8 +435,7 @@ export default function AutomationPage() {
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter((w) => {
-        const tLabel =
-          TRIGGERS.find((t) => t.id === w.trigger)?.label ?? "";
+        const tLabel = TRIGGERS.find((t) => t.id === w.trigger)?.label ?? "";
         return (
           w.name.toLowerCase().includes(q) ||
           w.description.toLowerCase().includes(q) ||
@@ -414,7 +477,7 @@ export default function AutomationPage() {
       setSaving(true);
       setError(null);
 
-      const res = await fetch("/api/automation/workflows", {
+      const res = await fetch("/api/automation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -431,7 +494,7 @@ export default function AutomationPage() {
         const data = await res?.json().catch(() => null);
         throw new Error(
           data?.error ||
-            "We couldn’t save this workflow yet. Double-check your connection and try again."
+            "We couldn't save this workflow yet. Double-check your connection and try again."
         );
       }
 
@@ -467,7 +530,7 @@ export default function AutomationPage() {
       console.error("Save workflow error", err);
       setError(
         err?.message ||
-          "We couldn’t save this workflow. Try again in a moment."
+          "We couldn't save this workflow. Try again in a moment."
       );
     } finally {
       setSaving(false);
@@ -494,7 +557,7 @@ export default function AutomationPage() {
       setSaving(true);
       setError(null);
 
-      const res = await fetch("/api/automation/workflows", {
+      const res = await fetch("/api/automation", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: activeWorkflow.id }),
@@ -504,7 +567,7 @@ export default function AutomationPage() {
         const data = await res?.json().catch(() => null);
         throw new Error(
           data?.error ||
-            "We couldn’t delete this workflow. Try again in a moment."
+            "We couldn't delete this workflow. Try again in a moment."
         );
       }
 
@@ -516,7 +579,7 @@ export default function AutomationPage() {
       console.error("Delete workflow error", err);
       setError(
         err?.message ||
-          "We couldn’t delete this workflow. Try again in a moment."
+          "We couldn't delete this workflow. Try again in a moment."
       );
     } finally {
       setSaving(false);
@@ -527,12 +590,17 @@ export default function AutomationPage() {
    * Render
    * -----------------------------------*/
 
+  const triggerSentence =
+    activeWorkflow?.trigger ?? null
+      ? triggerPlainSentence(activeWorkflow?.trigger ?? null)
+      : null;
+
   return (
     <div className="space-y-12">
       <PageHeader
-        eyebrow="Automation"
-        title="Playbooks for follow-up & workflows"
-        subtitle="Automate follow-up, nurturing, and agent workflows with precision — so every lead, client, and past contact gets the right touch at the right time."
+        eyebrow="Autopilot"
+        title="Automate your busy work."
+        subtitle="Let Avillo monitor your leads, clients, and listings — then deliver the right text, email, or task at the perfect moment. No missed opportunities. No manual busywork."
       />
 
       <section className="space-y-5">
@@ -544,8 +612,8 @@ export default function AutomationPage() {
             </p>
             <p className="mt-1 max-w-xl text-xs text-[var(--avillo-cream-soft)]">
               Build simple, powerful automations that connect your CRM and
-              listings to real-world follow-up. Start from templates or craft
-              your own.
+              listings to real-world actions. Start from templates or craft your
+              own — no tech skills needed.
             </p>
           </div>
 
@@ -569,19 +637,22 @@ export default function AutomationPage() {
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="inline-flex flex-wrap gap-2 text-xs">
             <FilterPill
+              label="All"
+              count={totalWorkflows}
+              active={filter === "all"}
+              onClick={() => setFilter("all")}
+            />
+            <FilterPill
               label="Active"
+              count={activeWorkflowsCount}
               active={filter === "active"}
               onClick={() => setFilter("active")}
             />
             <FilterPill
               label="Paused"
+              count={pausedWorkflowsCount}
               active={filter === "paused"}
               onClick={() => setFilter("paused")}
-            />
-            <FilterPill
-              label="All"
-              active={filter === "all"}
-              onClick={() => setFilter("all")}
             />
           </div>
 
@@ -595,8 +666,8 @@ export default function AutomationPage() {
           </div>
         </div>
 
-        {/* Main layout: list + detail */}
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)]">
+        {/* Main layout: list + builder */}
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)]">
           {/* LEFT: WORKFLOW LIST */}
           <div
             className={
@@ -617,7 +688,7 @@ export default function AutomationPage() {
               </p>
             </div>
 
-            <div className="space-y-2 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto lg:pr-1">
+            <div className="space-y-2 lg:max-h-[calc(100vh-140px)] lg:overflow-y-auto lg:pr-1">
               {loading && (
                 <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
                   Loading your workflows…
@@ -626,9 +697,9 @@ export default function AutomationPage() {
 
               {!loading && filteredWorkflows.length === 0 && (
                 <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-                  No workflows yet. Start with{" "}
-                  <span className="font-semibold">“New workflow”</span> or pick a
-                  template on the right.
+                  No workflows yet. Click{" "}
+                  <span className="font-semibold">“New workflow”</span> above or
+                  start from a template on the right.
                 </p>
               )}
 
@@ -696,7 +767,7 @@ export default function AutomationPage() {
             </div>
           </div>
 
-          {/* RIGHT: DETAIL PANEL */}
+          {/* RIGHT: TODDLER-SIMPLE BUILDER */}
           <div
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
@@ -715,7 +786,7 @@ export default function AutomationPage() {
                   </p>
                   <p className="mt-1 max-w-xs">
                     Choose a workflow on the left, or start with a recommended
-                    playbook below.
+                    playbook below. You can rename and tweak anything later.
                   </p>
                 </div>
 
@@ -750,11 +821,11 @@ export default function AutomationPage() {
               </div>
             )}
 
-            {/* Active workflow detail */}
+            {/* Active workflow detail: 4-step guided builder */}
             {activeWorkflow && (
-              <div className="space-y-5 text-xs text-[var(--avillo-cream-soft)]">
+              <div className="flex h-full flex-col gap-4 text-xs text-[var(--avillo-cream-soft)]">
                 {/* Mobile back */}
-                <div className="relative mb-2 lg:hidden">
+                <div className="relative mb-1 lg:hidden">
                   <button
                     type="button"
                     onClick={backToList}
@@ -764,77 +835,95 @@ export default function AutomationPage() {
                     <span>Back</span>
                   </button>
                 </div>
-                <div className="h-3 lg:hidden" />
+                <div className="h-2 lg:hidden" />
 
-                {/* Name + active toggle */}
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="w-full sm:max-w-xs">
-                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                      Workflow name
-                    </label>
-                    <input
-                      value={activeWorkflow.name}
-                      onChange={(e) =>
-                        setActiveWorkflow({
-                          ...activeWorkflow,
-                          name: e.target.value,
-                        })
-                      }
-                      placeholder="Start here — name this workflow"
-                      className="avillo-input w-full text-slate-50"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                      Status
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveWorkflow({
-                          ...activeWorkflow,
-                          active: !activeWorkflow.active,
-                        })
-                      }
-                      className={
-                        "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
-                        (activeWorkflow.active
-                          ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
-                          : "border-slate-500/80 bg-slate-800/60 text-slate-200")
-                      }
-                    >
-                      {activeWorkflow.active ? "Active" : "Paused"}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Description */}
-                <div>
-                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                    Description
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={activeWorkflow.description}
-                    onChange={(e) =>
-                      setActiveWorkflow({
-                        ...activeWorkflow,
-                        description: e.target.value,
-                      })
-                    }
-                    placeholder="Ex: New online lead sequence with SMS, email, and a 24h call reminder."
-                    className="avillo-input w-full resize-none text-slate-50"
-                  />
-                </div>
-
-                {/* Trigger */}
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                    Trigger
+                {/* Mini progress rail */}
+                <div className="rounded-xl border border-slate-700/80 bg-slate-950/70 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                    Simple builder
+                  </p>
+                  <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                    Just follow the steps from left to right. Green = done.
                   </p>
 
-                  <div className="inline-flex flex-wrap gap-2">
+                  <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                    <BuilderStepPill
+                      step={1}
+                      label="Name"
+                      done={builderHasName}
+                    />
+                    <BuilderStepPill
+                      step={2}
+                      label="When it runs"
+                      done={builderHasTrigger}
+                    />
+                    <BuilderStepPill
+                      step={3}
+                      label="What it does"
+                      done={builderHasSteps}
+                    />
+                    <BuilderStepPill
+                      step={4}
+                      label="Turn on"
+                      done={activeWorkflow.active}
+                    />
+                  </div>
+                </div>
+
+                {/* Step 1: Name & description */}
+                <div className="space-y-3 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                  <p className="text-[11px] font-semibold text-amber-100/90">
+                    1. Give this workflow a friendly name
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                        Workflow name
+                      </label>
+                      <input
+                        value={activeWorkflow.name}
+                        onChange={(e) =>
+                          setActiveWorkflow({
+                            ...activeWorkflow,
+                            name: e.target.value,
+                          })
+                        }
+                        placeholder="Ex: New online lead follow-up"
+                        className="avillo-input w-full text-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                        Short description
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={activeWorkflow.description}
+                        onChange={(e) =>
+                          setActiveWorkflow({
+                            ...activeWorkflow,
+                            description: e.target.value,
+                          })
+                        }
+                        placeholder="Ex: Welcomes new website leads and reminds me to call in 24 hours."
+                        className="avillo-input w-full resize-none text-slate-50"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step 2: Trigger */}
+                <div className="space-y-2 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                  <p className="text-[11px] font-semibold text-amber-100/90">
+                    2. When should this run?
+                  </p>
+                  <p className="text-[10px] text-[var(--avillo-cream-muted)]">
+                    Tap the one sentence that sounds most like what you want.
+                    Example: “When I add a new contact, I want this workflow to
+                    run.”
+                  </p>
+
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
                     {TRIGGERS.map((t) => {
                       const active = activeWorkflow.trigger === t.id;
                       return (
@@ -848,89 +937,79 @@ export default function AutomationPage() {
                             })
                           }
                           className={
-                            "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
+                            "rounded-xl border px-3 py-2 text-left text-[10px] transition-colors " +
                             (active
                               ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
-                              : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50")
+                              : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-soft)] hover:border-amber-100/70 hover:text-amber-50")
                           }
                         >
-                          {t.label}
+                          <p className="text-[11px] font-semibold text-slate-50">
+                            {t.label}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-[var(--avillo-cream-muted)]">
+                            {t.desc}
+                          </p>
                         </button>
                       );
                     })}
                   </div>
 
-                  {activeWorkflow.trigger && (
-                    <p className="mt-2 text-[10px] text-[var(--avillo-cream-muted)]">
-                      {
-                        TRIGGERS.find(
-                          (x) => x.id === activeWorkflow.trigger
-                        )?.desc
-                      }
+                  {triggerSentence && (
+                    <p className="mt-2 text-[10px] text-[var(--avillo-cream-soft)]">
+                      <span className="font-semibold">Plain language:</span>{" "}
+                      {triggerSentence}
                     </p>
                   )}
                 </div>
 
-                {/* Recommended templates (inline guidance) */}
-                <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                {/* Step 3: Steps (what it actually does) */}
+                <div className="space-y-3 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                   <p className="text-[11px] font-semibold text-amber-100/90">
-                    Start from a template (optional)
+                    3. What should happen, in order?
                   </p>
-                  <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                    Use a recommended playbook as a starting point, then edit
-                    copy and timing to match your voice.
-                  </p>
-
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {RECOMMENDED_TEMPLATES.map((t) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => applyTemplate(t.id)}
-                        className="rounded-full border border-slate-700/80 bg-slate-950/70 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50"
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Steps */}
-                <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                  <p className="text-[11px] font-semibold text-amber-100/90">
-                    Workflow steps
-                  </p>
-                  <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                    Steps run in order from top to bottom. Mix SMS, emails, wait
-                    delays, and internal tasks.
+                  <p className="text-[10px] text-[var(--avillo-cream-muted)]">
+                    Steps run from top to bottom. Think: text → wait → email →
+                    task. Tap a step to edit it, or remove it with one click.
                   </p>
 
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-1 space-y-2">
                     {activeWorkflow.steps.length === 0 && (
                       <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
-                        No steps yet. Add your first step below — a welcome SMS
-                        is usually the best start.
+                        No steps yet. Start by adding a welcome SMS or email
+                        below.
                       </p>
                     )}
 
                     {activeWorkflow.steps.map((s, i) => (
-                      <div
+                      <button
                         key={s.id}
-                        className="rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2"
+                        type="button"
+                        onClick={() => openStepModal(s.type, s)}
+                        className="w-full rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-left hover:border-amber-100/70 hover:bg-slate-900/90"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-[11px] font-semibold text-slate-50">
                             Step {i + 1}: {s.type}
                           </p>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeStep(s.id);
+                            }}
+                            className="rounded-full border border-slate-600/80 bg-slate-900/80 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/40 hover:text-rose-50"
+                          >
+                            Remove
+                          </button>
                         </div>
-                        <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)] truncate">
+                        <p className="mt-1 truncate text-[10px] text-[var(--avillo-cream-muted)]">
                           {s.type === "SMS" && s.config?.text}
                           {s.type === "EMAIL" && s.config?.subject}
                           {s.type === "TASK" && s.config?.text}
                           {s.type === "WAIT" &&
                             `Wait ${s.config?.hours ?? "?"} hours`}
                         </p>
-                      </div>
+                      </button>
                     ))}
                   </div>
 
@@ -951,26 +1030,58 @@ export default function AutomationPage() {
                   </div>
                 </div>
 
-                {/* Footer buttons */}
-                <div className="flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {activeWorkflow.id
-                      ? "Delete workflow"
-                      : "Discard new workflow"}
-                  </button>
+                {/* Step 4: Turn on + save */}
+                <div className="mt-auto flex flex-col gap-3 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-[11px] font-semibold text-amber-100/90">
+                        4. Turn it on & save
+                      </p>
+                      <p className="text-[10px] text-[var(--avillo-cream-muted)]">
+                        You can pause a workflow anytime. Saving will update it
+                        everywhere instantly.
+                      </p>
+                    </div>
 
-                  <button
-                    type="button"
-                    onClick={() => void handleSave()}
-                    disabled={saving}
-                    className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {saving ? "Saving…" : "Save changes"}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveWorkflow({
+                          ...activeWorkflow,
+                          active: !activeWorkflow.active,
+                        })
+                      }
+                      className={
+                        "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
+                        (activeWorkflow.active
+                          ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
+                          : "border-slate-500/80 bg-slate-800/60 text-slate-200")
+                      }
+                    >
+                      {activeWorkflow.active ? "Active" : "Paused"}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleDelete}
+                      className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {activeWorkflow.id
+                        ? "Delete workflow"
+                        : "Discard new workflow"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleSave()}
+                      disabled={saving}
+                      className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {saving ? "Saving…" : "Save changes"}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -978,10 +1089,14 @@ export default function AutomationPage() {
         </div>
       </section>
 
-      {/* Step modal */}
+      {/* Step modal (add + edit) */}
       <StepModal
         type={stepModalType}
-        onClose={() => setStepModalType(null)}
+        initialConfig={editingStep?.config ?? null}
+        onClose={() => {
+          setStepModalType(null);
+          setEditingStep(null);
+        }}
         onSave={handleStepSave}
       />
     </div>
@@ -989,28 +1104,29 @@ export default function AutomationPage() {
 }
 
 /* ------------------------------------
- * Small components
+ * Small builder pill
  * -----------------------------------*/
 
-type FilterPillProps = {
+type BuilderStepPillProps = {
+  step: number;
   label: string;
-  active?: boolean;
-  onClick: () => void;
+  done: boolean;
 };
 
-function FilterPill({ label, active, onClick }: FilterPillProps) {
+function BuilderStepPill({ step, label, done }: BuilderStepPillProps) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       className={
-        "rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] transition-colors " +
-        (active
-          ? "border-amber-100/80 bg-amber-50/15 text-amber-50 shadow-[0_0_18px_rgba(248,250,252,0.35)]"
-          : "border-slate-700/80 text-[var(--avillo-cream-muted)] hover:border-amber-100/60 hover:text-amber-50")
+        "flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] " +
+        (done
+          ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
+          : "border-slate-600/80 bg-slate-900/80 text-[var(--avillo-cream-muted)]")
       }
     >
-      {label}
-    </button>
+      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-current text-[10px]">
+        {step}
+      </span>
+      <span className="truncate">{label}</span>
+    </div>
   );
 }

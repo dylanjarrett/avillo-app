@@ -9,11 +9,11 @@ const PROTECTED_PATHS = [
   "/",
   "/dashboard",
   "/intelligence",
-  "/crm",
+  "/people",
   "/listings",
   "/billing",
   "/account",
-  "/admin",
+  "/autopilot",
 ];
 
 function isProtectedPath(pathname: string) {
