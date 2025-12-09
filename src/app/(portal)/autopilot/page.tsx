@@ -408,7 +408,7 @@ export default function AutomationPage() {
         setLoading(true);
         setError(null);
 
-        const res = await fetch("/api/automation").catch(() => null);
+        const res = await fetch("/api/automations").catch(() => null);
         if (!res || !res.ok) {
           // API may not exist yet; keep local-only mode
           if (!cancelled) {
@@ -519,7 +519,7 @@ export default function AutomationPage() {
       setSaving(true);
       setError(null);
 
-      const res = await fetch("/api/automation", {
+      const res = await fetch("/api/automations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -600,7 +600,7 @@ export default function AutomationPage() {
       setSaving(true);
       setError(null);
 
-      const res = await fetch("/api/automation", {
+      const res = await fetch("/api/automations", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: activeWorkflow.id }),
