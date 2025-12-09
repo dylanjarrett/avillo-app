@@ -11,11 +11,17 @@ type BranchStep = {
   config: any;
 };
 
+type ConditionScope = "contact" | "listing" | "both";
+
 type Props = {
   type: StepType | null;
   initialConfig?: any | null;
   initialThen?: BranchStep[] | null;
   initialElse?: BranchStep[] | null;
+  // contact  -> only contact fields
+  // listing  -> only listing fields
+  // both/undefined -> show everything (manual workflows)
+  conditionScope?: ConditionScope;
   onClose: () => void;
   onSave: (
     config: any,
@@ -24,30 +30,60 @@ type Props = {
   ) => void;
 };
 
-const CONDITION_FIELDS = [
+/* ------------------------------------
+ * Condition field + value options
+ * -----------------------------------*/
+
+// Split into groups so we can filter by scope
+const CONTACT_CONDITION_FIELDS = [
   { value: "contact.stage", label: "Contact stage" },
-  { value: "contact.source", label: "Contact source" },
   { value: "contact.type", label: "Contact type" },
-  { value: "contact.priceRange", label: "Contact price range" },
-  { value: "listing.status", label: "Listing status" },
-  { value: "listing.type", label: "Listing type" },
-  { value: "payload.tag", label: "Contact has tag" },
+  { value: "contact.source", label: "Contact source" },
 ];
+
+const LISTING_CONDITION_FIELDS = [
+  { value: "listing.status", label: "Listing status" },
+];
+
+// For manual workflows we show everything
+const ALL_CONDITION_FIELDS = [
+  ...CONTACT_CONDITION_FIELDS,
+  ...LISTING_CONDITION_FIELDS,
+];
+
+// Dropdown values for each field
+const FIELD_VALUE_OPTIONS: Record<string, string[]> = {
+  "contact.stage": ["new", "warm", "hot", "past"],
+  "contact.type": ["buyer", "seller", "buyer & seller"],
+  "contact.source": [
+    "zillow",
+    "referral",
+    "open house",
+    "website",
+    "social media",
+    "other",
+  ],
+  "listing.status": ["draft", "active", "pending", "closed"],
+};
 
 const CONDITION_OPERATORS = [
   { value: "equals", label: "is" },
   { value: "not_equals", label: "is not" },
-  { value: "contains", label: "contains" },
-  { value: "not_contains", label: "does not contain" },
-  { value: "greater_than", label: "greater than" },
-  { value: "less_than", label: "less than" },
 ];
+
+// Scope helper: which fields should be visible?
+function getConditionFields(scope: ConditionScope | undefined) {
+  if (scope === "contact") return CONTACT_CONDITION_FIELDS;
+  if (scope === "listing") return LISTING_CONDITION_FIELDS;
+  return ALL_CONDITION_FIELDS; // manual / undefined
+}
 
 export default function StepModal({
   type,
   initialConfig,
   initialThen,
   initialElse,
+  conditionScope,
   onClose,
   onSave,
 }: Props) {
@@ -55,7 +91,21 @@ export default function StepModal({
   const [thenSteps, setThenSteps] = useState<BranchStep[]>(initialThen ?? []);
   const [elseSteps, setElseSteps] = useState<BranchStep[]>(initialElse ?? []);
 
-  // Reset form whenever type or initial config/branches change
+  const isEditing = !!initialConfig;
+
+  const conditionFields = getConditionFields(conditionScope);
+
+  function update(key: string, value: any) {
+    setForm((prev: any) => ({ ...prev, [key]: value }));
+  }
+
+  // Value options for current field
+  const valueOptions: string[] =
+    (form.field && FIELD_VALUE_OPTIONS[form.field]) || [];
+
+  /* ------------------------------------
+   * Defaults when opening modal
+   * -----------------------------------*/
   useEffect(() => {
     if (!type) return;
 
@@ -66,9 +116,7 @@ export default function StepModal({
           (initialConfig && initialConfig.amount) ??
           24
       );
-
       const safeHours = Number.isNaN(hours) || hours <= 0 ? 24 : hours;
-
       const unit = initialConfig?.unit ?? "hours";
       const amount = initialConfig?.amount ?? safeHours;
 
@@ -82,10 +130,26 @@ export default function StepModal({
 
     // IF defaults
     if (type === "IF") {
+      const availableFields =
+        conditionFields.length > 0 ? conditionFields : ALL_CONDITION_FIELDS;
+
+      // make sure existing field is allowed for this scope
+      let field = initialConfig?.field as string | undefined;
+      if (!field || !availableFields.some((f) => f.value === field)) {
+        field = availableFields[0]?.value ?? "contact.stage";
+      }
+
+      // pick sensible value
+      const allowedValues = FIELD_VALUE_OPTIONS[field] ?? [];
+      let value = initialConfig?.value as string | undefined;
+      if (!value || !allowedValues.includes(value)) {
+        value = allowedValues[0] ?? "";
+      }
+
       setForm({
-        field: initialConfig?.field ?? "contact.stage",
+        field,
         operator: initialConfig?.operator ?? "equals",
-        value: initialConfig?.value ?? "hot",
+        value,
       });
 
       setThenSteps(initialThen ?? []);
@@ -93,125 +157,26 @@ export default function StepModal({
       return;
     }
 
-    // All other step types
+    // SMS / EMAIL / TASK
     setForm(initialConfig ?? {});
-  }, [type, initialConfig, initialThen, initialElse]);
+  }, [
+    type,
+    initialConfig,
+    initialThen,
+    initialElse,
+    conditionScope,
+    conditionFields.length,
+  ]);
 
-  function update(key: string, value: any) {
-    setForm((prev: any) => ({ ...prev, [key]: value }));
-  }
-
-  // ------- Branch helpers (for IF) -------
-  function addBranchStep(branch: "then" | "else", stepType: StepType) {
-    if (stepType === "IF") {
-      // avoid nested IF for now (keeps things simpler)
-      return;
-    }
-
-    const baseConfig: any = {};
-    if (stepType === "SMS" || stepType === "TASK") {
-      baseConfig.text = "";
-    }
-    if (stepType === "EMAIL") {
-      baseConfig.subject = "";
-      baseConfig.body = "";
-    }
-    if (stepType === "WAIT") {
-      baseConfig.amount = 4;
-      baseConfig.unit = "hours";
-      baseConfig.hours = 4;
-    }
-
-    const newStep: BranchStep = {
-      id: crypto.randomUUID(),
-      type: stepType,
-      config: baseConfig,
-    };
-
-    if (branch === "then") {
-      setThenSteps((prev) => [...prev, newStep]);
-    } else {
-      setElseSteps((prev) => [...prev, newStep]);
-    }
-  }
-
-  function updateBranchStep(
-    branch: "then" | "else",
-    id: string,
-    configPatch: Partial<BranchStep["config"]>
-  ) {
-    const updater = (steps: BranchStep[]) =>
-      steps.map((s) =>
-        s.id === id ? { ...s, config: { ...s.config, ...configPatch } } : s
-      );
-
-    if (branch === "then") {
-      setThenSteps((prev) => updater(prev));
-    } else {
-      setElseSteps((prev) => updater(prev));
-    }
-  }
-
-  function removeBranchStep(branch: "then" | "else", id: string) {
-    if (branch === "then") {
-      setThenSteps((prev) => prev.filter((s) => s.id !== id));
-    } else {
-      setElseSteps((prev) => prev.filter((s) => s.id !== id));
-    }
-  }
-
+  /* ------------------------------------
+   * Save
+   * -----------------------------------*/
   function handleSave() {
     if (!type) return;
 
-    if (type === "WAIT") {
-      const rawAmount = form.amount;
-      const amount =
-        typeof rawAmount === "number"
-          ? rawAmount
-          : Number.parseFloat(String(rawAmount ?? ""));
-
-      if (!amount || Number.isNaN(amount) || amount <= 0) {
-        alert("Set a delay of at least 1.");
-        return;
-      }
-
-      const unit: "hours" | "days" | "weeks" | "months" =
-        form.unit || "hours";
-
-      const multiplier: Record<typeof unit, number> = {
-        hours: 1,
-        days: 24,
-        weeks: 24 * 7,
-        months: 24 * 30, // simple month approximation
-      };
-
-      const hours = amount * multiplier[unit];
-
-      onSave(
-        {
-          ...form,
-          amount,
-          unit,
-          hours,
-        },
-        undefined,
-        undefined
-      );
-      return;
-    }
-
     if (type === "IF") {
-      if (!form.field || !form.operator) {
-        alert("Pick a field and operator for this condition.");
-        return;
-      }
-
-      if (
-        form.value === undefined ||
-        form.value === null ||
-        String(form.value).trim() === ""
-      ) {
-        alert("Set a value for this condition.");
+      if (!form.field || !form.operator || !form.value) {
+        alert("Select a field, operator, and value.");
         return;
       }
 
@@ -227,21 +192,94 @@ export default function StepModal({
       return;
     }
 
+    if (type === "WAIT") {
+      const rawAmount = form.amount;
+      const amount =
+        typeof rawAmount === "number"
+          ? rawAmount
+          : Number.parseFloat(String(rawAmount ?? ""));
+
+      if (!amount || Number.isNaN(amount) || amount <= 0) {
+        alert("Delay must be at least 1.");
+        return;
+      }
+
+      const unit: "hours" | "days" | "weeks" | "months" =
+        form.unit || "hours";
+
+      const multiplier: Record<typeof unit, number> = {
+        hours: 1,
+        days: 24,
+        weeks: 24 * 7,
+        months: 24 * 30,
+      };
+
+      onSave({
+        amount,
+        unit,
+        hours: amount * multiplier[unit],
+      });
+      return;
+    }
+
     // SMS / EMAIL / TASK
-    onSave(form, undefined, undefined);
+    onSave(form);
   }
 
+  /* ------------------------------------
+   * Branch helpers (IF)
+   * -----------------------------------*/
+  function addBranchStep(branch: "then" | "else", stepType: StepType) {
+    if (stepType === "IF") return; // no nested IF for now
+
+    const newStep: BranchStep = {
+      id: crypto.randomUUID(),
+      type: stepType,
+      config:
+        stepType === "WAIT"
+          ? { amount: 4, unit: "hours", hours: 4 }
+          : stepType === "EMAIL"
+          ? { subject: "", body: "" }
+          : { text: "" },
+    };
+
+    if (branch === "then") {
+      setThenSteps((p) => [...p, newStep]);
+    } else {
+      setElseSteps((p) => [...p, newStep]);
+    }
+  }
+
+  function updateBranchStep(
+    branch: "then" | "else",
+    id: string,
+    patch: any
+  ) {
+    const setter = branch === "then" ? setThenSteps : setElseSteps;
+    setter((prev) =>
+      prev.map((s) =>
+        s.id === id ? { ...s, config: { ...s.config, ...patch } } : s
+      )
+    );
+  }
+
+  function removeBranchStep(branch: "then" | "else", id: string) {
+    const setter = branch === "then" ? setThenSteps : setElseSteps;
+    setter((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  /* ------------------------------------
+   * UI
+   * -----------------------------------*/
   if (!type) return null;
 
-  const isEditing = !!initialConfig;
-
-  // shared select + option styling to keep dropdowns dark & readable
+  // shared select styling
   const selectBase =
     "bg-slate-950/90 text-[11px] text-slate-50 outline-none border border-slate-700/80 rounded-lg px-2 py-1";
   const optionClass = "bg-slate-900 text-slate-50";
 
   return (
-    <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
       <div
         className="
           relative w-[95%] max-w-2xl md:max-w-3xl max-h-[85vh]
@@ -290,7 +328,7 @@ export default function StepModal({
           </button>
         </div>
 
-        {/* SMS STEP FORM */}
+        {/* SMS */}
         {type === "SMS" && (
           <div className="space-y-4">
             <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
@@ -313,7 +351,7 @@ export default function StepModal({
           </div>
         )}
 
-        {/* EMAIL STEP FORM */}
+        {/* EMAIL */}
         {type === "EMAIL" && (
           <div className="space-y-4">
             <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
@@ -343,7 +381,7 @@ export default function StepModal({
           </div>
         )}
 
-        {/* TASK STEP FORM */}
+        {/* TASK */}
         {type === "TASK" && (
           <div className="space-y-4">
             <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
@@ -360,7 +398,7 @@ export default function StepModal({
           </div>
         )}
 
-        {/* WAIT STEP FORM */}
+        {/* WAIT */}
         {type === "WAIT" && (
           <div className="space-y-4">
             <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
@@ -399,14 +437,14 @@ export default function StepModal({
               </div>
 
               <p className="mt-1 text-[9px] text-[var(--avillo-cream-muted)]">
-                Example: <strong>4 hours</strong> ≈ 4 hours later.{" "}
+                Example: <strong>4 hours</strong> ≈ later the same day.{" "}
                 <strong>2 days</strong> ≈ 48 hours later.
               </p>
             </div>
           </div>
         )}
 
-        {/* IF STEP FORM */}
+        {/* IF */}
         {type === "IF" && (
           <div className="space-y-4">
             {/* Condition */}
@@ -416,17 +454,25 @@ export default function StepModal({
               </label>
               <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
                 Example: If <strong>Contact stage</strong> is{" "}
-                <strong>Hot</strong>, then send a text. Otherwise, create a
+                <strong>hot</strong>, then send a text. Otherwise, create a
                 task.
               </p>
 
               <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                {/* FIELD (scope aware) */}
                 <select
                   className={selectBase + " flex-1"}
-                  value={form.field ?? "contact.stage"}
-                  onChange={(e) => update("field", e.target.value)}
+                  value={
+                    form.field ?? conditionFields[0]?.value ?? "contact.stage"
+                  }
+                  onChange={(e) => {
+                    const newField = e.target.value;
+                    update("field", newField);
+                    const firstVal = FIELD_VALUE_OPTIONS[newField]?.[0] ?? "";
+                    update("value", firstVal);
+                  }}
                 >
-                  {CONDITION_FIELDS.map((f) => (
+                  {conditionFields.map((f) => (
                     <option
                       key={f.value}
                       value={f.value}
@@ -437,6 +483,7 @@ export default function StepModal({
                   ))}
                 </select>
 
+                {/* OPERATOR */}
                 <select
                   className={selectBase + " flex-1"}
                   value={form.operator ?? "equals"}
@@ -453,12 +500,18 @@ export default function StepModal({
                   ))}
                 </select>
 
-                <input
-                  className="flex-1 bg-transparent text-[11px] text-slate-50 outline-none border border-slate-700/80 rounded-lg px-2 py-1 placeholder:text-[var(--avillo-cream-muted)]"
-                  placeholder="Ex: hot, past client, active"
-                  value={form.value ?? ""}
+                {/* VALUE (dropdown locked to valid values) */}
+                <select
+                  className={selectBase + " flex-1"}
+                  value={form.value ?? valueOptions[0] ?? ""}
                   onChange={(e) => update("value", e.target.value)}
-                />
+                >
+                  {valueOptions.map((v) => (
+                    <option key={v} value={v} className={optionClass}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -495,32 +548,67 @@ export default function StepModal({
                         </button>
                       </div>
 
-                      {/* Minimal inline editors for branch steps */}
+                      {/* BRANCH SMS – full editor style */}
                       {s.type === "SMS" && (
-                        <textarea
-                          rows={2}
-                          className="mt-1 w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                          placeholder="Branch SMS text…"
-                          value={s.config?.text ?? ""}
-                          onChange={(e) =>
-                            updateBranchStep("then", s.id, {
-                              text: e.target.value,
-                            })
-                          }
-                        />
+                        <div className="mt-1 space-y-1">
+                          <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                            Text Message
+                          </label>
+                          <textarea
+                            rows={3}
+                            className="w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+                            placeholder="Ex: Hey {{firstName}}, thanks for reaching out — when are you free for a quick call?"
+                            value={s.config?.text ?? ""}
+                            onChange={(e) =>
+                              updateBranchStep("then", s.id, {
+                                text: e.target.value,
+                              })
+                            }
+                          />
+                          <p className="text-[8px] text-[var(--avillo-cream-muted)]">
+                            Variables: <code>{"{{firstName}}"}</code>,{" "}
+                            <code>{"{{agentName}}"}</code>,{" "}
+                            <code>{"{{propertyAddress}}"}</code>
+                          </p>
+                        </div>
                       )}
 
+                      {/* BRANCH EMAIL – subject + body */}
                       {s.type === "EMAIL" && (
-                        <input
-                          className="mt-1 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                          placeholder="Branch email subject…"
-                          value={s.config?.subject ?? ""}
-                          onChange={(e) =>
-                            updateBranchStep("then", s.id, {
-                              subject: e.target.value,
-                            })
-                          }
-                        />
+                        <div className="mt-1 space-y-2">
+                          <div>
+                            <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                              Subject
+                            </label>
+                            <input
+                              className="mt-0.5 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+                              placeholder="Ex: Quick market update for you"
+                              value={s.config?.subject ?? ""}
+                              onChange={(e) =>
+                                updateBranchStep("then", s.id, {
+                                  subject: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                              Body
+                            </label>
+                            <textarea
+                              rows={4}
+                              className="mt-0.5 w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+                              placeholder="Write the full email body…"
+                              value={s.config?.body ?? ""}
+                              onChange={(e) =>
+                                updateBranchStep("then", s.id, {
+                                  body: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
                       )}
 
                       {s.type === "TASK" && (
@@ -550,7 +638,9 @@ export default function StepModal({
                             }
                           />
                           <select
-                            className={selectBase + " flex-1 text-[10px] px-1 py-0.5"}
+                            className={
+                              selectBase + " flex-1 text-[10px] px-1 py-0.5"
+                            }
                             value={s.config?.unit ?? "hours"}
                             onChange={(e) =>
                               updateBranchStep("then", s.id, {
@@ -622,31 +712,67 @@ export default function StepModal({
                         </button>
                       </div>
 
+                      {/* BRANCH SMS – full editor style */}
                       {s.type === "SMS" && (
-                        <textarea
-                          rows={2}
-                          className="mt-1 w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                          placeholder="Branch SMS text…"
-                          value={s.config?.text ?? ""}
-                          onChange={(e) =>
-                            updateBranchStep("else", s.id, {
-                              text: e.target.value,
-                            })
-                          }
-                        />
+                        <div className="mt-1 space-y-1">
+                          <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                            Text Message
+                          </label>
+                          <textarea
+                            rows={3}
+                            className="w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+                            placeholder="Ex: Hey {{firstName}}, thanks for reaching out — when are you free for a quick call?"
+                            value={s.config?.text ?? ""}
+                            onChange={(e) =>
+                              updateBranchStep("else", s.id, {
+                                text: e.target.value,
+                              })
+                            }
+                          />
+                          <p className="text-[8px] text-[var(--avillo-cream-muted)]">
+                            Variables: <code>{"{{firstName}}"}</code>,{" "}
+                            <code>{"{{agentName}}"}</code>,{" "}
+                            <code>{"{{propertyAddress}}"}</code>
+                          </p>
+                        </div>
                       )}
 
+                      {/* BRANCH EMAIL – subject + body */}
                       {s.type === "EMAIL" && (
-                        <input
-                          className="mt-1 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                          placeholder="Branch email subject…"
-                          value={s.config?.subject ?? ""}
-                          onChange={(e) =>
-                            updateBranchStep("else", s.id, {
-                              subject: e.target.value,
-                            })
-                          }
-                        />
+                        <div className="mt-1 space-y-2">
+                          <div>
+                            <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                              Subject
+                            </label>
+                            <input
+                              className="mt-0.5 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+                              placeholder="Ex: Quick market update for you"
+                              value={s.config?.subject ?? ""}
+                              onChange={(e) =>
+                                updateBranchStep("else", s.id, {
+                                  subject: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                              Body
+                            </label>
+                            <textarea
+                              rows={4}
+                              className="mt-0.5 w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+                              placeholder="Write the full email body…"
+                              value={s.config?.body ?? ""}
+                              onChange={(e) =>
+                                updateBranchStep("else", s.id, {
+                                  body: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
                       )}
 
                       {s.type === "TASK" && (
@@ -676,7 +802,9 @@ export default function StepModal({
                             }
                           />
                           <select
-                            className={selectBase + " flex-1 text-[10px] px-1 py-0.5"}
+                            className={
+                              selectBase + " flex-1 text-[10px] px-1 py-0.5"
+                            }
                             value={s.config?.unit ?? "hours"}
                             onChange={(e) =>
                               updateBranchStep("else", s.id, {
@@ -720,7 +848,7 @@ export default function StepModal({
           </div>
         )}
 
-        {/* FOOTER BUTTONS */}
+        {/* FOOTER */}
         <div className="mt-6 flex items-center justify-between">
           <button
             type="button"

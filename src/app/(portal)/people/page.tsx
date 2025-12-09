@@ -97,6 +97,14 @@ export default function CrmPage() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const CONTACT_SOURCE_OPTIONS = [
+  { value: "zillow", label: "Zillow" },
+  { value: "referral", label: "Referral" },
+  { value: "open house", label: "Open house" },
+  { value: "website", label: "Website" },
+  { value: "social media", label: "Social media" },
+  { value: "other", label: "Other" },
+];
 
   // ---------- Derived counts for pills ----------
   const totalContacts = contacts.length;
@@ -907,7 +915,7 @@ if (stageFilter !== "all") {
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
               (workspaceOpenMobile ? "hidden" : "block") +
-              " lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-210px)]"
+              " lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-200px)]"
             }
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)] opacity-40 blur-3xl" />
@@ -1043,7 +1051,7 @@ if (stageFilter !== "all") {
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
               (workspaceOpenMobile ? "block" : "hidden") +
-              " lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-210px)]"
+              " lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-200px)]"
             }
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
@@ -1203,13 +1211,35 @@ if (stageFilter !== "all") {
                       onChange={(v) => handleFieldChange("timeline", v)}
                       placeholder="Ex: 0–60 days, 3–6 months…"
                     />
-                    <DetailInput
-                      label="Source"
-                      value={activeContact.source}
-                      onChange={(v) => handleFieldChange("source", v)}
-                      placeholder="Open house, portal, social, referral…"
-                    />
-                  </div>
+                  
+
+                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2">
+  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+    Source
+  </p>
+
+  <select
+    value={activeContact.source || ""}
+    onChange={(e) =>
+      handleFieldChange("source", e.target.value.toLowerCase())
+    }
+    className="mt-0.5 w-full border-none bg-transparent pt-0.5 text-[11px] text-slate-50 outline-none"
+  >
+    <option value="" disabled>
+      Select source…
+    </option>
+    {CONTACT_SOURCE_OPTIONS.map((opt) => (
+      <option
+        key={opt.value}
+        value={opt.value}
+        className="bg-slate-900 text-slate-50"
+      >
+        {opt.label}
+      </option>
+    ))}
+  </select>
+  </div>
+  </div>
 
                   {/* Contact methods */}
                   <div className="grid gap-2 text-[11px] sm:grid-cols-2">

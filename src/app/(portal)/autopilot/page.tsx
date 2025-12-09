@@ -1,3 +1,4 @@
+// src/app/(portal)/autopilot/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -53,16 +54,6 @@ const TRIGGERS = [
     id: "NEW_LISTING",
     label: "New listing added",
     desc: "Runs when you create a new listing.",
-  },
-  {
-    id: "OPEN_HOUSE",
-    label: "After open house",
-    desc: "Runs when an open house is logged (coming soon).",
-  },
-  {
-    id: "TAG_ADDED",
-    label: "Tag added to contact",
-    desc: "Runs when a specific tag is added to a contact.",
   },
   {
     id: "MANUAL_RUN",
@@ -218,15 +209,33 @@ function triggerPlainSentence(trigger: string | null): string | null {
       return "When I move a contact to a new stage (new, warm, hot), I want this workflow to run.";
     case "NEW_LISTING":
       return "When I add a new listing, I want this workflow to run.";
-    case "OPEN_HOUSE":
-      return "When I log an open house, I want this workflow to run.";
-    case "TAG_ADDED":
-      return "When I add a specific tag to a contact, I want this workflow to run.";
     case "MANUAL_RUN":
       return "When I choose a contact or listing and hit “Run workflow”, I want this workflow to run.";
     default:
       return null;
   }
+}
+
+// maps trigger → which fields should be visible in IF step
+function getConditionScopeForTrigger(
+  trigger: string | null
+): "contact" | "listing" | "both" | undefined {
+  if (!trigger) return undefined;
+
+  if (trigger === "NEW_LISTING") {
+    return "listing";
+  }
+
+  if (trigger === "NEW_CONTACT" || trigger === "LEAD_STAGE_CHANGE") {
+    return "contact";
+  }
+
+  if (trigger === "MANUAL_RUN") {
+    // workflow can be run from contact OR listing
+    return "both";
+  }
+
+  return undefined;
 }
 
 /* ------------------------------------
@@ -629,6 +638,10 @@ export default function AutomationPage() {
       ? triggerPlainSentence(activeWorkflow?.trigger ?? null)
       : null;
 
+  const conditionScopeForActive = getConditionScopeForTrigger(
+    activeWorkflow?.trigger ?? null
+  );
+
   return (
     <div className="space-y-12">
       <PageHeader
@@ -801,7 +814,7 @@ export default function AutomationPage() {
             </div>
           </div>
 
-          {/* RIGHT: TODDLER-SIMPLE BUILDER */}
+          {/* RIGHT: SIMPLE BUILDER */}
           <div
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
@@ -855,7 +868,7 @@ export default function AutomationPage() {
               </div>
             )}
 
-            {/* Active workflow detail: 4-step guided builder */}
+            {/* Active workflow detail */}
             {activeWorkflow && (
               <div className="flex h-full flex-col gap-4 text-xs text-[var(--avillo-cream-soft)]">
                 {/* Mobile back */}
@@ -1023,7 +1036,8 @@ export default function AutomationPage() {
                       >
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-[11px] font-semibold text-slate-50">
-                            Step {i + 1}: {s.type === "IF" ? "IF / Branch" : s.type}
+                            Step {i + 1}:{" "}
+                            {s.type === "IF" ? "IF / Branch" : s.type}
                           </p>
                           <button
                             type="button"
@@ -1143,6 +1157,7 @@ export default function AutomationPage() {
         initialElse={
           editingStep?.type === "IF" ? editingStep.elseSteps ?? [] : null
         }
+        conditionScope={conditionScopeForActive}
         onClose={() => {
           setStepModalType(null);
           setEditingStep(null);
