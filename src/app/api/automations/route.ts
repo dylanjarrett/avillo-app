@@ -4,9 +4,7 @@ import { getUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-// ----------------------------------------------
 // GET → all automations for logged-in user
-// ----------------------------------------------
 export async function GET() {
   const user = await getUser();
   if (!user) return NextResponse.json([], { status: 200 });
@@ -20,9 +18,7 @@ export async function GET() {
   return NextResponse.json(automations);
 }
 
-// ----------------------------------------------
 // POST → create a new automation
-// ----------------------------------------------
 export async function POST(req: Request) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -69,5 +65,11 @@ export async function POST(req: Request) {
     },
   });
 
-  return NextResponse.json(automation);
+  // Optionally re-fetch with steps included if your UI wants it:
+  const full = await prisma.automation.findFirst({
+    where: { id: automation.id, userId: user.id },
+    include: { steps: true },
+  });
+
+  return NextResponse.json(full);
 }

@@ -13,7 +13,11 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
     where: { id: params.id, userId: user.id },
     include: {
       steps: true,
-      runs: { take: 20, orderBy: { executedAt: "desc" }, include: { steps: true } },
+      runs: {
+        take: 20,
+        orderBy: { executedAt: "desc" },
+        include: { steps: true },
+      },
     },
   });
 
@@ -45,8 +49,17 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     steps,
   } = body;
 
-  const updated = await prisma.automation.update({
-    where: { id: params.id },
+  // Make sure this automation belongs to the user
+  const existing = await prisma.automation.findFirst({
+    where: { id: params.id, userId: user.id },
+  });
+
+  if (!existing) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  await prisma.automation.update({
+    where: { id: existing.id },
     data: {
       name,
       description,
@@ -66,13 +79,26 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
   if (steps) {
     await prisma.automationStepGroup.upsert({
-      where: { automationId: params.id },
+      where: { automationId: existing.id }, // assumes automationId is unique
       update: { steps },
-      create: { automationId: params.id, steps },
+      create: { automationId: existing.id, steps },
     });
   }
 
-  return NextResponse.json(updated);
+  // Re-fetch full automation with steps + recent runs so UI stays in sync
+  const updatedFull = await prisma.automation.findFirst({
+    where: { id: existing.id, userId: user.id },
+    include: {
+      steps: true,
+      runs: {
+        take: 20,
+        orderBy: { executedAt: "desc" },
+        include: { steps: true },
+      },
+    },
+  });
+
+  return NextResponse.json(updatedFull);
 }
 
 // -------------------------------
@@ -82,9 +108,14 @@ export async function DELETE(_: Request, { params }: { params: { id: string } })
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  await prisma.automation.delete({
-    where: { id: params.id },
+  const result = await prisma.automation.deleteMany({
+    where: { id: params.id, userId: user.id },
   });
 
+  if (result.count === 0) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Assuming Prisma schema has ON DELETE CASCADE on related runs / stepGroup
   return NextResponse.json({ success: true });
 }

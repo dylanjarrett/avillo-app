@@ -14,7 +14,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing automationId" }, { status: 400 });
   }
 
-  const automation = await prisma.automation.findUnique({
+  const automation = await prisma.automation.findFirst({
     where: { id: automationId, userId: user.id },
     include: { steps: true },
   });
