@@ -18,11 +18,11 @@ export type AutomationTrigger =
 // ---------------------------------------------
 export type AutomationContext = {
   userId: string;
-  contactId?: string;
-  listingId?: string;
-
-  /** Enables field matching for conditional logic */
-  payload?: Record<string, any>;
+  contactId?: string | null;
+  listingId?: string | null;
+  payload?: Record<string, any> | null;
+  // NEW: allow passing which trigger fired this run
+  trigger?: AutomationTrigger | string | null;
 };
 
 // ---------------------------------------------
