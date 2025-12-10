@@ -252,6 +252,7 @@ export default function AutomationPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
@@ -418,14 +419,23 @@ export default function AutomationPage() {
         }
         const data = await res.json().catch(() => null);
 
-        const loaded: AutomationWorkflow[] = (data?.workflows ?? []).map(
-          (w: any) => ({
+        // API returns an array of automations directly
+        const rawList: any[] = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.automations)
+          ? data.automations
+          : [];
+
+        const loaded: AutomationWorkflow[] = rawList.map((w: any) => {
+          const stepArray: any[] = w.steps?.steps ?? []; // automationStepGroup.steps
+
+          return {
             id: w.id,
             name: w.name ?? "",
             description: w.description ?? "",
             trigger: w.trigger ?? null,
             active: w.active ?? true,
-            steps: (w.steps ?? []).map((s: any) => ({
+            steps: stepArray.map((s: any) => ({
               id: s.id ?? crypto.randomUUID(),
               type: s.type as StepType,
               config: s.config ?? {},
@@ -434,8 +444,8 @@ export default function AutomationPage() {
             })),
             createdAt: w.createdAt,
             updatedAt: w.updatedAt,
-          })
-        );
+          };
+        });
 
         if (!cancelled) {
           setWorkflows(loaded);
@@ -500,7 +510,7 @@ export default function AutomationPage() {
     return list;
   }, [workflows, filter, search, selectedId, activeWorkflow]);
 
-  // ------- Save / Delete -------
+  // ------- Save / Delete / Run -------
 
   async function handleSave() {
     if (!activeWorkflow) return;
@@ -515,21 +525,37 @@ export default function AutomationPage() {
       return;
     }
 
+    const isNew = !activeWorkflow.id || selectedId === "new";
+
+    const payload = {
+      name: activeWorkflow.name,
+      description: activeWorkflow.description,
+      trigger: activeWorkflow.trigger,
+      triggerConfig: {},
+      entryConditions: {},
+      exitConditions: {},
+      schedule: {},
+      active: activeWorkflow.active,
+      status: "draft",
+      reEnroll: true,
+      timezone: null,
+      folder: null,
+      steps: activeWorkflow.steps,
+    };
+
     try {
       setSaving(true);
       setError(null);
 
-      const res = await fetch("/api/automations", {
-        method: "POST",
+      const url = isNew
+        ? "/api/automations"
+        : `/api/automations/${activeWorkflow.id}`;
+      const method = isNew ? "POST" : "PUT";
+
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: activeWorkflow.id,
-          name: activeWorkflow.name,
-          description: activeWorkflow.description,
-          trigger: activeWorkflow.trigger,
-          active: activeWorkflow.active,
-          steps: activeWorkflow.steps,
-        }),
+        body: JSON.stringify(payload),
       }).catch(() => null);
 
       if (!res || !res.ok) {
@@ -540,8 +566,7 @@ export default function AutomationPage() {
         );
       }
 
-      const data = await res.json();
-      const saved = data.workflow as any;
+      const saved = await res.json();
 
       const normalized: AutomationWorkflow = {
         id: saved.id,
@@ -549,13 +574,8 @@ export default function AutomationPage() {
         description: saved.description ?? activeWorkflow.description,
         trigger: saved.trigger ?? activeWorkflow.trigger,
         active: saved.active ?? activeWorkflow.active,
-        steps: (saved.steps ?? activeWorkflow.steps ?? []).map((s: any) => ({
-          id: s.id ?? crypto.randomUUID(),
-          type: s.type as StepType,
-          config: s.config ?? {},
-          thenSteps: s.thenSteps ?? [],
-          elseSteps: s.elseSteps ?? [],
-        })),
+        // backend doesn't echo step group, keep local steps
+        steps: activeWorkflow.steps,
         createdAt: saved.createdAt,
         updatedAt: saved.updatedAt,
       };
@@ -573,7 +593,8 @@ export default function AutomationPage() {
     } catch (err: any) {
       console.error("Save workflow error", err);
       setError(
-        err?.message || "We couldn't save this workflow. Try again in a moment."
+        err?.message ||
+          "We couldn't save this workflow. Try again in a moment."
       );
     } finally {
       setSaving(false);
@@ -600,10 +621,8 @@ export default function AutomationPage() {
       setSaving(true);
       setError(null);
 
-      const res = await fetch("/api/automations", {
+      const res = await fetch(`/api/automations/${activeWorkflow.id}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: activeWorkflow.id }),
       }).catch(() => null);
 
       if (!res || !res.ok) {
@@ -626,6 +645,47 @@ export default function AutomationPage() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleRunNow() {
+    if (!activeWorkflow?.id) {
+      alert("Save this workflow before running it.");
+      return;
+    }
+
+    try {
+      setRunning(true);
+      setError(null);
+
+      const res = await fetch("/api/automations/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          automationId: activeWorkflow.id,
+          // For now, send a dummy test contact. Later we’ll wire real contact/listing IDs.
+          contactId: "test-contact-id",
+          listingId: null,
+        }),
+      }).catch(() => null);
+
+      if (!res || !res.ok) {
+        const data = await res?.json().catch(() => null);
+        throw new Error(
+          data?.error ||
+            "We couldn't run this workflow. Try again in a moment."
+        );
+      }
+
+      // Optionally you could toast success here
+    } catch (err: any) {
+      console.error("Run workflow error", err);
+      setError(
+        err?.message ||
+          "We couldn't run this workflow. Try again in a moment."
+      );
+    } finally {
+      setRunning(false);
     }
   }
 
@@ -1088,16 +1148,16 @@ export default function AutomationPage() {
                   </div>
                 </div>
 
-                {/* Step 4: Turn on + save */}
+                {/* Step 4: Turn on + save + run */}
                 <div className="mt-auto flex flex-col gap-3 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="text-[11px] font-semibold text-amber-100/90">
-                        4. Turn it on & save
+                        4. Turn it on, test, & save
                       </p>
                       <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                        You can pause a workflow anytime. Saving will update it
-                        everywhere instantly.
+                        You can pause a workflow anytime. Use “Run now” to test
+                        with a sample contact, then save your changes.
                       </p>
                     </div>
 
@@ -1120,7 +1180,7 @@ export default function AutomationPage() {
                     </button>
                   </div>
 
-                  <div className="flex items-center justify-between gap-3 pt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                     <button
                       type="button"
                       onClick={handleDelete}
@@ -1131,14 +1191,25 @@ export default function AutomationPage() {
                         : "Discard new workflow"}
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => void handleSave()}
-                      disabled={saving}
-                      className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {saving ? "Saving…" : "Save changes"}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleRunNow()}
+                        disabled={running || !activeWorkflow.id}
+                        className="inline-flex items-center justify-center rounded-full border border-slate-400/80 bg-slate-800/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {running ? "Running…" : "Run now (test)"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleSave()}
+                        disabled={saving}
+                        className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {saving ? "Saving…" : "Save changes"}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
