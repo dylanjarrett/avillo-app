@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { processTriggers } from "@/lib/automations/processTriggers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +30,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const rawBody = (await req.json().catch(() => null)) as AssignContactBody | null;
+    const rawBody = (await req.json().catch(() => null)) as
+      | AssignContactBody
+      | null;
 
     if (!rawBody?.listingId || !rawBody?.contactId) {
       return NextResponse.json(
@@ -104,6 +107,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Track whether this listing already had a seller before this call
+    const hadSellerBefore = !!listing.sellerContactId;
+
     /* ------------------------------------
      * Apply relationship
      * -----------------------------------*/
@@ -132,6 +138,18 @@ export async function POST(req: NextRequest) {
           },
         },
       });
+
+      // 🔔 Fire "new listing added" automations the FIRST time a seller is attached
+      if (!hadSellerBefore) {
+        await processTriggers("LISTING_CREATED", {
+          userId: user.id,
+          listingId: listing.id,
+          contactId: contact.id,
+          payload: {
+            source: "ASSIGN_CONTACT",
+          },
+        });
+      }
     }
 
     if (relationship === "buyer") {

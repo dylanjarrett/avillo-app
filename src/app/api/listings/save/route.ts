@@ -2,6 +2,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { processTriggers } from "@/lib/automations/processTriggers";
+import type { AutomationContext } from "@/lib/automations/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,6 +84,8 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    const isNewListing = !id;
 
     /* ------------------------------------
      * CREATE or UPDATE LISTING
@@ -193,8 +197,8 @@ export async function POST(req: NextRequest) {
 
     /* ------------------------------------
      * RETURN NORMALIZED LISTING (with photos)
-     * - Note: relationships (seller/buyers) are read-only here.
-     *   They are managed exclusively via assign/unlink endpoints.
+     * - Relationships (seller/buyers) are read-only here.
+     *   They’re managed via assign/unlink endpoints.
      * -----------------------------------*/
 
     const fullListing = await prisma.listing.findUnique({
@@ -252,7 +256,6 @@ export async function POST(req: NextRequest) {
         sortOrder: p.sortOrder,
       })),
 
-      // Relationships are included for display only
       seller: fullListing.seller
         ? {
             id: fullListing.seller.id,
@@ -280,6 +283,36 @@ export async function POST(req: NextRequest) {
       createdAt: fullListing.createdAt,
       updatedAt: fullListing.updatedAt,
     };
+
+    /* ------------------------------------
+ * FIRE "LISTING_CREATED" AUTOMATIONS
+ * - Only when a brand-new listing ALREADY has a seller attached
+ *   (so automations always have a contact, just like NEW_CONTACT)
+ * -----------------------------------*/
+
+if (isNewListing && fullListing.sellerContactId) {
+  try {
+    const triggerContext: AutomationContext = {
+      userId: user.id,
+      contactId: fullListing.sellerContactId,
+      listingId: fullListing.id,
+      trigger: "LISTING_CREATED",
+      payload: {
+        source: "listings/save",
+        address: fullListing.address,
+        status: fullListing.status,
+      },
+    };
+
+    await processTriggers("LISTING_CREATED", triggerContext);
+  } catch (err) {
+    console.error(
+      "[listings/save] LISTING_CREATED trigger error:",
+      err
+    );
+    // don’t fail the save just because automation failed
+  }
+}
 
     return NextResponse.json({
       success: true,

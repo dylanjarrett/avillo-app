@@ -4,7 +4,8 @@
 export type AutomationTrigger =
   | "NEW_CONTACT"
   | "LEAD_STAGE_CHANGE"
-  | "NEW_LISTING"
+  | "LISTING_CREATED"
+  | "LISTING_STATUS_CHANGED"
   | "MANUAL_RUN";
 
 // ---------------------------------------------

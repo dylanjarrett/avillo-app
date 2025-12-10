@@ -51,7 +51,7 @@ const TRIGGERS = [
     desc: "Runs when a contact’s stage is updated.",
   },
   {
-    id: "NEW_LISTING",
+    id: "LISTING_CREATED",
     label: "New listing added",
     desc: "Runs when you create a new listing.",
   },
@@ -207,7 +207,7 @@ function triggerPlainSentence(trigger: string | null): string | null {
       return "When I add a new contact, I want this workflow to run.";
     case "LEAD_STAGE_CHANGE":
       return "When I move a contact to a new stage (new, warm, hot), I want this workflow to run.";
-    case "NEW_LISTING":
+    case "LISTING_CREATED":
       return "When I add a new listing, I want this workflow to run.";
     case "MANUAL_RUN":
       return "When I choose a contact or listing and hit “Run workflow”, I want this workflow to run.";
@@ -222,7 +222,7 @@ function getConditionScopeForTrigger(
 ): "contact" | "listing" | "both" | undefined {
   if (!trigger) return undefined;
 
-  if (trigger === "NEW_LISTING") {
+  if (trigger === "LISTING_CREATED") {
     return "listing";
   }
 
@@ -663,8 +663,7 @@ export default function AutomationPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           automationId: activeWorkflow.id,
-          // For now, send a dummy test contact. Later we’ll wire real contact/listing IDs.
-          contactId: "test-contact-id",
+          contactId: null,
           listingId: null,
         }),
       }).catch(() => null);
