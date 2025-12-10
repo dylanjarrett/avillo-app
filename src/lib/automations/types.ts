@@ -5,12 +5,6 @@ export type AutomationTrigger =
   | "NEW_CONTACT"
   | "LEAD_STAGE_CHANGE"
   | "NEW_LISTING"
-  | "LISTING_STATUS_CHANGE"
-  | "LISTING_SELLER_ASSIGNED"
-  | "LISTING_BUYER_ASSIGNED"
-  | "LISTING_SELLER_UNLINKED"
-  | "LISTING_BUYER_UNLINKED"
-  | "TAG_ADDED"
   | "MANUAL_RUN";
 
 // ---------------------------------------------

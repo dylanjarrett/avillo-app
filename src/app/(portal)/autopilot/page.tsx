@@ -1088,47 +1088,51 @@ export default function AutomationPage() {
                     )}
 
                     {activeWorkflow.steps.map((s, i) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => openStepModal(s.type, s)}
-                        className="w-full rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-left hover:border-amber-100/70 hover:bg-slate-900/90"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-[11px] font-semibold text-slate-50">
-                            Step {i + 1}:{" "}
-                            {s.type === "IF" ? "IF / Branch" : s.type}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeStep(s.id);
-                            }}
-                            className="rounded-full border border-slate-600/80 bg-slate-900/80 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/40 hover:text-rose-50"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        <p className="mt-1 truncate text-[10px] text-[var(--avillo-cream-muted)]">
-                          {s.type === "SMS" && s.config?.text}
-                          {s.type === "EMAIL" && s.config?.subject}
-                          {s.type === "TASK" && s.config?.text}
-                          {s.type === "WAIT" &&
-                            `Wait ${s.config?.hours ?? "?"} hours`}
-                          {s.type === "IF" &&
-                            `If ${s.config?.field ?? "field"} ${
-                              s.config?.operator ?? "is"
-                            } ${s.config?.value ?? ""} (then ${
-                              s.thenSteps?.length ?? 0
-                            } step${
-                              (s.thenSteps?.length ?? 0) === 1 ? "" : "s"
-                            }, else ${s.elseSteps?.length ?? 0} step${
-                              (s.elseSteps?.length ?? 0) === 1 ? "" : "s"
-                            })`}
-                        </p>
-                      </button>
-                    ))}
+  <div
+    key={s.id}
+    role="button"
+    tabIndex={0}
+    onClick={() => openStepModal(s.type, s)}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openStepModal(s.type, s);
+      }
+    }}
+    className="w-full rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-left hover:border-amber-100/70 hover:bg-slate-900/90 cursor-pointer"
+  >
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-[11px] font-semibold text-slate-50">
+        Step {i + 1}: {s.type === "IF" ? "IF / Branch" : s.type}
+      </p>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          removeStep(s.id);
+        }}
+        className="rounded-full border border-slate-600/80 bg-slate-900/80 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/40 hover:text-rose-50"
+      >
+        Remove
+      </button>
+    </div>
+
+    <p className="mt-1 truncate text-[10px] text-[var(--avillo-cream-muted)]">
+      {s.type === "SMS" && s.config?.text}
+      {s.type === "EMAIL" && s.config?.subject}
+      {s.type === "TASK" && s.config?.text}
+      {s.type === "WAIT" && `Wait ${s.config?.hours ?? "?"} hours`}
+      {s.type === "IF" &&
+        `If ${s.config?.field ?? "field"} ${
+          s.config?.operator ?? "is"
+        } ${s.config?.value ?? ""} (then ${
+          s.thenSteps?.length ?? 0
+        } step${(s.thenSteps?.length ?? 0) === 1 ? "" : "s"}, else ${
+          s.elseSteps?.length ?? 0
+        } step${(s.elseSteps?.length ?? 0) === 1 ? "" : "s"})`}
+    </p>
+  </div>
+))}
                   </div>
 
                   {/* Add step buttons */}

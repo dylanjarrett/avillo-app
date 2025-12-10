@@ -19,6 +19,9 @@ export async function processTriggers(
   for (const a of automations) {
     const steps = a.steps?.steps ? (a.steps.steps as any[]) : [];
 
-    await runAutomation(a.id, steps, context);
+    await runAutomation(a.id, steps, {
+      ...context,
+      trigger,
+    });
   }
 }

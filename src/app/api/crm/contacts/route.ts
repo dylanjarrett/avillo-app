@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { Prisma } from "@prisma/client";
+import { processTriggers } from "@/lib/automations/processTriggers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -244,8 +245,9 @@ export async function POST(req: NextRequest) {
       source,
     } = body;
 
+    // For updates we ONLY change stage if one was passed in
     const normalizedStage =
-      stage && ["new", "warm", "hot", "past"].includes(stage) ? stage : "new";
+      stage && ["new", "warm", "hot", "past"].includes(stage) ? stage : undefined;
 
     let contactRecord;
 
@@ -253,6 +255,7 @@ export async function POST(req: NextRequest) {
       // -------------------- UPDATE --------------------
       const existing = await prisma.contact.findFirst({
         where: { id, userId: user.id },
+        include: { contactNotes: true },
       });
 
       if (!existing) {
@@ -262,6 +265,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      const previousStage = existing.stage;
+      const nextStage = normalizedStage ?? existing.stage;
+
       contactRecord = await prisma.contact.update({
         where: { id: existing.id },
         data: {
@@ -269,7 +275,7 @@ export async function POST(req: NextRequest) {
           lastName: lastName ?? existing.lastName,
           email: email ?? existing.email,
           phone: phone ?? existing.phone,
-          stage: normalizedStage,
+          stage: nextStage,
           label: label ?? existing.label,
           type: type ?? existing.type,
           priceRange: priceRange ?? existing.priceRange,
@@ -298,8 +304,23 @@ export async function POST(req: NextRequest) {
           data: {},
         },
       });
+
+      // 🔔 Fire LEAD_STAGE_CHANGE when the pipeline stage actually changes
+      if (previousStage !== nextStage) {
+        await processTriggers("LEAD_STAGE_CHANGE", {
+          userId: user.id,
+          contactId: contactRecord.id,
+          listingId: null,
+          payload: {
+            fromStage: previousStage,
+            toStage: nextStage,
+          },
+        });
+      }
     } else {
       // -------------------- CREATE --------------------
+      const createStage = normalizedStage ?? "new";
+
       contactRecord = await prisma.contact.create({
         data: {
           userId: user.id,
@@ -307,7 +328,7 @@ export async function POST(req: NextRequest) {
           lastName: lastName ?? "",
           email: email ?? "",
           phone: phone ?? "",
-          stage: normalizedStage,
+          stage: createStage,
           label: label ?? "new lead",
           type: type ?? "Buyer",
           priceRange: priceRange ?? "",
@@ -331,6 +352,17 @@ export async function POST(req: NextRequest) {
           data: {},
         },
       });
+
+      // 🔔 Fire NEW_CONTACT automation trigger
+      await processTriggers("NEW_CONTACT", {
+        userId: user.id,
+        contactId: contactRecord.id,
+        listingId: null,
+        payload: {
+          stage: createStage,
+          source: contactRecord.source ?? "",
+        },
+      });
     }
 
     const shaped = shapeContact(contactRecord);
@@ -347,6 +379,7 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
 
 /* ----------------------------------------------------
  * DELETE /api/crm/contacts
