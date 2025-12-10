@@ -33,6 +33,13 @@ type SaveListingBody = {
   listing?: ListingPayload;
 };
 
+/** Normalize status to lowercase for DB */
+function normalizeStatus(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const v = raw.toLowerCase().trim();
+  return v.length ? v : undefined;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -91,21 +98,24 @@ export async function POST(req: NextRequest) {
      * CREATE or UPDATE LISTING
      * -----------------------------------*/
 
-    const listingData = {
+    // core listing fields (without status)
+    const baseListingData = {
       address: address.trim(),
       mlsId: mlsId ?? null,
       price: typeof price === "number" ? price : null,
-      status: status ?? "draft",
       description: description ?? null,
       aiCopy: aiCopy ?? null,
       aiNotes: aiNotes ?? null,
     };
 
+    // normalize incoming status if provided (lowercase in DB)
+    const incomingStatus = normalizeStatus(status);
+
     let listingId = id;
-    let listingRecord;
+    let listingRecord: any;
 
     if (id) {
-      // UPDATE existing listing – ensure it belongs to this user
+      // -------------------- UPDATE existing listing --------------------
       const existing = await prisma.listing.findFirst({
         where: {
           id,
@@ -120,20 +130,53 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      const previousStatus = normalizeStatus(existing.status) ?? "draft";
+
       listingRecord = await prisma.listing.update({
         where: { id: existing.id },
         data: {
-          ...listingData,
-          // userId unchanged
+          ...baseListingData,
+          // If client didn't pass a new status, keep the existing one (normalized)
+          status: incomingStatus ?? previousStatus,
         },
       });
 
       listingId = listingRecord.id;
+
+      // 🔔 Fire LISTING_STAGE_CHANGE when the status actually changes
+      const newStatus = normalizeStatus(listingRecord.status) ?? "draft";
+
+      if (previousStatus !== newStatus) {
+        try {
+          const triggerContext: AutomationContext = {
+            userId: user.id,
+            contactId: listingRecord.sellerContactId ?? null, // seller only
+            listingId: listingRecord.id,
+            trigger: "LISTING_STAGE_CHANGE",
+            payload: {
+              source: "listings/save",
+              fromStatus: previousStatus, // lowercase
+              toStatus: newStatus,        // lowercase
+            },
+          };
+
+          await processTriggers("LISTING_STAGE_CHANGE", triggerContext);
+        } catch (err) {
+          console.error(
+            "[listings/save] LISTING_STAGE_CHANGE trigger error:",
+            err
+          );
+          // don’t fail the save just because automation failed
+        }
+      }
     } else {
-      // CREATE new listing
+      // -------------------- CREATE new listing --------------------
+      const createStatus = incomingStatus ?? "draft";
+
       listingRecord = await prisma.listing.create({
         data: {
-          ...listingData,
+          ...baseListingData,
+          status: createStatus, // lowercase in DB
           userId: user.id,
         },
       });
@@ -242,7 +285,7 @@ export async function POST(req: NextRequest) {
       address: fullListing.address,
       mlsId: fullListing.mlsId,
       price: fullListing.price,
-      status: fullListing.status,
+      status: fullListing.status, // lowercase; UI will pretty-format
       description: fullListing.description,
       aiCopy: fullListing.aiCopy,
       aiNotes: fullListing.aiNotes,
@@ -285,34 +328,34 @@ export async function POST(req: NextRequest) {
     };
 
     /* ------------------------------------
- * FIRE "LISTING_CREATED" AUTOMATIONS
- * - Only when a brand-new listing ALREADY has a seller attached
- *   (so automations always have a contact, just like NEW_CONTACT)
- * -----------------------------------*/
+     * FIRE "LISTING_CREATED" AUTOMATIONS
+     * - Only when a brand-new listing ALREADY has a seller attached
+     *   (so automations always have a contact, just like NEW_CONTACT)
+     * -----------------------------------*/
 
-if (isNewListing && fullListing.sellerContactId) {
-  try {
-    const triggerContext: AutomationContext = {
-      userId: user.id,
-      contactId: fullListing.sellerContactId,
-      listingId: fullListing.id,
-      trigger: "LISTING_CREATED",
-      payload: {
-        source: "listings/save",
-        address: fullListing.address,
-        status: fullListing.status,
-      },
-    };
+    if (isNewListing && fullListing.sellerContactId) {
+      try {
+        const triggerContext: AutomationContext = {
+          userId: user.id,
+          contactId: fullListing.sellerContactId,
+          listingId: fullListing.id,
+          trigger: "LISTING_CREATED",
+          payload: {
+            source: "listings/save",
+            address: fullListing.address,
+            status: normalizeStatus(fullListing.status) ?? "draft",
+          },
+        };
 
-    await processTriggers("LISTING_CREATED", triggerContext);
-  } catch (err) {
-    console.error(
-      "[listings/save] LISTING_CREATED trigger error:",
-      err
-    );
-    // don’t fail the save just because automation failed
-  }
-}
+        await processTriggers("LISTING_CREATED", triggerContext);
+      } catch (err) {
+        console.error(
+          "[listings/save] LISTING_CREATED trigger error:",
+          err
+        );
+        // don’t fail the save just because automation failed
+      }
+    }
 
     return NextResponse.json({
       success: true,

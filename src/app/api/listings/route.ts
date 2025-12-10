@@ -31,13 +31,16 @@ export async function GET(req: NextRequest) {
     }
 
     const url = new URL(req.url);
-    const statusParam = url.searchParams.get("status"); // e.g. "active", "draft", "closed"
+    const statusParamRaw = url.searchParams.get("status"); // e.g. "active", "draft", "closed"
+    const statusParam = statusParamRaw
+      ? statusParamRaw.toLowerCase()
+      : null;
     const q = url.searchParams.get("q")?.trim().toLowerCase() || "";
 
     // Map "active" → not draft/closed, etc. (simple starter logic)
     let statusFilter: string | undefined;
     if (statusParam && statusParam !== "all") {
-      statusFilter = statusParam;
+      statusFilter = statusParam; // DB now stores lowercase
     }
 
     const listings = await prisma.listing.findMany({
@@ -91,12 +94,12 @@ export async function GET(req: NextRequest) {
         address: l.address,
         mlsId: l.mlsId,
         price: l.price,
-        status: l.status,
+        status: l.status, // lowercase in DB, UI will pretty-format
         description: l.description,
         aiCopy: l.aiCopy,
         aiNotes: l.aiNotes,
 
-        // ---- NEW: photos for gallery + workspace ----
+        // ---- photos for gallery + workspace ----
         photoCount,
         coverPhotoUrl: coverPhoto ? coverPhoto.url : null,
         photos: l.photos.map((p) => ({

@@ -1,4 +1,3 @@
-// src/lib/automations/runAutomation.ts
 import { prisma } from "@/lib/prisma";
 import {
   sendAutomationEmail,
@@ -11,7 +10,7 @@ export type AutomationStep = {
   id?: string;
   type: StepType;
   config: any;
-  thenSteps?: AutomationStep[]; // used only when type === "IF"
+  thenSteps?: AutomationStep[];
   elseSteps?: AutomationStep[];
 };
 
@@ -23,9 +22,22 @@ type RunContext = {
   payload?: any;
 };
 
-// -----------------------------
-// Helpers
-// -----------------------------
+/* ------------------------------------
+ * Condition helpers (unchanged)
+ * -----------------------------------*/
+
+type ConditionJoin = "AND" | "OR";
+
+type ConditionConfig = {
+  field: string;
+  operator: "equals" | "not_equals" | string;
+  value: string;
+};
+
+type NormalizedIfConfig = {
+  join: ConditionJoin;
+  conditions: ConditionConfig[];
+};
 
 // Very simple {{var}} templating
 function renderTemplate(template: string, vars: Record<string, string>): string {
@@ -55,8 +67,8 @@ function getConditionFieldValue(
   }
 }
 
-function evaluateCondition(
-  config: { field: string; operator: string; value: string },
+function evaluateSingleCondition(
+  config: ConditionConfig,
   contact: any | null,
   listing: any | null
 ): boolean {
@@ -66,19 +78,64 @@ function evaluateCondition(
   if (config.operator === "equals") return actual === config.value;
   if (config.operator === "not_equals") return actual !== config.value;
 
-  return false;
+  return actual === config.value;
 }
 
-// -----------------------------
-// Core runner
-// -----------------------------
+function normalizeIfConfig(raw: any): NormalizedIfConfig {
+  const join: ConditionJoin =
+    raw?.join === "OR" || raw?.join === "AND" ? raw.join : "AND";
+
+  if (raw && Array.isArray(raw.conditions)) {
+    const conditions: ConditionConfig[] = raw.conditions.map((c: any) => ({
+      field: String(c.field ?? ""),
+      operator: String(c.operator ?? "equals"),
+      value: String(c.value ?? ""),
+    }));
+
+    return {
+      join,
+      conditions: conditions.filter((c) => !!c.field && !!c.value),
+    };
+  }
+
+  const field = raw?.field as string | undefined;
+  const operator = (raw?.operator as string | undefined) ?? "equals";
+  const value = raw?.value as string | undefined;
+
+  if (!field || !value) {
+    return { join: "AND", conditions: [] };
+  }
+
+  return {
+    join: "AND",
+    conditions: [{ field, operator, value }],
+  };
+}
+
+function evaluateIfGroup(
+  rawConfig: any,
+  contact: any | null,
+  listing: any | null
+): boolean {
+  const { join, conditions } = normalizeIfConfig(rawConfig);
+  if (!conditions.length) return false;
+
+  const results = conditions.map((c) =>
+    evaluateSingleCondition(c, contact, listing)
+  );
+
+  return join === "OR" ? results.some(Boolean) : results.every(Boolean);
+}
+
+/* ------------------------------------
+ * Core runner
+ * -----------------------------------*/
 
 export async function runAutomation(
   automationId: string,
   steps: AutomationStep[],
   ctx: RunContext
 ) {
-  // Load user + contact + listing for merge vars
   const [user, contact, listing] = await Promise.all([
     prisma.user.findUnique({ where: { id: ctx.userId } }),
     ctx.contactId
@@ -97,7 +154,9 @@ export async function runAutomation(
     (contact as any)?.firstName ??
     (contact as any)?.name?.split(" ")[0] ??
     "";
+
   const agentName = user?.name ?? "";
+
   const propertyAddress =
     (listing as any)?.address ??
     (listing as any)?.fullAddress ??
@@ -110,22 +169,29 @@ export async function runAutomation(
     propertyAddress,
   };
 
-  const toEmail =
-    (contact as any)?.email ??
-    (contact as any)?.primaryEmail ??
-    user?.email ??
-    null;
+  // --- FIXED FALLBACK LOGIC ---
+let toEmail: string | null =
+  (contact as any)?.email ??
+  (contact as any)?.primaryEmail ??
+  null;
 
-  const toPhone =
-    (contact as any)?.phone ??
-    (contact as any)?.phoneNumber ??
-    (contact as any)?.mobile ??
-    null;
+let toPhone: string | null =
+  (contact as any)?.phone ??
+  (contact as any)?.phoneNumber ??
+  null;
+
+// If no contact → test mode: send to user's email only
+if (!contact) {
+  toEmail = user?.email ?? null;
+  // Users don’t have phone numbers — do NOT assign user.phone
+  toPhone = null;
+}
+
+  console.log("Sending automation email to:", toEmail);
 
   let runStatus: "success" | "failed" = "success";
   let runMessage: string | null = null;
 
-  // Create the AutomationRun row
   const run = await prisma.automationRun.create({
     data: {
       automationId,
@@ -227,7 +293,6 @@ export async function runAutomation(
           }
 
           case "TASK": {
-            // TODO: later, persist to a Task table. For now just log it.
             await recordStep({
               stepId: step.id,
               stepType: "TASK",
@@ -238,7 +303,6 @@ export async function runAutomation(
           }
 
           case "WAIT": {
-            // No real delay yet; just log intention.
             const hours = step.config?.hours ?? null;
             await recordStep({
               stepId: step.id,
@@ -253,20 +317,16 @@ export async function runAutomation(
           }
 
           case "IF": {
-            const cond = step.config as {
-              field: string;
-              operator: string;
-              value: string;
-            };
-
-            const result = evaluateCondition(cond, contact, listing);
+            const result = evaluateIfGroup(step.config, contact, listing);
 
             await recordStep({
               stepId: step.id,
               stepType: "IF",
               status: "success",
-              message: `Condition evaluated to ${result ? "true" : "false"}.`,
-              payload: cond,
+              message: `Condition evaluated to ${
+                result ? "true" : "false"
+              }.`,
+              payload: normalizeIfConfig(step.config),
             });
 
             const branchSteps = result

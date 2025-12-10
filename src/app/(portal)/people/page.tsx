@@ -1,4 +1,4 @@
-// src/app/(portal)/crm/page.tsx
+// src/app/(portal)/people/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +14,8 @@ type Stage = "new" | "warm" | "hot" | "past";
 type ContactRoleFilter = "all" | "buyers" | "sellers";
 type StageFilter = "all" | "new" | "warm" | "hot" | "past";
 
+// Internal, lowercase contact type values
+type ContactType = "buyer" | "seller" | "buyer & seller" | null;
 
 type ContactNote = {
   id: string;
@@ -34,7 +36,7 @@ type Contact = {
   name: string;
   label: string;
   stage: Stage;
-  type: "Buyer" | "Seller" | "Buyer & Seller" | null;
+  type: ContactType;
   priceRange: string;
   areas: string; // used for property address OR buyer areas
   timeline: string;
@@ -49,6 +51,19 @@ type ListingOption = {
   id: string;
   label: string; // usually the address
 };
+
+/* ------------------------------------
+ * Constants
+ * -----------------------------------*/
+
+const CONTACT_SOURCE_OPTIONS = [
+  { value: "zillow", label: "Zillow" },
+  { value: "referral", label: "Referral" },
+  { value: "open house", label: "Open House" },
+  { value: "website", label: "Website" },
+  { value: "social media", label: "Social Media" },
+  { value: "other", label: "Other" },
+] as const;
 
 /* ------------------------------------
  * Small helpers
@@ -66,6 +81,39 @@ function upsertLinkedListing(
   return current.map((l) =>
     l.id === next.id && l.role === next.role ? { ...l, ...next } : l
   );
+}
+
+function normalizeContactType(raw: any): ContactType {
+  if (!raw) return null;
+  const v = String(raw).toLowerCase();
+  if (v === "buyer") return "buyer";
+  if (v === "seller") return "seller";
+  if (v === "buyer & seller" || v === "buyer & seller") return "buyer & seller";
+  return null;
+}
+
+function prettyContactType(type: ContactType): string {
+  switch (type) {
+    case "buyer":
+      return "Buyer";
+    case "seller":
+      return "Seller";
+    case "buyer & seller":
+      return "Buyer & Seller";
+    default:
+      return "—";
+  }
+}
+
+function prettySource(source: string): string {
+  if (!source) return "—";
+  const opt = CONTACT_SOURCE_OPTIONS.find((o) => o.value === source);
+  if (opt) return opt.label;
+  // Fallback: capitalize first letter of each word
+  return source
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ""))
+    .join(" ");
 }
 
 /* ------------------------------------
@@ -97,33 +145,24 @@ export default function CrmPage() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const CONTACT_SOURCE_OPTIONS = [
-  { value: "zillow", label: "Zillow" },
-  { value: "referral", label: "Referral" },
-  { value: "open house", label: "Open house" },
-  { value: "website", label: "Website" },
-  { value: "social media", label: "Social media" },
-  { value: "other", label: "Other" },
-];
-
   // ---------- Derived counts for pills ----------
   const totalContacts = contacts.length;
 
   const buyersCount = contacts.filter(
-    (c) => c.type === "Buyer" || c.type === "Buyer & Seller"
+    (c) => c.type === "buyer" || c.type === "buyer & seller"
   ).length;
 
   const sellersCount = contacts.filter(
-    (c) => c.type === "Seller" || c.type === "Buyer & Seller"
+    (c) => c.type === "seller" || c.type === "buyer & seller"
   ).length;
 
   function handleStageFilterClick(next: StageFilter) {
-  setStageFilter((current) => {
-    // If you click the same pill again, go back to "active" (all non-past)
-    if (current === next) return "all";
-    return next;
-  });
-}
+    setStageFilter((current) => {
+      // If you click the same pill again, go back to "all"
+      if (current === next) return "all";
+      return next;
+    });
+  }
 
   // Listings for tagging
   const [listings, setListings] = useState<ListingOption[]>([]);
@@ -163,25 +202,31 @@ export default function CrmPage() {
           throw new Error(data?.error || "Failed to load contacts.");
         }
         const data = await res.json();
-        const loaded: Contact[] = (data.contacts ?? []).map((c: any) => ({
-          id: c.id,
-          name: c.name ?? "",
-          label: c.label ?? "",
-          stage: (c.stage as Stage) ?? "new",
-          type:
-            (c.type as "Buyer" | "Seller" | "Buyer & Seller" | null) ??
-            ("Buyer" as const),
-          priceRange: c.priceRange ?? "",
-          areas: c.areas ?? "",
-          timeline: c.timeline ?? "",
-          source: c.source ?? "",
-          email: c.email ?? "",
-          phone: c.phone ?? "",
-          notes: Array.isArray(c.notes) ? c.notes : [],
-          linkedListings: Array.isArray(c.linkedListings)
-            ? c.linkedListings
-            : [],
-        }));
+        const loaded: Contact[] = (data.contacts ?? []).map((c: any) => {
+          const type: ContactType = normalizeContactType(c.type);
+          const stage: Stage =
+            (c.stage as Stage) && ["new", "warm", "hot", "past"].includes(c.stage)
+              ? c.stage
+              : "new";
+
+          return {
+            id: c.id,
+            name: c.name ?? "",
+            label: c.label ?? "",
+            stage,
+            type,
+            priceRange: c.priceRange ?? "",
+            areas: c.areas ?? "",
+            timeline: c.timeline ?? "",
+            source: (c.source ?? "").toString().toLowerCase(),
+            email: c.email ?? "",
+            phone: c.phone ?? "",
+            notes: Array.isArray(c.notes) ? c.notes : [],
+            linkedListings: Array.isArray(c.linkedListings)
+              ? c.linkedListings
+              : [],
+          };
+        });
 
         if (!cancelled) {
           setContacts(loaded);
@@ -238,18 +283,18 @@ export default function CrmPage() {
     let list = base;
 
     // Stage filter
-if (stageFilter !== "all") {
-  list = list.filter((c) => c.stage === stageFilter);
-}
+    if (stageFilter !== "all") {
+      list = list.filter((c) => c.stage === stageFilter);
+    }
 
     // Role filter
     if (roleFilter === "buyers") {
       list = list.filter(
-        (c) => c.type === "Buyer" || c.type === "Buyer & Seller"
+        (c) => c.type === "buyer" || c.type === "buyer & seller"
       );
     } else if (roleFilter === "sellers") {
       list = list.filter(
-        (c) => c.type === "Seller" || c.type === "Buyer & Seller"
+        (c) => c.type === "seller" || c.type === "buyer & seller"
       );
     }
 
@@ -480,13 +525,13 @@ if (stageFilter !== "all") {
           lastName,
           email: activeContact.email || undefined,
           phone: activeContact.phone || undefined,
-          stage: activeContact.stage,
+          stage: activeContact.stage, // already lowercase
           label: activeContact.label || undefined,
-          type: activeContact.type,
+          type: activeContact.type || undefined, // lowercase
           priceRange: activeContact.priceRange || undefined,
           areas: activeContact.areas || undefined,
           timeline: activeContact.timeline || undefined,
-          source: activeContact.source || undefined,
+          source: activeContact.source || undefined, // lowercase
         }),
       });
 
@@ -501,14 +546,15 @@ if (stageFilter !== "all") {
         id: data.contact.id,
         name: data.contact.name ?? "",
         label: data.contact.label ?? "",
-        stage: (data.contact.stage as Stage) ?? "new",
-        type:
-          (data.contact.type as "Buyer" | "Seller" | "Buyer & Seller" | null) ??
-          ("Buyer" as const),
+        stage:
+          (data.contact.stage as Stage) && ["new", "warm", "hot", "past"].includes(data.contact.stage)
+            ? (data.contact.stage as Stage)
+            : "new",
+        type: normalizeContactType(data.contact.type),
         priceRange: data.contact.priceRange ?? "",
         areas: data.contact.areas ?? "",
         timeline: data.contact.timeline ?? "",
-        source: data.contact.source ?? "",
+        source: (data.contact.source ?? "").toString().toLowerCase(),
         email: data.contact.email ?? "",
         phone: data.contact.phone ?? "",
         notes: Array.isArray(data.contact.notes) ? data.contact.notes : [],
@@ -613,32 +659,37 @@ if (stageFilter !== "all") {
   // Refresh contacts after linking/unlinking so CRM & Listings stay in sync
   async function refreshContactsAndSelect(contactId: string) {
     try {
-      // IMPORTANT: do NOT toggle `loading` here
       const res = await fetch("/api/crm/contacts");
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || "Failed to reload contacts.");
       }
       const data = await res.json();
-      const loaded: Contact[] = (data.contacts ?? []).map((c: any) => ({
-        id: c.id,
-        name: c.name ?? "",
-        label: c.label ?? "",
-        stage: (c.stage as Stage) ?? "new",
-        type:
-          (c.type as "Buyer" | "Seller" | "Buyer & Seller" | null) ??
-          ("Buyer" as const),
-        priceRange: c.priceRange ?? "",
-        areas: c.areas ?? "",
-        timeline: c.timeline ?? "",
-        source: c.source ?? "",
-        email: c.email ?? "",
-        phone: c.phone ?? "",
-        notes: Array.isArray(c.notes) ? c.notes : [],
-        linkedListings: Array.isArray(c.linkedListings)
-          ? c.linkedListings
-          : [],
-      }));
+      const loaded: Contact[] = (data.contacts ?? []).map((c: any) => {
+        const type: ContactType = normalizeContactType(c.type);
+        const stage: Stage =
+          (c.stage as Stage) && ["new", "warm", "hot", "past"].includes(c.stage)
+            ? c.stage
+            : "new";
+
+        return {
+          id: c.id,
+          name: c.name ?? "",
+          label: c.label ?? "",
+          stage,
+          type,
+          priceRange: c.priceRange ?? "",
+          areas: c.areas ?? "",
+          timeline: c.timeline ?? "",
+          source: (c.source ?? "").toString().toLowerCase(),
+          email: c.email ?? "",
+          phone: c.phone ?? "",
+          notes: Array.isArray(c.notes) ? c.notes : [],
+          linkedListings: Array.isArray(c.linkedListings)
+            ? c.linkedListings
+            : [],
+        };
+      });
 
       setContacts(loaded);
       const found = loaded.find((c) => c.id === contactId) ?? null;
@@ -659,12 +710,11 @@ if (stageFilter !== "all") {
       const saved = await ensureContactSaved();
       if (!saved?.id) return;
 
-      const relType = saved.type ?? "Buyer";
+      const relType: ContactType = saved.type ?? "buyer";
 
       const wantsSeller =
-        relType === "Seller" || relType === "Buyer & Seller";
-      const wantsBuyer =
-        relType === "Buyer" || relType === "Buyer & Seller";
+        relType === "seller" || relType === "buyer & seller";
+      const wantsBuyer = relType === "buyer" || relType === "buyer & seller";
 
       if (!wantsSeller && !wantsBuyer) {
         return;
@@ -842,59 +892,55 @@ if (stageFilter !== "all") {
         {/* Filters + search */}
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-col gap-2">
-          
             {/* Buyer / seller filter */}
-<div className="inline-flex flex-wrap gap-2 text-[11px]">
-  <FilterPill
-    label="All"
-    active={roleFilter === "all"}
-    onClick={() => setRoleFilter("all")}
-  />
-  <FilterPill
-    label="Buyers"
-    active={roleFilter === "buyers"}
-    onClick={() => setRoleFilter("buyers")}
-    count={buyersCount}
-  />
-  <FilterPill
-    label="Sellers"
-    active={roleFilter === "sellers"}
-    onClick={() => setRoleFilter("sellers")}
-    count={sellersCount}
-  />
-</div>
+            <div className="inline-flex flex-wrap gap-2 text-[11px]">
+              <FilterPill
+                label="All"
+                active={roleFilter === "all"}
+                onClick={() => setRoleFilter("all")}
+                count={totalContacts || undefined}
+              />
+              <FilterPill
+                label="Buyers"
+                active={roleFilter === "buyers"}
+                onClick={() => setRoleFilter("buyers")}
+                count={buyersCount}
+              />
+              <FilterPill
+                label="Sellers"
+                active={roleFilter === "sellers"}
+                onClick={() => setRoleFilter("sellers")}
+                count={sellersCount}
+              />
+            </div>
 
-
-{/* Stage filter */}
-<div className="inline-flex flex-wrap gap-2 text-xs">
-  <FilterPill
-    label="New"
-    active={stageFilter === "new"}
-    badgeColor="new"
-    onClick={() => handleStageFilterClick("new")}
-  />
-
-  <FilterPill
-    label="Warm"
-    active={stageFilter === "warm"}
-    badgeColor="warm"
-    onClick={() => handleStageFilterClick("warm")}
-  />
-
-  <FilterPill
-    label="Hot"
-    active={stageFilter === "hot"}
-    badgeColor="hot"
-    onClick={() => handleStageFilterClick("hot")}
-  />
-
-  <FilterPill
-    label="Past / sphere"
-    active={stageFilter === "past"}
-    badgeColor="past"
-    onClick={() => handleStageFilterClick("past")}
-  />
-</div>
+            {/* Stage filter */}
+            <div className="inline-flex flex-wrap gap-2 text-xs">
+              <FilterPill
+                label="New"
+                active={stageFilter === "new"}
+                badgeColor="new"
+                onClick={() => handleStageFilterClick("new")}
+              />
+              <FilterPill
+                label="Warm"
+                active={stageFilter === "warm"}
+                badgeColor="warm"
+                onClick={() => handleStageFilterClick("warm")}
+              />
+              <FilterPill
+                label="Hot"
+                active={stageFilter === "hot"}
+                badgeColor="hot"
+                onClick={() => handleStageFilterClick("hot")}
+              />
+              <FilterPill
+                label="Past / sphere"
+                active={stageFilter === "past"}
+                badgeColor="past"
+                onClick={() => handleStageFilterClick("past")}
+              />
+            </div>
           </div>
 
           <div className="w-full md:w-72">
@@ -955,8 +1001,8 @@ if (stageFilter !== "all") {
                     (contact.id && contact.id === selectedId);
 
                   const relType = contact.type;
-                  const isBuyer = relType === "Buyer";
-                  const isSeller = relType === "Seller";
+                  const isBuyer = relType === "buyer";
+                  const isSeller = relType === "seller";
 
                   const priceLabel = isBuyer
                     ? "Budget"
@@ -1013,7 +1059,7 @@ if (stageFilter !== "all") {
                           <span className="text-[var(--avillo-cream-muted)]">
                             Type:
                           </span>{" "}
-                          {contact.type ?? "—"}
+                          {prettyContactType(contact.type)}
                         </span>
                         <span className="truncate">
                           <span className="text-[var(--avillo-cream-muted)]">
@@ -1037,7 +1083,7 @@ if (stageFilter !== "all") {
 
                       {/* Source row */}
                       <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                        Source: {contact.source || "—"}
+                        Source: {prettySource(contact.source)}
                       </p>
                     </button>
                   );
@@ -1143,19 +1189,19 @@ if (stageFilter !== "all") {
                     <div className="inline-flex flex-wrap gap-2">
                       <RoleToggle
                         label="Buyer"
-                        active={activeContact.type === "Buyer"}
-                        onClick={() => handleFieldChange("type", "Buyer")}
+                        active={activeContact.type === "buyer"}
+                        onClick={() => handleFieldChange("type", "buyer")}
                       />
                       <RoleToggle
                         label="Seller"
-                        active={activeContact.type === "Seller"}
-                        onClick={() => handleFieldChange("type", "Seller")}
+                        active={activeContact.type === "seller"}
+                        onClick={() => handleFieldChange("type", "seller")}
                       />
                       <RoleToggle
                         label="Buyer & Seller"
-                        active={activeContact.type === "Buyer & Seller"}
+                        active={activeContact.type === "buyer & seller"}
                         onClick={() =>
-                          handleFieldChange("type", "Buyer & Seller")
+                          handleFieldChange("type", "buyer & seller")
                         }
                       />
                     </div>
@@ -1164,19 +1210,19 @@ if (stageFilter !== "all") {
                   {/* Quick stats row 1: price / budget + address/areas */}
                   {(() => {
                     const relType = activeContact.type;
-                    const isBuyerOnly = relType === "Buyer";
+                    const isBuyerOnly = relType === "buyer";
 
                     const priceLabel =
-                      relType === "Buyer"
+                      relType === "buyer"
                         ? "Budget"
-                        : relType === "Seller"
+                        : relType === "seller"
                         ? "Price"
                         : "Price / budget";
 
                     const pricePlaceholder =
-                      relType === "Buyer"
+                      relType === "buyer"
                         ? "Ex: $650K–$750K"
-                        : relType === "Seller"
+                        : relType === "seller"
                         ? "Ex: $1.3M–$1.5M"
                         : "Ex: Buyer $650K–$750K or Seller $1.3M";
 
@@ -1211,35 +1257,34 @@ if (stageFilter !== "all") {
                       onChange={(v) => handleFieldChange("timeline", v)}
                       placeholder="Ex: 0–60 days, 3–6 months…"
                     />
-                  
 
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2">
-  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-    Source
-  </p>
+                    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                        Source
+                      </p>
 
-  <select
-    value={activeContact.source || ""}
-    onChange={(e) =>
-      handleFieldChange("source", e.target.value.toLowerCase())
-    }
-    className="mt-0.5 w-full border-none bg-transparent pt-0.5 text-[11px] text-slate-50 outline-none"
-  >
-    <option value="" disabled>
-      Select source…
-    </option>
-    {CONTACT_SOURCE_OPTIONS.map((opt) => (
-      <option
-        key={opt.value}
-        value={opt.value}
-        className="bg-slate-900 text-slate-50"
-      >
-        {opt.label}
-      </option>
-    ))}
-  </select>
-  </div>
-  </div>
+                      <select
+                        value={activeContact.source || ""}
+                        onChange={(e) =>
+                          handleFieldChange("source", e.target.value)
+                        }
+                        className="mt-0.5 w-full border-none bg-transparent pt-0.5 text-[11px] text-slate-50 outline-none"
+                      >
+                        <option value="" disabled>
+                          Select source…
+                        </option>
+                        {CONTACT_SOURCE_OPTIONS.map((opt) => (
+                          <option
+                            key={opt.value}
+                            value={opt.value}
+                            className="bg-slate-900 text-slate-50"
+                          >
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
 
                   {/* Contact methods */}
                   <div className="grid gap-2 text-[11px] sm:grid-cols-2">
@@ -1326,13 +1371,14 @@ if (stageFilter !== "all") {
                         </p>
                         <div className="mt-2 flex flex-wrap gap-2">
                           {listings.map((l) => {
-                            const relType = activeContact.type ?? "Buyer";
+                            const relType: ContactType =
+                              activeContact.type ?? "buyer";
                             const wantsSeller =
-                              relType === "Seller" ||
-                              relType === "Buyer & Seller";
+                              relType === "seller" ||
+                              relType === "buyer & seller";
                             const wantsBuyer =
-                              relType === "Buyer" ||
-                              relType === "Buyer & Seller";
+                              relType === "buyer" ||
+                              relType === "buyer & seller";
 
                             const links = activeContact.linkedListings ?? [];
                             const linkedAsSeller = links.some(
@@ -1532,7 +1578,6 @@ if (stageFilter !== "all") {
 /* ------------------------------------
  * Small components & helpers
  * -----------------------------------*/
-
 
 type DetailInputProps = {
   label: string;

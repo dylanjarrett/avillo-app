@@ -33,7 +33,12 @@ export async function evaluateCondition(
   // ------------ PAYLOAD FIELDS (trigger payload) ------------
   if (field.startsWith("payload.") && context.payload) {
     const key = field.replace("payload.", "");
-    actual = context.payload?.[key];
+    actual = (context.payload as any)?.[key];
+  }
+
+  // If nothing resolved, condition fails safely
+  if (actual === null || actual === undefined) {
+    return false;
   }
 
   // ------------ OPERATOR LOGIC ------------
@@ -59,12 +64,12 @@ export async function evaluateCondition(
     case "contains":
       return Array.isArray(actual)
         ? actual.includes(value)
-        : String(actual ?? "").includes(String(value));
+        : String(actual).includes(String(value));
 
     case "not_contains":
       return Array.isArray(actual)
         ? !actual.includes(value)
-        : !String(actual ?? "").includes(String(value));
+        : !String(actual).includes(String(value));
 
     default:
       return false;

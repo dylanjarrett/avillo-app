@@ -1,4 +1,3 @@
-// src/components/autopilot/StepModal.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -13,6 +12,17 @@ type BranchStep = {
 
 type ConditionScope = "contact" | "listing" | "both";
 
+type ConditionConfig = {
+  field: string;
+  operator: "equals" | "not_equals";
+  value: string;
+};
+
+type IfConfig = {
+  join: "AND" | "OR";
+  conditions: ConditionConfig[];
+};
+
 type Props = {
   type: StepType | null;
   initialConfig?: any | null;
@@ -20,7 +30,7 @@ type Props = {
   initialElse?: BranchStep[] | null;
   // contact  -> only contact fields
   // listing  -> only listing fields
-  // both/undefined -> show everything (manual workflows)
+  // both/undefined -> show everything
   conditionScope?: ConditionScope;
   onClose: () => void;
   onSave: (
@@ -45,7 +55,6 @@ const LISTING_CONDITION_FIELDS = [
   { value: "listing.status", label: "Listing status" },
 ];
 
-// For manual workflows we show everything
 const ALL_CONDITION_FIELDS = [
   ...CONTACT_CONDITION_FIELDS,
   ...LISTING_CONDITION_FIELDS,
@@ -75,7 +84,7 @@ const CONDITION_OPERATORS = [
 function getConditionFields(scope: ConditionScope | undefined) {
   if (scope === "contact") return CONTACT_CONDITION_FIELDS;
   if (scope === "listing") return LISTING_CONDITION_FIELDS;
-  return ALL_CONDITION_FIELDS; // manual / undefined
+  return ALL_CONDITION_FIELDS;
 }
 
 export default function StepModal({
@@ -87,21 +96,116 @@ export default function StepModal({
   onClose,
   onSave,
 }: Props) {
+  // For non-IF steps we just keep a simple object
   const [form, setForm] = useState<any>(initialConfig ?? {});
   const [thenSteps, setThenSteps] = useState<BranchStep[]>(initialThen ?? []);
   const [elseSteps, setElseSteps] = useState<BranchStep[]>(initialElse ?? []);
 
   const isEditing = !!initialConfig;
-
   const conditionFields = getConditionFields(conditionScope);
 
   function update(key: string, value: any) {
     setForm((prev: any) => ({ ...prev, [key]: value }));
   }
 
-  // Value options for current field
-  const valueOptions: string[] =
-    (form.field && FIELD_VALUE_OPTIONS[form.field]) || [];
+  /* ------------------------------------
+ * IF helpers: conditions array
+ * -----------------------------------*/
+
+function normaliseIfConfig(raw: any): IfConfig {
+  const availableFields =
+    conditionFields.length > 0 ? conditionFields : ALL_CONDITION_FIELDS;
+
+  // New shape already? { join, conditions: ConditionConfig[] }
+  if (raw && Array.isArray(raw.conditions)) {
+    const join: "AND" | "OR" = raw.join === "OR" ? "OR" : "AND";
+    const existing = raw.conditions as ConditionConfig[];
+
+    const conditions: ConditionConfig[] =
+      existing.length > 0
+        ? existing
+        : [
+            {
+              field: availableFields[0]?.value ?? "contact.stage",
+              operator: "equals",
+              value:
+                FIELD_VALUE_OPTIONS[
+                  (availableFields[0]?.value as string) || "contact.stage"
+                ]?.[0] ?? "",
+            },
+          ];
+
+    return { join, conditions };
+  }
+
+  // Legacy shape: { field, operator, value }
+  let field = raw?.field as string | undefined;
+  if (!field || !availableFields.some((f) => f.value === field)) {
+    field = availableFields[0]?.value ?? "contact.stage";
+  }
+
+  const allowedVals = FIELD_VALUE_OPTIONS[field] ?? [];
+  let value = raw?.value as string | undefined;
+  if (!value || !allowedVals.includes(value)) {
+    value = allowedVals[0] ?? "";
+  }
+
+  const operator: "equals" | "not_equals" =
+    raw?.operator === "not_equals" ? "not_equals" : "equals";
+
+  return {
+    join: "AND",
+    conditions: [{ field, operator, value }],
+  };
+}
+
+  function addConditionRow() {
+    setForm((prev: any) => {
+      const cfg = normaliseIfConfig(prev || {});
+      const availableFields =
+        conditionFields.length > 0 ? conditionFields : ALL_CONDITION_FIELDS;
+      const field = availableFields[0]?.value ?? "contact.stage";
+      const value =
+        FIELD_VALUE_OPTIONS[field]?.[0] ??
+        FIELD_VALUE_OPTIONS["contact.stage"]?.[0] ??
+        "";
+      return {
+        ...cfg,
+        conditions: [
+          ...cfg.conditions,
+          {
+            field,
+            operator: "equals",
+            value,
+          },
+        ],
+      };
+    });
+  }
+
+  function updateCondition(index: number, patch: Partial<ConditionConfig>) {
+    setForm((prev: any) => {
+      const cfg = normaliseIfConfig(prev || {});
+      const next = [...cfg.conditions];
+      next[index] = { ...next[index], ...patch };
+      return {
+        ...cfg,
+        conditions: next,
+      };
+    });
+  }
+
+  function removeCondition(index: number) {
+    setForm((prev: any) => {
+      const cfg = normaliseIfConfig(prev || {});
+      const next = [...cfg.conditions];
+      next.splice(index, 1);
+      return {
+        ...cfg,
+        conditions: next.length ? next : cfg.conditions,
+      };
+    });
+  }
 
   /* ------------------------------------
    * Defaults when opening modal
@@ -128,30 +232,10 @@ export default function StepModal({
       return;
     }
 
-    // IF defaults
+    // IF defaults (multi-condition)
     if (type === "IF") {
-      const availableFields =
-        conditionFields.length > 0 ? conditionFields : ALL_CONDITION_FIELDS;
-
-      // make sure existing field is allowed for this scope
-      let field = initialConfig?.field as string | undefined;
-      if (!field || !availableFields.some((f) => f.value === field)) {
-        field = availableFields[0]?.value ?? "contact.stage";
-      }
-
-      // pick sensible value
-      const allowedValues = FIELD_VALUE_OPTIONS[field] ?? [];
-      let value = initialConfig?.value as string | undefined;
-      if (!value || !allowedValues.includes(value)) {
-        value = allowedValues[0] ?? "";
-      }
-
-      setForm({
-        field,
-        operator: initialConfig?.operator ?? "equals",
-        value,
-      });
-
+      const cfg = normaliseIfConfig(initialConfig ?? {});
+      setForm(cfg);
       setThenSteps(initialThen ?? []);
       setElseSteps(initialElse ?? []);
       return;
@@ -175,16 +259,19 @@ export default function StepModal({
     if (!type) return;
 
     if (type === "IF") {
-      if (!form.field || !form.operator || !form.value) {
-        alert("Select a field, operator, and value.");
+      const cfg = normaliseIfConfig(form ?? {});
+      const cleaned = cfg.conditions.filter(
+        (c) => c.field && c.value && c.operator
+      );
+      if (!cleaned.length) {
+        alert("Add at least one condition for this IF step.");
         return;
       }
 
       onSave(
         {
-          field: form.field,
-          operator: form.operator,
-          value: form.value,
+          join: cfg.join,
+          conditions: cleaned,
         },
         thenSteps,
         elseSteps
@@ -273,10 +360,13 @@ export default function StepModal({
    * -----------------------------------*/
   if (!type) return null;
 
-  // shared select styling
   const selectBase =
     "bg-slate-950/90 text-[11px] text-slate-50 outline-none border border-slate-700/80 rounded-lg px-2 py-1";
   const optionClass = "bg-slate-900 text-slate-50";
+
+  // For IF value dropdowns we need current cfg
+  const ifCfg: IfConfig | null =
+    type === "IF" ? normaliseIfConfig(form ?? {}) : null;
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
@@ -337,7 +427,7 @@ export default function StepModal({
               </label>
               <textarea
                 rows={4}
-                className="mt-1 w-full resize-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+                className="mt-1 w-fullresize-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
                 placeholder="Ex: Hey {{firstName}}, thanks for reaching out — when are you free for a quick call?"
                 value={form.text ?? ""}
                 onChange={(e) => update("text", e.target.value)}
@@ -445,79 +535,143 @@ export default function StepModal({
         )}
 
         {/* IF */}
-        {type === "IF" && (
+        {type === "IF" && ifCfg && (
           <div className="space-y-4">
-            {/* Condition */}
+            {/* Condition builder */}
             <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
               <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                Condition
+                Conditions
               </label>
               <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                Example: If <strong>Contact stage</strong> is{" "}
-                <strong>hot</strong>, then send a text. Otherwise, create a
-                task.
+                Example: Contact type is <strong>buyer</strong> AND Contact
+                stage is <strong>hot</strong>.
               </p>
 
-              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                {/* FIELD (scope aware) */}
+              {/* Join selector */}
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                  Link conditions with
+                </span>
                 <select
-                  className={selectBase + " flex-1"}
-                  value={
-                    form.field ?? conditionFields[0]?.value ?? "contact.stage"
+                  className={selectBase + " w-24"}
+                  value={ifCfg.join}
+                  onChange={(e) =>
+                    setForm((prev: any) => ({
+                      ...normaliseIfConfig(prev || {}),
+                      join: e.target.value === "OR" ? "OR" : "AND",
+                    }))
                   }
-                  onChange={(e) => {
-                    const newField = e.target.value;
-                    update("field", newField);
-                    const firstVal = FIELD_VALUE_OPTIONS[newField]?.[0] ?? "";
-                    update("value", firstVal);
-                  }}
                 >
-                  {conditionFields.map((f) => (
-                    <option
-                      key={f.value}
-                      value={f.value}
-                      className={optionClass}
-                    >
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
-
-                {/* OPERATOR */}
-                <select
-                  className={selectBase + " flex-1"}
-                  value={form.operator ?? "equals"}
-                  onChange={(e) => update("operator", e.target.value)}
-                >
-                  {CONDITION_OPERATORS.map((o) => (
-                    <option
-                      key={o.value}
-                      value={o.value}
-                      className={optionClass}
-                    >
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-
-                {/* VALUE (dropdown locked to valid values) */}
-                <select
-                  className={selectBase + " flex-1"}
-                  value={form.value ?? valueOptions[0] ?? ""}
-                  onChange={(e) => update("value", e.target.value)}
-                >
-                  {valueOptions.map((v) => (
-                    <option key={v} value={v} className={optionClass}>
-                      {v}
-                    </option>
-                  ))}
+                  <option className={optionClass} value="AND">
+                    AND
+                  </option>
+                  <option className={optionClass} value="OR">
+                    OR
+                  </option>
                 </select>
               </div>
+
+              {/* Condition rows */}
+              <div className="mt-3 space-y-2">
+                {ifCfg.conditions.map((cond, index) => {
+                  const valuesForField =
+                    FIELD_VALUE_OPTIONS[cond.field] ?? [];
+
+                  return (
+                    <div
+                      key={index}
+                      className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-950/70 px-3 py-2"
+                    >
+                      <span className="text-[10px] text-[var(--avillo-cream-muted)]">
+                        If
+                      </span>
+
+                      {/* FIELD */}
+                      <select
+                        className={selectBase + " w-40"}
+                        value={cond.field}
+                        onChange={(e) => {
+                          const newField = e.target.value;
+                          const firstVal =
+                            FIELD_VALUE_OPTIONS[newField]?.[0] ?? "";
+                          updateCondition(index, {
+                            field: newField,
+                            value: firstVal,
+                          });
+                        }}
+                      >
+                        {conditionFields.map((f) => (
+                          <option
+                            key={f.value}
+                            value={f.value}
+                            className={optionClass}
+                          >
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* OPERATOR */}
+                      <select
+                        className={selectBase + " w-24"}
+                        value={cond.operator}
+                        onChange={(e) =>
+                          updateCondition(index, {
+                            operator: e.target
+                              .value as ConditionConfig["operator"],
+                          })
+                        }
+                      >
+                        {CONDITION_OPERATORS.map((o) => (
+                          <option
+                            key={o.value}
+                            value={o.value}
+                            className={optionClass}
+                          >
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* VALUE */}
+                      <select
+                        className={selectBase + " w-32"}
+                        value={cond.value}
+                        onChange={(e) =>
+                          updateCondition(index, { value: e.target.value })
+                        }
+                      >
+                        {valuesForField.map((v) => (
+                          <option key={v} value={v} className={optionClass}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => removeCondition(index)}
+                        className="ml-auto rounded-full border border-slate-600/80 bg-slate-900/80 px-2 py-1 text-[9px] uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:text-rose-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={addConditionRow}
+                className="mt-2 rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50"
+              >
+                + Add condition
+              </button>
             </div>
 
-            {/* THEN / ELSE branches */}
+            {/* THEN / ELSE branches (unchanged from your version) */}
+            {/* THEN */}
             <div className="grid gap-3 sm:grid-cols-2">
-              {/* THEN */}
               <div className="rounded-xl border border-emerald-500/40 bg-emerald-900/10 px-3 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-200">
                   Then (condition is true)
@@ -548,7 +702,7 @@ export default function StepModal({
                         </button>
                       </div>
 
-                      {/* BRANCH SMS – full editor style */}
+                      {/* SMS */}
                       {s.type === "SMS" && (
                         <div className="mt-1 space-y-1">
                           <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
@@ -573,7 +727,7 @@ export default function StepModal({
                         </div>
                       )}
 
-                      {/* BRANCH EMAIL – subject + body */}
+                      {/* EMAIL */}
                       {s.type === "EMAIL" && (
                         <div className="mt-1 space-y-2">
                           <div>
@@ -611,6 +765,7 @@ export default function StepModal({
                         </div>
                       )}
 
+                      {/* TASK */}
                       {s.type === "TASK" && (
                         <input
                           className="mt-1 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
@@ -624,6 +779,7 @@ export default function StepModal({
                         />
                       )}
 
+                      {/* WAIT */}
                       {s.type === "WAIT" && (
                         <div className="mt-1 flex gap-2">
                           <input
@@ -712,7 +868,7 @@ export default function StepModal({
                         </button>
                       </div>
 
-                      {/* BRANCH SMS – full editor style */}
+                      {/* SMS */}
                       {s.type === "SMS" && (
                         <div className="mt-1 space-y-1">
                           <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
@@ -737,7 +893,7 @@ export default function StepModal({
                         </div>
                       )}
 
-                      {/* BRANCH EMAIL – subject + body */}
+                      {/* EMAIL */}
                       {s.type === "EMAIL" && (
                         <div className="mt-1 space-y-2">
                           <div>
@@ -775,6 +931,7 @@ export default function StepModal({
                         </div>
                       )}
 
+                      {/* TASK */}
                       {s.type === "TASK" && (
                         <input
                           className="mt-1 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
@@ -788,6 +945,7 @@ export default function StepModal({
                         />
                       )}
 
+                      {/* WAIT */}
                       {s.type === "WAIT" && (
                         <div className="mt-1 flex gap-2">
                           <input

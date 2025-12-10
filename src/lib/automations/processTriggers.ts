@@ -16,6 +16,8 @@ export async function processTriggers(
     include: { steps: true },
   });
 
+  if (!automations.length) return;
+
   for (const a of automations) {
     const steps = a.steps?.steps ? (a.steps.steps as any[]) : [];
 

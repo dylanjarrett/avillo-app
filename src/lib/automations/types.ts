@@ -1,11 +1,13 @@
+// src/lib/automations/types.ts
+
 // ---------------------------------------------
-// TRIGGERS (matches your Prisma + API layer)
+// TRIGGERS (matches Prisma + API layer)
 // ---------------------------------------------
 export type AutomationTrigger =
   | "NEW_CONTACT"
   | "LEAD_STAGE_CHANGE"
   | "LISTING_CREATED"
-  | "LISTING_STATUS_CHANGED"
+  | "LISTING_STAGE_CHANGE"
   | "MANUAL_RUN";
 
 // ---------------------------------------------
@@ -16,13 +18,14 @@ export type AutomationContext = {
   contactId?: string | null;
   listingId?: string | null;
   payload?: Record<string, any> | null;
-  // NEW: allow passing which trigger fired this run
+  /** Which trigger fired this run (used for logging / debugging) */
   trigger?: AutomationTrigger | string | null;
 };
 
 // ---------------------------------------------
 // CONDITION CONFIG (HubSpot-style IF logic)
 // ---------------------------------------------
+
 export type ConditionOperator =
   | "equals"
   | "not_equals"
@@ -33,99 +36,75 @@ export type ConditionOperator =
   | "contains"
   | "not_contains";
 
+/** Join logic for multi-condition IF */
+export type ConditionJoin = "AND" | "OR";
+
+/** Single condition: contact.stage = "hot", listing.status != "pending", etc. */
 export type ConditionConfig = {
-  /** Field to check (supports contact.*, listing.*, payload.*) */
+  /** Field to check (supports contact.*, listing.*; payload.* later) */
   field: string;
 
-  /** equals, contains, >, <, etc. */
+  /** equals, not_equals, etc. */
   operator: ConditionOperator;
 
-  /** Compare value */
-  value: any;
+  /** Compare value (string in practice for now) */
+  value: string;
+};
+
+/** Full IF config: one or more conditions + AND/OR join */
+export type IfConfig = {
+  join: ConditionJoin;
+  conditions: ConditionConfig[];
 };
 
 // ---------------------------------------------
-// STEP TYPES
+// STEP TYPES (matches Autopilot UI + runner)
 // ---------------------------------------------
+export type StepType = "SMS" | "EMAIL" | "TASK" | "WAIT" | "IF";
 
-export type StepType =
-  | "SEND_SMS"
-  | "SEND_EMAIL"
-  | "TASK"
-  | "WAIT"
-  | "UPDATE_CONTACT_STAGE"
-  | "IF";
+// Optional per-step config helper types (for clarity)
 
-// SMS STEP
-export type AutomationStepSMS = {
-  id: string;
-  type: "SEND_SMS";
-  config: {
-    text: string;
-  };
+export type SmsStepConfig = {
+  text: string;
 };
 
-// EMAIL STEP
-export type AutomationStepEmail = {
-  id: string;
-  type: "SEND_EMAIL";
-  config: {
-    subject: string;
-    body: string;
-  };
+export type EmailStepConfig = {
+  subject: string;
+  body: string;
 };
 
-// TASK STEP
-export type AutomationStepTask = {
-  id: string;
-  type: "TASK";
-  config: {
-    text: string;
-  };
+export type TaskStepConfig = {
+  text: string;
 };
 
-// WAIT STEP (already converted to hours in frontend)
-export type AutomationStepWait = {
-  id: string;
-  type: "WAIT";
-  config: {
-    hours: number;
-    amount?: number;
-    unit?: "hours" | "days" | "weeks" | "months";
-  };
+export type WaitStepConfig = {
+  hours: number;
+  amount?: number;
+  unit?: "hours" | "days" | "weeks" | "months";
 };
 
-// STAGE UPDATE
-export type AutomationStepUpdateStage = {
-  id: string;
-  type: "UPDATE_CONTACT_STAGE";
-  config: {
-    stage: "new" | "warm" | "hot" | "past";
-  };
-};
-
-// IF / THEN / ELSE branching
-export type AutomationStepIF = {
-  id: string;
-  type: "IF";
-  config: {
-    condition: ConditionConfig;
-
-    /** Steps to run if condition is true */
-    then: AutomationStep[];
-
-    /** Steps to run if condition is false */
-    else?: AutomationStep[];
-  };
-};
+export type IfStepConfig = IfConfig;
 
 // ---------------------------------------------
-// UNIFIED STEP TYPE
+// UNIFIED STEP TYPE (matches DB + runAutomation)
 // ---------------------------------------------
-export type AutomationStep =
-  | AutomationStepSMS
-  | AutomationStepEmail
-  | AutomationStepTask
-  | AutomationStepWait
-  | AutomationStepUpdateStage
-  | AutomationStepIF;
+
+export type AutomationStep = {
+  id: string;
+  type: StepType;
+  /**
+   * For type:
+   *  - "SMS":  SmsStepConfig
+   *  - "EMAIL": EmailStepConfig
+   *  - "TASK": TaskStepConfig
+   *  - "WAIT": WaitStepConfig
+   *  - "IF":   IfStepConfig
+   *
+   * Kept as `any` in most call sites for flexibility while you iterate.
+   */
+  config: any;
+  /** Used only when type === "IF" */
+  thenSteps?: AutomationStep[];
+  /** Used only when type === "IF" */
+  elseSteps?: AutomationStep[];
+};

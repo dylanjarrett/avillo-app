@@ -35,6 +35,12 @@ type AutomationWorkflow = {
   updatedAt?: string;
 };
 
+type ConditionConfig = {
+  field: string;
+  operator: "equals" | "not_equals";
+  value: string;
+};
+
 /* ------------------------------------
  * Constants
  * -----------------------------------*/
@@ -53,12 +59,12 @@ const TRIGGERS = [
   {
     id: "LISTING_CREATED",
     label: "New listing added",
-    desc: "Runs when you create a new listing.",
+    desc: "Runs when you create a new listing and attach a seller. Only the seller contact is used.",
   },
   {
-    id: "MANUAL_RUN",
-    label: "Manual run",
-    desc: "You trigger this workflow manually from a contact or listing.",
+    id: "LISTING_STAGE_CHANGE",
+    label: "Stage changes (draft → active → pending → closed)",
+    desc: "Runs when a listing's stage is updated. Only the seller contact is used.",
   },
 ];
 
@@ -69,16 +75,17 @@ const RECOMMENDED_TEMPLATES: {
   trigger: string;
   build: () => AutomationWorkflow;
 }[] = [
+  // 🟢 NEW_CONTACT – speed-to-lead + same-day follow-up
   {
-    id: "new-lead-24h",
-    label: "New lead 24–48h follow-up",
+    id: "new-contact-speed-to-lead",
+    label: "New online lead follow-up (same day)",
     description:
-      "Welcome SMS, same-day email, then a 24h follow-up task so no web lead slips through.",
+      "Instant SMS, same-day email, then a reminder to call so no new lead slips through.",
     trigger: "NEW_CONTACT",
     build: () => ({
-      name: "New lead 24–48h follow-up",
+      name: "New online lead follow-up (same day)",
       description:
-        "Automatically welcome new leads, send a follow-up email, and create a call task.",
+        "Automatically welcome new leads, follow up by email, and remind me to call within 24 hours.",
       trigger: "NEW_CONTACT",
       active: true,
       steps: [
@@ -87,7 +94,7 @@ const RECOMMENDED_TEMPLATES: {
           type: "SMS",
           config: {
             text:
-              "Hey {{firstName}}, thanks for reaching out. I’d love to learn more about your plans — when are you free for a quick call?",
+              "Hey {{firstName}}, thanks for reaching out! I’d love to learn more about your plans — when are you free for a quick call?",
           },
         },
         {
@@ -99,9 +106,9 @@ const RECOMMENDED_TEMPLATES: {
           id: crypto.randomUUID(),
           type: "EMAIL",
           config: {
-            subject: "Quick follow-up & next steps",
+            subject: "Thanks for reaching out — a few quick next steps",
             body:
-              "Hi {{firstName}},\n\nThanks again for reaching out. I pulled a few options that match what you’re looking for — when is a good time for a call to walk through them?\n\nBest,\n{{agentName}}",
+              "Hi {{firstName}},\n\nThanks again for reaching out. I pulled a few options that could fit what you’re looking for. When is a good time for a quick call so we can narrow things down together?\n\nBest,\n{{agentName}}",
           },
         },
         {
@@ -113,70 +120,97 @@ const RECOMMENDED_TEMPLATES: {
           id: crypto.randomUUID(),
           type: "TASK",
           config: {
-            text: "Call {{firstName}} to confirm search criteria and timeline.",
+            text:
+              "Call {{firstName}} to confirm their search criteria, price range, and timeline.",
           },
         },
       ],
     }),
   },
+
+  // 🟠 LEAD_STAGE_CHANGE – only fire when contact is a HOT BUYER
   {
-    id: "hot-buyer-nurture",
-    label: "Hot buyer weekly touches",
+    id: "hot-buyer-stage-change",
+    label: "Hot buyer follow-up when stage changes to HOT",
     description:
-      "For hot buyers: a light weekly touch — market update, new listings, and a check-in.",
+      "When a contact becomes a HOT buyer, send a focused email and reminder to set showings.",
     trigger: "LEAD_STAGE_CHANGE",
     build: () => ({
-      name: "Hot buyer weekly touches",
+      name: "Hot buyer follow-up (stage = HOT buyer)",
       description:
-        "Keep hot buyers close with a weekly email and a scheduled call reminder.",
+        "When I move a contact to HOT and they’re marked as a buyer, send them a focused email and remind me to line up showings.",
       trigger: "LEAD_STAGE_CHANGE",
+      active: true,
+      steps: [
+        {
+          id: crypto.randomUUID(),
+          type: "IF",
+          config: {
+            join: "AND",
+            conditions: [
+              {
+                field: "contact.type",
+                operator: "equals",
+                value: "buyer",
+              },
+              {
+                field: "contact.stage",
+                operator: "equals",
+                value: "hot",
+              },
+            ],
+          },
+          thenSteps: [
+            {
+              id: crypto.randomUUID(),
+              type: "EMAIL",
+              config: {
+                subject: "Let’s line up some showings",
+                body:
+                  "Hi {{firstName}},\n\nSince you’re actively looking, I’d love to line up a few showings that really match what you want. Are there specific neighborhoods or price points you want to focus on first?\n\nReply with a couple times that work for you and I’ll take it from there.\n\nBest,\n{{agentName}}",
+              },
+            },
+            {
+              id: crypto.randomUUID(),
+              type: "WAIT",
+              config: { hours: 48, amount: 48, unit: "hours" },
+            },
+            {
+              id: crypto.randomUUID(),
+              type: "TASK",
+              config: {
+                text:
+                  "Text or call {{firstName}} to confirm showings for this week.",
+              },
+            },
+          ],
+          elseSteps: [],
+        },
+      ],
+    }),
+  },
+
+  // 🏡 LISTING_CREATED – welcome seller + set expectations
+  {
+    id: "new-listing-seller-welcome",
+    label: "New listing — welcome the seller",
+    description:
+      "When you create a new listing with a seller attached, send a welcome email and set expectations.",
+    trigger: "LISTING_CREATED",
+    build: () => ({
+      name: "New listing — seller welcome + expectations",
+      description:
+        "As soon as I create a new listing and attach the seller, send them a welcome email and remind me to check in.",
+      trigger: "LISTING_CREATED",
       active: true,
       steps: [
         {
           id: crypto.randomUUID(),
           type: "EMAIL",
           config: {
-            subject: "New homes that match what you’re looking for",
+            subject: "Excited to list your home at {{propertyAddress}}",
             body:
-              "Hi {{firstName}},\n\nA few new homes hit the market this week that match what you described. Want me to send over a short list and set up showings?\n\nBest,\n{{agentName}}",
-          },
-        },
-        {
-          id: crypto.randomUUID(),
-          type: "WAIT",
-          config: { hours: 72, amount: 72, unit: "hours" },
-        },
-        {
-          id: crypto.randomUUID(),
-          type: "TASK",
-          config: {
-            text:
-              "Text or call {{firstName}} to see if they want to tour any of the new listings.",
-          },
-        },
-      ],
-    }),
-  },
-  {
-    id: "past-client-checkin",
-    label: "Past client quarterly check-in",
-    description:
-      "Quarterly touchpoint with past clients to keep referrals and repeat business flowing.",
-    trigger: "MANUAL_RUN",
-    build: () => ({
-      name: "Past client quarterly check-in",
-      description:
-        "A quarterly email and reminder task to stay top-of-mind with your past clients.",
-      trigger: "MANUAL_RUN",
-      active: false,
-      steps: [
-        {
-          id: crypto.randomUUID(),
-          type: "EMAIL",
-          config: {
-            subject: "Checking in — how’s everything going?",
-            body:
-              "Hi {{firstName}},\n\nI was thinking about you and wanted to check in. How are you liking the home, and how has the neighborhood been treating you?\n\nIf you ever have questions about the market, value, or future plans, I’m always here to help.\n\nBest,\n{{agentName}}",
+              "Hi {{firstName}},\n\nI’m excited to officially get your home at {{propertyAddress}} on the market. I’ll keep you updated on showings, feedback, and any important activity.\n\nOver the next few days, we’ll be focused on marketing, online exposure, and getting as many qualified eyes on your home as possible.\n\nIf you have any questions at any point, you can call, text, or email me directly.\n\nBest,\n{{agentName}}",
           },
         },
         {
@@ -189,8 +223,65 @@ const RECOMMENDED_TEMPLATES: {
           type: "TASK",
           config: {
             text:
-              "Log response from {{firstName}} and note any upcoming plans (move, reno, refi, etc.).",
+              "Check in with {{firstName}} about early activity and questions on {{propertyAddress}}.",
           },
+        },
+      ],
+    }),
+  },
+
+  // 🔁 LISTING_STAGE_CHANGE – notify seller when status moves to PENDING
+  {
+    id: "listing-pending-seller-update",
+    label: "Listing goes pending — seller update",
+    description:
+      "When a listing status moves to PENDING, update the seller and remind yourself to manage next steps.",
+    trigger: "LISTING_STAGE_CHANGE",
+    build: () => ({
+      name: "Listing pending — seller update + next steps",
+      description:
+        "When a listing moves to pending, email the seller with next steps and remind me to manage key dates.",
+      trigger: "LISTING_STAGE_CHANGE",
+      active: true,
+      steps: [
+        {
+          id: crypto.randomUUID(),
+          type: "IF",
+          config: {
+            join: "AND",
+            conditions: [
+              {
+                field: "listing.status",
+                operator: "equals",
+                value: "pending",
+              },
+            ],
+          },
+          thenSteps: [
+            {
+              id: crypto.randomUUID(),
+              type: "EMAIL",
+              config: {
+                subject: "Great news — your home is now pending",
+                body:
+                  "Hi {{firstName}},\n\nGreat news: your home at {{propertyAddress}} is now under contract (pending)!\n\nFrom here, we’ll be focused on inspections, appraisal, and any remaining contingencies. I’ll keep you posted on each step and anything we need from you.\n\nIf any questions come up at all, I’m just a text or call away.\n\nBest,\n{{agentName}}",
+              },
+            },
+            {
+              id: crypto.randomUUID(),
+              type: "WAIT",
+              config: { hours: 24, amount: 24, unit: "hours" },
+            },
+            {
+              id: crypto.randomUUID(),
+              type: "TASK",
+              config: {
+                text:
+                  "Review contract dates and set reminders for inspections, appraisal, and contingency deadlines for {{propertyAddress}}.",
+              },
+            },
+          ],
+          elseSteps: [],
         },
       ],
     }),
@@ -206,11 +297,11 @@ function triggerPlainSentence(trigger: string | null): string | null {
     case "NEW_CONTACT":
       return "When I add a new contact, I want this workflow to run.";
     case "LEAD_STAGE_CHANGE":
-      return "When I move a contact to a new stage (new, warm, hot), I want this workflow to run.";
+      return "When I move a contact to a new stage (new, warm, hot, past), I want this workflow to run.";
     case "LISTING_CREATED":
-      return "When I add a new listing, I want this workflow to run.";
-    case "MANUAL_RUN":
-      return "When I choose a contact or listing and hit “Run workflow”, I want this workflow to run.";
+      return "When I add a new listing and attach a seller, I want this workflow to run.";
+    case "LISTING_STAGE_CHANGE":
+      return "When I move a listing to a new stage (draft, active, pending, closed), I want this workflow to run.";
     default:
       return null;
   }
@@ -222,17 +313,12 @@ function getConditionScopeForTrigger(
 ): "contact" | "listing" | "both" | undefined {
   if (!trigger) return undefined;
 
-  if (trigger === "LISTING_CREATED") {
+  if (trigger === "LISTING_CREATED" || trigger === "LISTING_STAGE_CHANGE") {
     return "listing";
   }
 
   if (trigger === "NEW_CONTACT" || trigger === "LEAD_STAGE_CHANGE") {
     return "contact";
-  }
-
-  if (trigger === "MANUAL_RUN") {
-    // workflow can be run from contact OR listing
-    return "both";
   }
 
   return undefined;
@@ -649,44 +735,45 @@ export default function AutomationPage() {
   }
 
   async function handleRunNow() {
-    if (!activeWorkflow?.id) {
-      alert("Save this workflow before running it.");
-      return;
-    }
+  if (!activeWorkflow?.id) {
+    alert("Save this workflow before running it.");
+    return;
+  }
 
-    try {
-      setRunning(true);
-      setError(null);
+  try {
+    setRunning(true);
+    setError(null);
 
-      const res = await fetch("/api/automations/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationId: activeWorkflow.id,
-          contactId: null,
-          listingId: null,
-        }),
-      }).catch(() => null);
+    const res = await fetch("/api/automations/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        automationId: activeWorkflow.id,
+        // no contactId / listingId → runAutomation
+        // will fall back to your user.email
+        contactId: null,
+        listingId: null,
+      }),
+    }).catch(() => null);
 
-      if (!res || !res.ok) {
-        const data = await res?.json().catch(() => null);
-        throw new Error(
-          data?.error ||
-            "We couldn't run this workflow. Try again in a moment."
-        );
-      }
-
-      // Optionally you could toast success here
-    } catch (err: any) {
-      console.error("Run workflow error", err);
-      setError(
-        err?.message ||
+    if (!res || !res.ok) {
+      const data = await res?.json().catch(() => null);
+      throw new Error(
+        data?.error ||
           "We couldn't run this workflow. Try again in a moment."
       );
-    } finally {
-      setRunning(false);
     }
+
+    // Optional: toast here e.g. “Test sent to your email”
+  } catch (err: any) {
+    console.error("Run workflow error", err);
+    setError(
+      err?.message || "We couldn't run this workflow. Try again in a moment."
+    );
+  } finally {
+    setRunning(false);
   }
+}
 
   /* ------------------------------------
    * Render
@@ -1117,19 +1204,35 @@ export default function AutomationPage() {
     </div>
 
     <p className="mt-1 truncate text-[10px] text-[var(--avillo-cream-muted)]">
-      {s.type === "SMS" && s.config?.text}
-      {s.type === "EMAIL" && s.config?.subject}
-      {s.type === "TASK" && s.config?.text}
-      {s.type === "WAIT" && `Wait ${s.config?.hours ?? "?"} hours`}
-      {s.type === "IF" &&
-        `If ${s.config?.field ?? "field"} ${
-          s.config?.operator ?? "is"
-        } ${s.config?.value ?? ""} (then ${
-          s.thenSteps?.length ?? 0
-        } step${(s.thenSteps?.length ?? 0) === 1 ? "" : "s"}, else ${
-          s.elseSteps?.length ?? 0
-        } step${(s.elseSteps?.length ?? 0) === 1 ? "" : "s"})`}
-    </p>
+  {s.type === "SMS" && s.config?.text}
+  {s.type === "EMAIL" && s.config?.subject}
+  {s.type === "TASK" && s.config?.text}
+  {s.type === "WAIT" && `Wait ${s.config?.hours ?? "?"} hours`}
+  {s.type === "IF" && (() => {
+    const cfg = s.config || {};
+    const join = cfg.join ?? "AND";
+
+    const conditions: ConditionConfig[] = Array.isArray(cfg.conditions)
+  ? cfg.conditions
+  : [];
+
+    if (!conditions.length) {
+      return "If condition is not configured yet";
+    }
+
+    const parts = conditions.map((c) => {
+      const opLabel = c.operator === "not_equals" ? "is not" : "is";
+      return `${c.field} ${opLabel} ${c.value}`;
+    });
+
+    const condText = parts.join(` ${join} `);
+
+    const thenCount = s.thenSteps?.length ?? 0;
+    const elseCount = s.elseSteps?.length ?? 0;
+
+    return `If ${condText} (then ${thenCount} step${thenCount === 1 ? "" : "s"}, else ${elseCount} step${elseCount === 1 ? "" : "s"})`;
+  })()}
+</p>
   </div>
 ))}
                   </div>
@@ -1159,8 +1262,7 @@ export default function AutomationPage() {
                         4. Turn it on, test, & save
                       </p>
                       <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                        You can pause a workflow anytime. Use “Run now” to test
-                        with a sample contact, then save your changes.
+                        You can pause a workflow anytime. Click “Run test to myself” to send this workflow to your own email or phone.
                       </p>
                     </div>
 
@@ -1196,13 +1298,13 @@ export default function AutomationPage() {
 
                     <div className="flex flex-wrap gap-2">
                       <button
-                        type="button"
-                        onClick={() => void handleRunNow()}
-                        disabled={running || !activeWorkflow.id}
-                        className="inline-flex items-center justify-center rounded-full border border-slate-400/80 bg-slate-800/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {running ? "Running…" : "Run now (test)"}
-                      </button>
+  type="button"
+  onClick={() => void handleRunNow()}
+  disabled={running || !activeWorkflow.id}
+  className="inline-flex items-center justify-center rounded-full border border-slate-400/80 bg-slate-800/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-60"
+>
+  {running ? "Running…" : "Run test to myself"}
+</button>
 
                       <button
                         type="button"

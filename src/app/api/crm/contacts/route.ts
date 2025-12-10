@@ -26,6 +26,26 @@ type LinkedListing = {
 };
 
 /* ----------------------------------------------------
+ * Normalization helpers (DB is always lowercase)
+ * ---------------------------------------------------*/
+
+const PIPELINE_STAGES = ["new", "warm", "hot", "past"] as const;
+type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+function normalizeStage(raw?: string | null): PipelineStage | undefined {
+  if (!raw) return undefined;
+  const value = raw.toLowerCase().trim();
+  return PIPELINE_STAGES.includes(value as PipelineStage)
+    ? (value as PipelineStage)
+    : undefined;
+}
+
+function normalizeFreeString(raw?: string | null): string | undefined {
+  const v = raw?.toLowerCase().trim();
+  return v && v.length > 0 ? v : undefined;
+}
+
+/* ----------------------------------------------------
  * Shapers
  * ---------------------------------------------------*/
 
@@ -49,6 +69,7 @@ function shapeContact(contactRecord: any, linkedListings: LinkedListing[] = []) 
     id: contactRecord.id,
     name,
     label: contactRecord.label ?? "",
+    // DB stores lowercase; UI will pretty-format
     stage: (contactRecord.stage as any) ?? "new",
     type: contactRecord.type ?? null,
     priceRange: contactRecord.priceRange ?? "",
@@ -245,9 +266,10 @@ export async function POST(req: NextRequest) {
       source,
     } = body;
 
-    // For updates we ONLY change stage if one was passed in
-    const normalizedStage =
-      stage && ["new", "warm", "hot", "past"].includes(stage) ? stage : undefined;
+    // Normalized (lowercase) values for DB
+    const normalizedStage = normalizeStage(stage);
+    const normalizedType = normalizeFreeString(type ?? undefined);
+    const normalizedSource = normalizeFreeString(source ?? undefined);
 
     let contactRecord;
 
@@ -265,8 +287,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const previousStage = existing.stage;
-      const nextStage = normalizedStage ?? existing.stage;
+      const previousStage = existing.stage as PipelineStage;
+      const nextStage: PipelineStage =
+        normalizedStage ?? (previousStage as PipelineStage) ?? "new";
 
       contactRecord = await prisma.contact.update({
         where: { id: existing.id },
@@ -277,11 +300,11 @@ export async function POST(req: NextRequest) {
           phone: phone ?? existing.phone,
           stage: nextStage,
           label: label ?? existing.label,
-          type: type ?? existing.type,
+          type: normalizedType ?? existing.type,
           priceRange: priceRange ?? existing.priceRange,
           areas: areas ?? existing.areas,
           timeline: timeline ?? existing.timeline,
-          source: source ?? existing.source,
+          source: normalizedSource ?? existing.source,
         },
         include: {
           contactNotes: true,
@@ -319,7 +342,7 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // -------------------- CREATE --------------------
-      const createStage = normalizedStage ?? "new";
+      const createStage: PipelineStage = normalizedStage ?? "new";
 
       contactRecord = await prisma.contact.create({
         data: {
@@ -330,11 +353,11 @@ export async function POST(req: NextRequest) {
           phone: phone ?? "",
           stage: createStage,
           label: label ?? "new lead",
-          type: type ?? "Buyer",
+          type: normalizedType ?? "buyer", // stored lowercase
           priceRange: priceRange ?? "",
           areas: areas ?? "",
           timeline: timeline ?? "",
-          source: source ?? "",
+          source: normalizedSource ?? "",
         },
         include: {
           contactNotes: true,
@@ -379,7 +402,6 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-
 
 /* ----------------------------------------------------
  * DELETE /api/crm/contacts
@@ -446,7 +468,6 @@ export async function DELETE(req: NextRequest) {
       });
 
       // 3) Delete CRM activity rows for this contact
-      //    (adjust to tx.crmActivity / tx.cRMActivity based on your model name)
       await tx.cRMActivity.deleteMany({
         where: { contactId, userId: user.id },
       });
@@ -456,9 +477,7 @@ export async function DELETE(req: NextRequest) {
         where: { contactId, userId: user.id },
       });
 
-      // 5) Delete contact notes for this contact (if you have this model)
-      //    If your model is named ContactNote in schema,
-      //    Prisma client will be tx.contactNote.
+      // 5) Delete contact notes for this contact
       await tx.contactNote.deleteMany({
         where: { contactId },
       });
