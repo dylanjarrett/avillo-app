@@ -132,7 +132,7 @@ const RECOMMENDED_TEMPLATES: {
   // 🟠 LEAD_STAGE_CHANGE – only fire when contact is a HOT BUYER
   {
     id: "hot-buyer-stage-change",
-    label: "Hot buyer follow-up when stage changes to HOT",
+    label: "Buyer follow-up when stage changes to HOT",
     description:
       "When a contact becomes a HOT buyer, send a focused email and reminder to set showings.",
     trigger: "LEAD_STAGE_CHANGE",
@@ -323,6 +323,17 @@ function getConditionScopeForTrigger(
   }
 
   return undefined;
+}
+
+function isWorkflowBlank(wf: AutomationWorkflow | null): boolean {
+  if (!wf) return true;
+
+  const hasName = wf.name.trim().length > 0;
+  const hasDesc = wf.description.trim().length > 0;
+  const hasTrigger = !!wf.trigger;
+  const hasSteps = (wf.steps?.length ?? 0) > 0;
+
+  return !hasName && !hasDesc && !hasTrigger && !hasSteps;
 }
 
 /* ------------------------------------
@@ -967,37 +978,6 @@ export default function AutomationPage() {
                   );
                 })}
             </div>
-
-            {/* 🔽 NEW: mobile recommended templates under list */}
-            {!activeWorkflow && (
-              <div className="mt-4 space-y-2 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3 lg:hidden">
-                <p className="text-[11px] font-semibold text-amber-100/90">
-                  Recommended workflow templates
-                </p>
-                <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                  One-click starting points you can tweak for your market and
-                  style.
-                </p>
-
-                <div className="mt-2 space-y-2">
-                  {RECOMMENDED_TEMPLATES.map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => applyTemplate(t.id)}
-                      className="w-full rounded-lg border border-slate-700/80 bg-slate-950/70 px-3 py-2 text-left text-[11px] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:bg-slate-900/90"
-                    >
-                      <p className="font-semibold text-slate-50">
-                        {t.label}
-                      </p>
-                      <p className="mt-0.5 text-[10px] text-[var(--avillo-cream-muted)]">
-                        {t.description}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* RIGHT: SIMPLE BUILDER */}
@@ -1105,46 +1085,86 @@ export default function AutomationPage() {
                 </div>
 
                 {/* Step 1: Name & description */}
-                <div className="space-y-3 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                  <p className="text-[11px] font-semibold text-amber-100/90">
-                    1. Give this workflow a friendly name
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
-                    <div>
-                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                        Workflow name
-                      </label>
-                      <input
-                        value={activeWorkflow.name}
-                        onChange={(e) =>
-                          setActiveWorkflow({
-                            ...activeWorkflow,
-                            name: e.target.value,
-                          })
-                        }
-                        placeholder="Ex: New online lead follow-up"
-                        className="avillo-input w-full text-slate-50"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                        Short description
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={activeWorkflow.description}
-                        onChange={(e) =>
-                          setActiveWorkflow({
-                            ...activeWorkflow,
-                            description: e.target.value,
-                          })
-                        }
-                        placeholder="Ex: Welcomes new website leads and reminds me to call in 24 hours."
-                        className="avillo-input w-full resize-none text-slate-50"
-                      />
-                    </div>
-                  </div>
-                </div>
+<div className="space-y-3 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+  <p className="text-[11px] font-semibold text-amber-100/90">
+    1. Give this workflow a friendly name
+  </p>
+
+  <div className="grid gap-3 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)]">
+    <div>
+      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+        Workflow name
+      </label>
+      <input
+        value={activeWorkflow.name}
+        onChange={(e) =>
+          setActiveWorkflow({
+            ...activeWorkflow,
+            name: e.target.value,
+          })
+        }
+        placeholder="Ex: New online lead follow-up"
+        className="avillo-input w-full text-slate-50"
+      />
+    </div>
+    <div>
+      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+        Short description (optional)
+      </label>
+      <textarea
+        rows={2}
+        value={activeWorkflow.description}
+        onChange={(e) =>
+          setActiveWorkflow({
+            ...activeWorkflow,
+            description: e.target.value,
+          })
+        }
+        placeholder="Ex: Welcomes new website leads and reminds me to call in 24 hours."
+        className="avillo-input w-full h-20 resize-none overflow-y-auto text-slate-50"
+      />
+    </div>
+  </div>
+
+  {/* Start from a template – inline helper */}
+  <div className="mt-2 rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2">
+    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)]">
+      Prefer a shortcut?
+    </p>
+    <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+      Start from a recommended template below — you can rename and tweak any step afterward.
+    </p>
+
+    <div className="mt-2 flex flex-wrap gap-2">
+      {RECOMMENDED_TEMPLATES.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => {
+            if (!activeWorkflow) {
+              applyTemplate(t.id);
+              return;
+            }
+
+            const blank = isWorkflowBlank(activeWorkflow);
+
+            if (!blank) {
+              const confirmReplace = window.confirm(
+                "Replace your current setup with this template? This will overwrite your existing steps."
+              );
+              if (!confirmReplace) return;
+            }
+
+            applyTemplate(t.id);
+          }}
+          className="rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50"
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  </div>
+</div>
 
                 {/* Step 2: Trigger */}
                 <div className="space-y-2 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
