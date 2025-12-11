@@ -134,10 +134,10 @@ const RECOMMENDED_TEMPLATES: {
     id: "hot-buyer-stage-change",
     label: "Buyer follow-up when stage changes to HOT",
     description:
-      "When a contact becomes a HOT buyer, send a focused email and reminder to set showings.",
+      "When a buyer's contact becomes HOT, send a focused email and reminder to set showings.",
     trigger: "LEAD_STAGE_CHANGE",
     build: () => ({
-      name: "Hot buyer follow-up (stage = HOT buyer)",
+      name: "Buyer follow-up (stage = HOT)",
       description:
         "When I move a contact to HOT and they’re marked as a buyer, send them a focused email and remind me to line up showings.",
       trigger: "LEAD_STAGE_CHANGE",
@@ -618,41 +618,51 @@ export default function AutomationPage() {
   async function handleSave() {
     if (!activeWorkflow) return;
 
-    if (!activeWorkflow.name.trim()) {
+    // Snapshot so we can safely use it after state updates
+    const wfToSave = activeWorkflow;
+
+    if (!wfToSave.name.trim()) {
       alert("Give this workflow a name first.");
       return;
     }
 
-    if (!activeWorkflow.trigger) {
+    if (!wfToSave.trigger) {
       alert("Select a trigger so Avillo knows when to run this workflow.");
       return;
     }
 
-    const isNew = !activeWorkflow.id || selectedId === "new";
+    const isMobile =
+      typeof window !== "undefined" && window.innerWidth < 1024;
+
+    // 🔼 On mobile: scroll back & close builder immediately for snappy UX
+    if (isMobile) {
+      setWorkspaceOpenMobile(false);
+      scrollBackToListHeader(); // no callback needed here
+    }
+
+    const isNew = !wfToSave.id || selectedId === "new";
 
     const payload = {
-      name: activeWorkflow.name,
-      description: activeWorkflow.description,
-      trigger: activeWorkflow.trigger,
+      name: wfToSave.name,
+      description: wfToSave.description,
+      trigger: wfToSave.trigger,
       triggerConfig: {},
       entryConditions: {},
       exitConditions: {},
       schedule: {},
-      active: activeWorkflow.active,
+      active: wfToSave.active,
       status: "draft",
       reEnroll: true,
       timezone: null,
       folder: null,
-      steps: activeWorkflow.steps,
+      steps: wfToSave.steps,
     };
 
     try {
       setSaving(true);
       setError(null);
 
-      const url = isNew
-        ? "/api/automations"
-        : `/api/automations/${activeWorkflow.id}`;
+      const url = isNew ? "/api/automations" : `/api/automations/${wfToSave.id}`;
       const method = isNew ? "POST" : "PUT";
 
       const res = await fetch(url, {
@@ -673,17 +683,15 @@ export default function AutomationPage() {
 
       const normalized: AutomationWorkflow = {
         id: saved.id,
-        name: saved.name ?? activeWorkflow.name,
-        description: saved.description ?? activeWorkflow.description,
-        trigger: saved.trigger ?? activeWorkflow.trigger,
-        active: saved.active ?? activeWorkflow.active,
-        // backend doesn't echo step group, keep local steps
-        steps: activeWorkflow.steps,
+        name: saved.name ?? wfToSave.name,
+        description: saved.description ?? wfToSave.description,
+        trigger: saved.trigger ?? wfToSave.trigger,
+        active: saved.active ?? wfToSave.active,
+        steps: wfToSave.steps,
         createdAt: saved.createdAt,
         updatedAt: saved.updatedAt,
       };
 
-      // Update list
       setWorkflows((prev) => {
         const idx = prev.findIndex((w) => w.id === normalized.id);
         if (idx === -1) return [normalized, ...prev];
@@ -692,75 +700,87 @@ export default function AutomationPage() {
         return next;
       });
 
-      // 🔍 Detect mobile viewport
-      const isMobile =
-        typeof window !== "undefined" && window.innerWidth < 1024;
-
-      if (isMobile) {
-        // On mobile: scroll back + show workflow library
-        backToList();
-      } else {
-        // On desktop: keep user in the builder with this workflow selected
+      if (!isMobile) {
+        // Desktop: keep user in the builder with this workflow selected
         setActiveWorkflow(normalized);
         setSelectedId(normalized.id!);
       }
+      // Mobile: we already scrolled back + hid workspace, so no extra state needed
     } catch (err: any) {
       console.error("Save workflow error", err);
       setError(
         err?.message ||
           "We couldn't save this workflow. Try again in a moment."
       );
+
+      // Optional: if you want, on mobile we could re-open the builder here.
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete() {
-    if (!activeWorkflow) {
-      backToList();
-      return;
-    }
+  if (!activeWorkflow) {
+    backToList();
+    return;
+  }
 
-    if (!activeWorkflow.id) {
-      backToList();
-      return;
-    }
+  if (!activeWorkflow.id) {
+    backToList();
+    return;
+  }
 
-    const confirmed = window.confirm(
-      "Delete this workflow? This can’t be undone."
-    );
-    if (!confirmed) return;
+  const confirmed = window.confirm(
+    "Delete this workflow? This can’t be undone."
+  );
+  if (!confirmed) return;
 
-    try {
-      setSaving(true);
-      setError(null);
+  // Save the id before we potentially clear any state
+  const workflowIdToDelete = activeWorkflow.id;
 
-      const res = await fetch(`/api/automations/${activeWorkflow.id}`, {
-        method: "DELETE",
-      }).catch(() => null);
+  const isMobile =
+    typeof window !== "undefined" && window.innerWidth < 1024;
 
-      if (!res || !res.ok) {
-        const data = await res?.json().catch(() => null);
-        throw new Error(
-          data?.error ||
-            "We couldn't delete this workflow. Try again in a moment."
-        );
-      }
+  // 🟢 On mobile: immediately collapse builder + scroll back to the library
+  if (isMobile) {
+    backToList(); // this uses scrollBackToListHeader under the hood
+  }
 
-      setWorkflows((prev) =>
-        prev.filter((w) => w.id !== activeWorkflow.id)
-      );
-      backToList();
-    } catch (err: any) {
-      console.error("Delete workflow error", err);
-      setError(
-        err?.message ||
+  try {
+    setSaving(true);
+    setError(null);
+
+    const res = await fetch(`/api/automations/${workflowIdToDelete}`, {
+      method: "DELETE",
+    }).catch(() => null);
+
+    if (!res || !res.ok) {
+      const data = await res?.json().catch(() => null);
+      throw new Error(
+        data?.error ||
           "We couldn't delete this workflow. Try again in a moment."
       );
-    } finally {
-      setSaving(false);
     }
+
+    // Remove from local list
+    setWorkflows((prev) =>
+      prev.filter((w) => w.id !== workflowIdToDelete)
+    );
+
+    // 🖥 On desktop: only go back to list after delete finishes
+    if (!isMobile) {
+      backToList();
+    }
+  } catch (err: any) {
+    console.error("Delete workflow error", err);
+    setError(
+      err?.message ||
+        "We couldn't delete this workflow. Try again in a moment."
+    );
+  } finally {
+    setSaving(false);
   }
+}
 
   async function handleRunNow() {
     if (!activeWorkflow?.id) {

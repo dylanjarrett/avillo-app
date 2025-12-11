@@ -8,7 +8,7 @@ type Options = {
 };
 
 const DEFAULT_DOWN_OFFSET = 95;  // scroll INTO builder
-const DEFAULT_UP_OFFSET = 370;   // match CRM Save/Delete landing zone
+const DEFAULT_UP_OFFSET = 340;   // match CRM Save/Delete landing zone
 
 export function useAutopilotMobileWorkspaceScroll(options: Options = {}) {
   const {
