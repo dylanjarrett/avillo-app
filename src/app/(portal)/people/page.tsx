@@ -1552,7 +1552,7 @@ export default function CrmPage() {
                       disabled={deleting}
                       className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      {activeContact.id ? "Delete contact" : "Discard new contact"}
+                      Delete Contact
                     </button>
 
                     {/* Save contact */}

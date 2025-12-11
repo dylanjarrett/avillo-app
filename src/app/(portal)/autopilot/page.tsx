@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
 import StepModal, { StepType } from "@/components/autopilot/StepModal";
 import { FilterPill } from "@/components/ui/filter-pill";
+import { useAutopilotMobileWorkspaceScroll } from "@/hooks/useAutopilotMobileWorkspaceScroll";
 
 /* ------------------------------------
  * Types
@@ -345,6 +346,13 @@ export default function AutomationPage() {
   const [stepModalType, setStepModalType] = useState<StepType | null>(null);
   const [editingStep, setEditingStep] = useState<AutomationStep | null>(null);
 
+  const {
+    listHeaderRef,
+    workspaceRef,
+    scrollToWorkspace,
+    scrollBackToListHeader,
+  } = useAutopilotMobileWorkspaceScroll();
+
   // ---------- Derived counts for workflow filter pills ----------
   const totalWorkflows = workflows.length;
   const activeWorkflowsCount = workflows.filter((w) => w.active).length;
@@ -357,19 +365,17 @@ export default function AutomationPage() {
 
   // ------- Helpers -------
 
-  const isMobile = () =>
-    typeof window !== "undefined" && window.innerWidth < 1024;
-
   function openWorkspaceForSelection() {
-    if (isMobile()) {
-      setWorkspaceOpenMobile(true);
-    }
+    setWorkspaceOpenMobile(true);
+    scrollToWorkspace();
   }
 
   function backToList() {
-    setWorkspaceOpenMobile(false);
-    setActiveWorkflow(null);
-    setSelectedId(null);
+    scrollBackToListHeader(() => {
+      setWorkspaceOpenMobile(false);
+      setActiveWorkflow(null);
+      setSelectedId(null);
+    });
   }
 
   function startNewWorkflow() {
@@ -735,45 +741,46 @@ export default function AutomationPage() {
   }
 
   async function handleRunNow() {
-  if (!activeWorkflow?.id) {
-    alert("Save this workflow before running it.");
-    return;
-  }
-
-  try {
-    setRunning(true);
-    setError(null);
-
-    const res = await fetch("/api/automations/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        automationId: activeWorkflow.id,
-        // no contactId / listingId → runAutomation
-        // will fall back to your user.email
-        contactId: null,
-        listingId: null,
-      }),
-    }).catch(() => null);
-
-    if (!res || !res.ok) {
-      const data = await res?.json().catch(() => null);
-      throw new Error(
-        data?.error ||
-          "We couldn't run this workflow. Try again in a moment."
-      );
+    if (!activeWorkflow?.id) {
+      alert("Save this workflow before running it.");
+      return;
     }
 
-    // Optional: toast here e.g. “Test sent to your email”
-  } catch (err: any) {
-    console.error("Run workflow error", err);
-    setError(
-      err?.message || "We couldn't run this workflow. Try again in a moment."
-    );
-  } finally {
-    setRunning(false);
+    try {
+      setRunning(true);
+      setError(null);
+
+      const res = await fetch("/api/automations/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          automationId: activeWorkflow.id,
+          // no contactId / listingId → runAutomation
+          // will fall back to your user.email
+          contactId: null,
+          listingId: null,
+        }),
+      }).catch(() => null);
+
+      if (!res || !res.ok) {
+        const data = await res?.json().catch(() => null);
+        throw new Error(
+          data?.error ||
+            "We couldn't run this workflow. Try again in a moment."
+        );
+      }
+
+      // Optional: toast here e.g. “Test sent to your email”
+    } catch (err: any) {
+      console.error("Run workflow error", err);
+      setError(
+        err?.message ||
+          "We couldn't run this workflow. Try again in a moment."
+      );
+    } finally {
+      setRunning(false);
+    }
   }
-}
 
   /* ------------------------------------
    * Render
@@ -863,6 +870,7 @@ export default function AutomationPage() {
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)]">
           {/* LEFT: WORKFLOW LIST */}
           <div
+            ref={listHeaderRef}
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
               (workspaceOpenMobile ? "hidden" : "block") +
@@ -881,6 +889,7 @@ export default function AutomationPage() {
               </p>
             </div>
 
+            {/* existing list of workflows */}
             <div className="space-y-2 lg:max-h-[calc(100vh-140px)] lg:overflow-y-auto lg:pr-1">
               {loading && (
                 <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
@@ -958,10 +967,42 @@ export default function AutomationPage() {
                   );
                 })}
             </div>
+
+            {/* 🔽 NEW: mobile recommended templates under list */}
+            {!activeWorkflow && (
+              <div className="mt-4 space-y-2 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3 lg:hidden">
+                <p className="text-[11px] font-semibold text-amber-100/90">
+                  Recommended workflow templates
+                </p>
+                <p className="text-[10px] text-[var(--avillo-cream-muted)]">
+                  One-click starting points you can tweak for your market and
+                  style.
+                </p>
+
+                <div className="mt-2 space-y-2">
+                  {RECOMMENDED_TEMPLATES.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => applyTemplate(t.id)}
+                      className="w-full rounded-lg border border-slate-700/80 bg-slate-950/70 px-3 py-2 text-left text-[11px] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:bg-slate-900/90"
+                    >
+                      <p className="font-semibold text-slate-50">
+                        {t.label}
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-[var(--avillo-cream-muted)]">
+                        {t.description}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* RIGHT: SIMPLE BUILDER */}
           <div
+            ref={workspaceRef}
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
               (workspaceOpenMobile ? "block" : "hidden") +
@@ -1174,67 +1215,78 @@ export default function AutomationPage() {
                     )}
 
                     {activeWorkflow.steps.map((s, i) => (
-  <div
-    key={s.id}
-    role="button"
-    tabIndex={0}
-    onClick={() => openStepModal(s.type, s)}
-    onKeyDown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        openStepModal(s.type, s);
-      }
-    }}
-    className="w-full rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-left hover:border-amber-100/70 hover:bg-slate-900/90 cursor-pointer"
-  >
-    <div className="flex items-center justify-between gap-2">
-      <p className="text-[11px] font-semibold text-slate-50">
-        Step {i + 1}: {s.type === "IF" ? "IF / Branch" : s.type}
-      </p>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          removeStep(s.id);
-        }}
-        className="rounded-full border border-slate-600/80 bg-slate-900/80 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/40 hover:text-rose-50"
-      >
-        Remove
-      </button>
-    </div>
+                      <div
+                        key={s.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => openStepModal(s.type, s)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openStepModal(s.type, s);
+                          }
+                        }}
+                        className="w-full cursor-pointer rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-left hover:border-amber-100/70 hover:bg-slate-900/90"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-semibold text-slate-50">
+                            Step {i + 1}:{" "}
+                            {s.type === "IF" ? "IF / Branch" : s.type}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeStep(s.id);
+                            }}
+                            className="rounded-full border border-slate-600/80 bg-slate-900/80 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/40 hover:text-rose-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
 
-    <p className="mt-1 truncate text-[10px] text-[var(--avillo-cream-muted)]">
-  {s.type === "SMS" && s.config?.text}
-  {s.type === "EMAIL" && s.config?.subject}
-  {s.type === "TASK" && s.config?.text}
-  {s.type === "WAIT" && `Wait ${s.config?.hours ?? "?"} hours`}
-  {s.type === "IF" && (() => {
-    const cfg = s.config || {};
-    const join = cfg.join ?? "AND";
+                        <p className="mt-1 truncate text-[10px] text-[var(--avillo-cream-muted)]">
+                          {s.type === "SMS" && s.config?.text}
+                          {s.type === "EMAIL" && s.config?.subject}
+                          {s.type === "TASK" && s.config?.text}
+                          {s.type === "WAIT" &&
+                            `Wait ${s.config?.hours ?? "?"} hours`}
+                          {s.type === "IF" &&
+                            (() => {
+                              const cfg = s.config || {};
+                              const join = cfg.join ?? "AND";
 
-    const conditions: ConditionConfig[] = Array.isArray(cfg.conditions)
-  ? cfg.conditions
-  : [];
+                              const conditions: ConditionConfig[] =
+                                Array.isArray(cfg.conditions)
+                                  ? cfg.conditions
+                                  : [];
 
-    if (!conditions.length) {
-      return "If condition is not configured yet";
-    }
+                              if (!conditions.length) {
+                                return "If condition is not configured yet";
+                              }
 
-    const parts = conditions.map((c) => {
-      const opLabel = c.operator === "not_equals" ? "is not" : "is";
-      return `${c.field} ${opLabel} ${c.value}`;
-    });
+                              const parts = conditions.map((c) => {
+                                const opLabel =
+                                  c.operator === "not_equals"
+                                    ? "is not"
+                                    : "is";
+                                return `${c.field} ${opLabel} ${c.value}`;
+                              });
 
-    const condText = parts.join(` ${join} `);
+                              const condText = parts.join(` ${join} `);
 
-    const thenCount = s.thenSteps?.length ?? 0;
-    const elseCount = s.elseSteps?.length ?? 0;
+                              const thenCount = s.thenSteps?.length ?? 0;
+                              const elseCount = s.elseSteps?.length ?? 0;
 
-    return `If ${condText} (then ${thenCount} step${thenCount === 1 ? "" : "s"}, else ${elseCount} step${elseCount === 1 ? "" : "s"})`;
-  })()}
-</p>
-  </div>
-))}
+                              return `If ${condText} (then ${thenCount} step${
+                                thenCount === 1 ? "" : "s"
+                              }, else ${elseCount} step${
+                                elseCount === 1 ? "" : "s"
+                              })`;
+                            })()}
+                        </p>
+                      </div>
+                    ))}
                   </div>
 
                   {/* Add step buttons */}
@@ -1255,67 +1307,110 @@ export default function AutomationPage() {
                 </div>
 
                 {/* Step 4: Turn on + save + run */}
-                <div className="mt-auto flex flex-col gap-3 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-[11px] font-semibold text-amber-100/90">
-                        4. Turn it on, test, & save
-                      </p>
-                      <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                        You can pause a workflow anytime. Click “Run test to myself” to send this workflow to your own email or phone.
-                      </p>
-                    </div>
+<div className="mt-auto flex flex-col gap-4 rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-4">
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveWorkflow({
-                          ...activeWorkflow,
-                          active: !activeWorkflow.active,
-                        })
-                      }
-                      className={
-                        "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
-                        (activeWorkflow.active
-                          ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
-                          : "border-slate-500/80 bg-slate-800/60 text-slate-200")
-                      }
-                    >
-                      {activeWorkflow.active ? "Active" : "Paused"}
-                    </button>
-                  </div>
+  {/* Header + Active toggle */}
+  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <p className="text-[11px] font-semibold text-amber-100/90">
+        4. Turn it on, test, & save
+      </p>
+      <p className="text-[10px] text-[var(--avillo-cream-muted)]">
+        You can pause a workflow anytime. Click “Run test” to send this workflow to your own email or phone.
+      </p>
+    </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                    <button
-                      type="button"
-                      onClick={handleDelete}
-                      className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {activeWorkflow.id
-                        ? "Delete workflow"
-                        : "Discard new workflow"}
-                    </button>
+    <button
+      type="button"
+      onClick={() =>
+        setActiveWorkflow({
+          ...activeWorkflow!,
+          active: !activeWorkflow!.active,
+        })
+      }
+      className={
+        "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
+        (activeWorkflow?.active
+          ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
+          : "border-slate-500/80 bg-slate-800/60 text-slate-200")
+      }
+    >
+      {activeWorkflow?.active ? "Active" : "Paused"}
+    </button>
+  </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      <button
-  type="button"
-  onClick={() => void handleRunNow()}
-  disabled={running || !activeWorkflow.id}
-  className="inline-flex items-center justify-center rounded-full border border-slate-400/80 bg-slate-800/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-60"
->
-  {running ? "Running…" : "Run test to myself"}
-</button>
+  {/* Desktop row (shows on sm+) */}
+<div className="hidden sm:flex sm:flex-row sm:items-center sm:justify-between sm:gap-3">
 
-                      <button
-                        type="button"
-                        onClick={() => void handleSave()}
-                        disabled={saving}
-                        className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {saving ? "Saving…" : "Save changes"}
-                      </button>
-                    </div>
-                  </div>
+  {/* Left side: Delete workflow */}
+  <button
+    type="button"
+    onClick={handleDelete}
+    disabled={saving || !activeWorkflow?.id}
+    className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+  >
+    Delete workflow
+  </button>
+
+  {/* Right side: Run Test + Save Changes next to each other */}
+  <div className="flex items-center gap-3">
+
+    {/* Run Test */}
+    <button
+      type="button"
+      onClick={() => void handleRunNow()}
+      disabled={running || !activeWorkflow?.id}
+      className="inline-flex items-center justify-center rounded-full border border-slate-400/80 bg-slate-800/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {running ? "Running…" : "Run test"}
+    </button>
+
+    {/* Save */}
+    <button
+      type="button"
+      onClick={() => void handleSave()}
+      disabled={saving}
+      className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {saving ? "Saving…" : "Save changes"}
+    </button>
+    </div>
+  </div>
+
+  {/* Mobile (shows on < sm) */}
+  <div className="flex flex-col gap-2 sm:hidden">
+
+    {/* Run Test full width on mobile */}
+    <button
+      type="button"
+      onClick={() => void handleRunNow()}
+      disabled={running || !activeWorkflow?.id}
+      className="inline-flex w-full sm:w-auto items-center justify-center rounded-full border border-slate-400/80 bg-slate-800/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {running ? "Running…" : "Run test"}
+    </button>
+
+    {/* Delete + Save row */}
+    <div className="flex items-center justify-between gap-3 pb-1">
+      <button
+        type="button"
+        onClick={handleDelete}
+        disabled={saving || !activeWorkflow?.id}
+        className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Delete workflow
+      </button>
+
+      <button
+        type="button"
+        onClick={() => void handleSave()}
+        disabled={saving}
+        className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {saving ? "Saving…" : "Save changes"}
+      </button>
+    </div>
+  </div>
                 </div>
               </div>
             )}

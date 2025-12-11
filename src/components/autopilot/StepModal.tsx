@@ -372,11 +372,11 @@ function normaliseIfConfig(raw: any): IfConfig {
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
       <div
         className="
-          relative w-[95%] max-w-2xl md:max-w-3xl max-h-[85vh]
-          overflow-y-auto rounded-2xl border border-slate-700/70
-          bg-gradient-to-b from-slate-900/90 to-slate-950
-          px-6 py-6 shadow-[0_0_60px_rgba(15,23,42,0.95)]
-        "
+        relative w-[96%] max-w-xl md:max-w-2xl max-h-[88vh]
+        overflow-y-auto rounded-2xl border border-slate-700/70
+        bg-gradient-to-b from-slate-900/90 to-slate-950
+        px-4 py-4 md:px-6 md:py-6 shadow-[0_0_60px_rgba(15,23,42,0.95)]
+      "
       >
         {/* Glow */}
         <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
@@ -420,26 +420,32 @@ function normaliseIfConfig(raw: any): IfConfig {
 
         {/* SMS */}
         {type === "SMS" && (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
-              <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                Text Message
-              </label>
-              <textarea
-                rows={4}
-                className="mt-1 w-fullresize-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                placeholder="Ex: Hey {{firstName}}, thanks for reaching out — when are you free for a quick call?"
-                value={form.text ?? ""}
-                onChange={(e) => update("text", e.target.value)}
-              />
-              <p className="mt-1 text-[9px] text-[var(--avillo-cream-muted)]">
-                Variables: <code>{"{{firstName}}"}</code>,{" "}
-                <code>{"{{agentName}}"}</code>,{" "}
-                <code>{"{{propertyAddress}}"}</code>
-              </p>
-            </div>
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3 md:px-4 md:py-4">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+              Text message
+            </label>
+
+            <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+              Short, conversational text. Keep it feeling like you — Avillo will handle the timing.
+            </p>
+
+            <textarea
+              rows={5}
+              className="mt-2 w-full min-h-[130px] resize-none rounded-lg border border-slate-700/80 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
+              placeholder="Ex: Hey {{firstName}}, thanks for reaching out — when are you free for a quick call?"
+              value={form.text ?? ""}
+              onChange={(e) => update("text", e.target.value)}
+            />
+
+            <p className="mt-2 text-[9px] text-[var(--avillo-cream-muted)]">
+              Variables: <code>{"{{firstName}}"}</code>,{" "}
+              <code>{"{{agentName}}"}</code>,{" "}
+              <code>{"{{propertyAddress}}"}</code>
+            </p>
           </div>
-        )}
+        </div>
+      )}
 
         {/* EMAIL */}
         {type === "EMAIL" && (
