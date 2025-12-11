@@ -683,6 +683,7 @@ export default function AutomationPage() {
         updatedAt: saved.updatedAt,
       };
 
+      // Update list
       setWorkflows((prev) => {
         const idx = prev.findIndex((w) => w.id === normalized.id);
         if (idx === -1) return [normalized, ...prev];
@@ -691,8 +692,18 @@ export default function AutomationPage() {
         return next;
       });
 
-      setActiveWorkflow(normalized);
-      setSelectedId(normalized.id!);
+      // 🔍 Detect mobile viewport
+      const isMobile =
+        typeof window !== "undefined" && window.innerWidth < 1024;
+
+      if (isMobile) {
+        // On mobile: scroll back + show workflow library
+        backToList();
+      } else {
+        // On desktop: keep user in the builder with this workflow selected
+        setActiveWorkflow(normalized);
+        setSelectedId(normalized.id!);
+      }
     } catch (err: any) {
       console.error("Save workflow error", err);
       setError(
