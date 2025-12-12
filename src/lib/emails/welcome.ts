@@ -30,6 +30,9 @@ export function buildWelcomeEmailHtml({
     <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>
   <body style="margin:0; padding:0; background-color:#f3f4f6;">
+  <span style="display:none;opacity:0;visibility:hidden;mso-hide:all;font-size:1px;line-height:1px;max-height:0;max-width:0;">
+  Thanks for joining Avillo — you’re helping shape the future of the AI OS for real estate.
+</span>
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f3f4f6; margin:0; padding:24px 8px;">
       <tr>
         <td align="center" style="padding:0; margin:0;">
@@ -45,11 +48,11 @@ export function buildWelcomeEmailHtml({
                       <img
                         src="${safeLogoUrl}"
                         alt="Avillo"
-                        width="200"
+                        width="160"
                         style="
                           display:block;
                           margin:0 auto;
-                          max-width:200px;
+                          max-width:160px;
                           height:auto;
                         "
                       />
@@ -63,7 +66,7 @@ export function buildWelcomeEmailHtml({
                     <td style="padding:20px 20px 22px 20px;">
 
                       <p style="margin:0 0 6px 0; font-size:11px; line-height:1.4; font-weight:600; letter-spacing:0.16em; text-transform:uppercase; color:#6b7280;">
-                        Welcome to Avillo
+                        You're In🏡
                       </p>
 
                       <h1 style="margin:0 0 14px 0; font-size:18px; line-height:1.4; font-weight:600; color:#111827;">
