@@ -30,9 +30,6 @@ export function buildWelcomeEmailHtml({
     <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>
   <body style="margin:0; padding:0; background-color:#f3f4f6;">
-  <span style="display:none;opacity:0;visibility:hidden;mso-hide:all;font-size:1px;line-height:1px;max-height:0;max-width:0;">
-  Thanks for joining Avillo — you’re helping shape the future of the AI OS for real estate.
-</span>
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f3f4f6; margin:0; padding:24px 8px;">
       <tr>
         <td align="center" style="padding:0; margin:0;">
