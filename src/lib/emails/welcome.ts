@@ -19,7 +19,7 @@ export function buildWelcomeEmailHtml({
   const safeLogoUrl =
     logoUrl ||
     process.env.AVILLO_LOGO_URL ||
-    "https://app.avillo.io/avillo-logo.png";
+    "https://app.avillo.io/avillo-logo-cream.png";
 
   return `
   <div style="background-color:#0B1020;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
