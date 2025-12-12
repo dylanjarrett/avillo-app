@@ -30,7 +30,7 @@ export function buildWelcomeEmailHtml({
         <img
           src="${safeLogoUrl}"
           alt="Avillo"
-          style="max-width:220px;height:auto;display:inline-block;filter:drop-shadow(0 0 24px rgba(244,210,106,0.65));"
+          style="max-width:220px;height:auto;display:inline-block;"
         />
       </div>
 
