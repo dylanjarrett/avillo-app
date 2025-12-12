@@ -63,7 +63,7 @@ export function buildWelcomeEmailHtml({
                     <td style="padding:20px 20px 22px 20px;">
 
                       <p style="margin:0 0 6px 0; font-size:11px; line-height:1.4; font-weight:600; letter-spacing:0.16em; text-transform:uppercase; color:#6b7280;">
-                        You're In🏡
+                        You're in🏡
                       </p>
 
                       <h1 style="margin:0 0 14px 0; font-size:18px; line-height:1.4; font-weight:600; color:#111827;">
