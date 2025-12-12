@@ -27,12 +27,26 @@ export function buildWelcomeEmailHtml({
 
       <!-- Logo -->
       <div style="text-align:center;margin-bottom:24px;">
-        <img
-          src="${safeLogoUrl}"
-          alt="Avillo"
-          style="max-width:190px;height:auto;display:inline-block;"
-        />
-      </div>
+  <div
+    style="
+      display:inline-block;
+      background:#020617;
+      padding:24px 28px;
+      border-radius:20px;
+      border:1px solid rgba(148,163,184,0.35);
+    "
+  >
+    <img
+      src="${safeLogoUrl}"
+      alt="Avillo"
+      style="
+        max-width:180px;
+        height:auto;
+        display:block;
+      "
+    />
+  </div>
+</div>
 
       <!-- Card body -->
       <div style="background:#020617;border-radius:18px;padding:24px 20px;border:1px solid rgba(148,163,184,0.35);">
