@@ -57,7 +57,13 @@ export default function AccountPage() {
 
       try {
         const res = await fetch("/api/account/profile");
-        const data: ProfileResponse = await res.json();
+        const data: ProfileResponse = await res.json().catch(() => ({} as any));
+
+        if (res.status === 401) {
+          // Session expired → sign out hard and send to login
+          await signOut({ callbackUrl: "/login" });
+          return;
+        }
 
         if (!res.ok || !("success" in data) || !data.success) {
           if (!cancelled) {
@@ -84,7 +90,7 @@ export default function AccountPage() {
       }
     }
 
-    loadProfile();
+    void loadProfile();
     return () => {
       cancelled = true;
     };
@@ -130,7 +136,12 @@ export default function AccountPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as any));
+
+      if (res.status === 401) {
+        await signOut({ callbackUrl: "/login" });
+        return;
+      }
 
       if (!res.ok) {
         setProfileSaveError(data?.error ?? "Failed to update profile.");
@@ -167,16 +178,19 @@ export default function AccountPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as any));
+
+      if (res.status === 401) {
+        await signOut({ callbackUrl: "/login" });
+        return;
+      }
 
       if (!res.ok) {
         setEmailError(data?.error ?? "Failed to update email.");
         return;
       }
 
-      // If backend says this requires logout, sign out + redirect to login
       if (data?.requiresLogout) {
-        // Optional: show a quick message before redirect (won't be seen long)
         setEmailSuccess(
           data?.message ??
             "Email updated. You’ll be redirected to log in again."
@@ -222,7 +236,12 @@ export default function AccountPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as any));
+
+      if (res.status === 401) {
+        await signOut({ callbackUrl: "/login" });
+        return;
+      }
 
       if (!res.ok) {
         setPasswordError(data?.error ?? "Failed to update password.");

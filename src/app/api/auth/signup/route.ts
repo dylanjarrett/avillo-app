@@ -1,6 +1,8 @@
 // src/app/api/auth/signup/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { hash } from "bcryptjs";
+import { sendEmail } from "@/lib/resendClient";
+import { buildWelcomeEmailHtml } from "@/lib/emails/welcome";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +24,7 @@ export async function POST(req: NextRequest) {
     const password = body.password ?? "";
     const brokerage = (body.brokerage ?? "").trim();
 
+    // ------- Basic validation -------
     if (!email || !email.includes("@")) {
       return NextResponse.json(
         { error: "Please enter a valid email address." },
@@ -38,6 +41,7 @@ export async function POST(req: NextRequest) {
 
     const { prisma } = await import("@/lib/prisma");
 
+    // ------- Check for existing account -------
     const existing = await prisma.user.findUnique({
       where: { email },
     });
@@ -49,6 +53,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ------- Create user -------
     const passwordHash = await hash(password, 10);
 
     const user = await prisma.user.create({
@@ -58,12 +63,11 @@ export async function POST(req: NextRequest) {
         passwordHash,
         brokerage: brokerage || null,
         // For now we treat email as verified on signup.
-        // Later we can wire EmailVerificationToken + email flow.
         emailVerified: new Date(),
       },
     });
 
-    // Seed CRM activity with a "workspace created" event
+    // Seed initial CRM activity
     await prisma.cRMActivity.create({
       data: {
         userId: user.id,
@@ -73,6 +77,29 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // ------- Fire-and-forget welcome email (non-blocking) -------
+    const appUrl = process.env.NEXTAUTH_URL || "https://app.avillo.io";
+    const logoUrl =
+      process.env.AVILLO_LOGO_URL ||
+      "https://app.avillo.io/avillo-logo-cream.png";
+
+    (async () => {
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: "Welcome to Avillo",
+          html: buildWelcomeEmailHtml({
+            name: user.name,
+            appUrl,
+            logoUrl,
+          }),
+        });
+      } catch (err) {
+        console.error("Welcome email failed (non-blocking):", err);
+      }
+    })();
+
+    // ------- Response to client -------
     return NextResponse.json({
       success: true,
       user: {
@@ -88,7 +115,6 @@ export async function POST(req: NextRequest) {
       {
         error:
           "We couldn’t create your account right now. Try again or contact support@avillo.io.",
-
       },
       { status: 500 }
     );

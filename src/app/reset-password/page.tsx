@@ -1,3 +1,4 @@
+// src/app/reset-password/page.tsx
 "use client";
 
 import { FormEvent, useState } from "react";
@@ -20,22 +21,24 @@ function AuthLogo() {
 }
 
 type ResetPasswordPageProps = {
-  searchParams: { token?: string };
+  searchParams: { token?: string; email?: string };
 };
 
 export default function ResetPasswordPage({ searchParams }: ResetPasswordPageProps) {
-  const token = searchParams?.token || "";
+  const token = (searchParams?.token ?? "").trim();
+  const email = (searchParams?.email ?? "").trim().toLowerCase();
+
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const missingToken = !token;
+  const missingTokenOrEmail = !token || !email;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (missingToken) return;
+    if (missingTokenOrEmail) return;
 
     setError(null);
     setSuccess(null);
@@ -55,7 +58,11 @@ export default function ResetPasswordPage({ searchParams }: ResetPasswordPagePro
       const res = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, password }),
+        body: JSON.stringify({
+          email,
+          token,
+          newPassword: password, // <-- match API
+        }),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -90,10 +97,10 @@ export default function ResetPasswordPage({ searchParams }: ResetPasswordPagePro
             </p>
           </div>
 
-          {missingToken && (
+          {missingTokenOrEmail && (
             <div className="mb-4 rounded-lg border border-red-400/70 bg-red-950/50 px-3 py-2 text-[11px] text-red-100">
-              This reset link is missing a token or has expired. Please request a
-              new link from the{" "}
+              This reset link is missing information or has expired. Please request a new
+              link from the{" "}
               <Link href="/forgot-password" className="underline">
                 forgot password
               </Link>{" "}
@@ -113,7 +120,7 @@ export default function ResetPasswordPage({ searchParams }: ResetPasswordPagePro
             </div>
           )}
 
-          {!missingToken && (
+          {!missingTokenOrEmail && (
             <form className="space-y-3" onSubmit={handleSubmit}>
               <div>
                 <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
