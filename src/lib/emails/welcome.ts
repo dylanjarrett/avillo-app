@@ -25,19 +25,14 @@ export function buildWelcomeEmailHtml({
   <div style="background-color:#f3f4f6;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
     <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:24px;padding:24px 16px;border:1px solid #e5e7eb;">
 
-      <div style="
-  text-align:center;
-  margin-bottom:24px;
-  padding:20px;
-  background:#ffffff;
-  border-radius:12px;
-  display:inline-block;
-"><img
-    src="${safeLogoUrl}" 
-    alt="Avillo"
-    style="max-width:180px;height:auto;display:block;margin:0 auto;"
-  />
-</div>
+      <!-- Logo on white -->
+      <div style="text-align:center;margin-bottom:24px;">
+        <img
+          src="${safeLogoUrl}"
+          alt="Avillo"
+          style="max-width:190px;height:auto;display:inline-block;"
+        />
+      </div>
 
       <!-- Inner card -->
       <div style="background:#f9fafb;border-radius:18px;padding:24px 20px;border:1px solid #e5e7eb;">
