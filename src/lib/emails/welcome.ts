@@ -23,14 +23,14 @@ export function buildWelcomeEmailHtml({
 
   return `
   <div style="background-color:#0B1020;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-    <div style="max-width:480px;margin:0 auto;background:#0f172a;border-radius:24px;padding:32px 24px;border:1px solid rgba(148,163,184,0.35);">
+    <div style="max-width:480px;margin:0 auto;background:#0f172a;border-radius:24px;padding:24px 16px;border:1px solid rgba(148,163,184,0.35);">
 
       <!-- Logo -->
       <div style="text-align:center;margin-bottom:24px;">
         <img
           src="${safeLogoUrl}"
           alt="Avillo"
-          style="max-width:220px;height:auto;display:inline-block;"
+          style="max-width:190px;height:auto;display:inline-block;"
         />
       </div>
 
