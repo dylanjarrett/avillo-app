@@ -1,8 +1,7 @@
+// src/lib/automations/runAutomation.ts
+
 import { prisma } from "@/lib/prisma";
-import {
-  sendAutomationEmail,
-  sendAutomationSms,
-} from "@/lib/automations/messaging";
+import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messaging";
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
 
 /* ------------------------------------
@@ -28,7 +27,7 @@ type RunContext = {
 };
 
 /* ------------------------------------
- * IF / Condition helpers (unchanged)
+ * IF / Condition helpers
  * -----------------------------------*/
 
 type ConditionJoin = "AND" | "OR";
@@ -52,11 +51,7 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
   });
 }
 
-function getConditionFieldValue(
-  field: string,
-  contact: any | null,
-  listing: any | null
-): string | null {
+function getConditionFieldValue(field: string, contact: any | null, listing: any | null): string | null {
   switch (field) {
     case "contact.stage":
       return contact?.stage ?? null;
@@ -71,11 +66,7 @@ function getConditionFieldValue(
   }
 }
 
-function evaluateSingleCondition(
-  config: ConditionConfig,
-  contact: any | null,
-  listing: any | null
-): boolean {
+function evaluateSingleCondition(config: ConditionConfig, contact: any | null, listing: any | null): boolean {
   const actual = getConditionFieldValue(config.field, contact, listing);
   if (actual == null) return false;
 
@@ -86,8 +77,7 @@ function evaluateSingleCondition(
 }
 
 function normalizeIfConfig(raw: any): NormalizedIfConfig {
-  const join: ConditionJoin =
-    raw?.join === "OR" || raw?.join === "AND" ? raw.join : "AND";
+  const join: ConditionJoin = raw?.join === "OR" || raw?.join === "AND" ? raw.join : "AND";
 
   if (raw && Array.isArray(raw.conditions)) {
     const conditions: ConditionConfig[] = raw.conditions.map((c: any) => ({
@@ -118,18 +108,11 @@ function normalizeIfConfig(raw: any): NormalizedIfConfig {
   };
 }
 
-function evaluateIfGroup(
-  rawConfig: any,
-  contact: any | null,
-  listing: any | null
-): boolean {
+function evaluateIfGroup(rawConfig: any, contact: any | null, listing: any | null): boolean {
   const { join, conditions } = normalizeIfConfig(rawConfig);
   if (!conditions.length) return false;
 
-  const results = conditions.map((c) =>
-    evaluateSingleCondition(c, contact, listing)
-  );
-
+  const results = conditions.map((c) => evaluateSingleCondition(c, contact, listing));
   return join === "OR" ? results.some(Boolean) : results.every(Boolean);
 }
 
@@ -145,16 +128,10 @@ function parseDueAt(raw: any): Date | null {
 
 /**
  * If the TASK step explicitly includes a timestamp or "due in X" fields,
- * compute a dueAt. Otherwise return null (caller will use cursorTime).
+ * compute a dueAt using `base`. Otherwise return null (caller will use cursorTime).
  */
-function computeExplicitDueAtFromTaskConfig(config: any): Date | null {
-  const direct =
-    config?.dueAt ??
-    config?.taskAt ??
-    config?.reminderAt ??
-    config?.date ??
-    config?.datetime ??
-    null;
+function computeExplicitDueAtFromTaskConfig(config: any, base: Date): Date | null {
+  const direct = config?.dueAt ?? config?.taskAt ?? config?.reminderAt ?? config?.date ?? config?.datetime ?? null;
 
   const parsed = parseDueAt(direct);
   if (parsed) return parsed;
@@ -165,7 +142,7 @@ function computeExplicitDueAtFromTaskConfig(config: any): Date | null {
 
   if (!minutes && !hours && !days) return null;
 
-  const d = new Date();
+  const d = new Date(base);
   d.setMinutes(d.getMinutes() + minutes + hours * 60);
   d.setDate(d.getDate() + days);
   return d;
@@ -173,39 +150,57 @@ function computeExplicitDueAtFromTaskConfig(config: any): Date | null {
 
 type WaitUnit = "hours" | "days" | "weeks" | "months";
 
+/**
+ * Normalizes WAIT config across versions.
+ * Prefers new shape: { amount, unit } (or { value, unit }) and falls back to legacy { hours } / { days }.
+ */
 function normalizeWait(config: any): { amount: number; unit: WaitUnit } | null {
-  // support older config: { hours: 24 }
-  const hours = Number(config?.hours ?? 0);
-  if (Number.isFinite(hours) && hours > 0) return { amount: hours, unit: "hours" };
-
-  // support: { amount: 2, unit: "days" }
+  // new config first
   const amountRaw = config?.amount ?? config?.value ?? null;
   const unitRaw = String(config?.unit ?? "").toLowerCase().trim();
-
   const amount = Number(amountRaw ?? 0);
-  const unit =
-    unitRaw === "days" || unitRaw === "weeks" || unitRaw === "months" || unitRaw === "hours"
+
+  const unit: WaitUnit | null =
+    unitRaw === "hours" || unitRaw === "days" || unitRaw === "weeks" || unitRaw === "months"
       ? (unitRaw as WaitUnit)
       : null;
 
-  if (!unit || !Number.isFinite(amount) || amount <= 0) return null;
-  return { amount, unit };
+  if (unit && Number.isFinite(amount) && amount > 0) {
+    return { amount, unit };
+  }
+
+  // legacy fallback
+  const legacyHours = Number(config?.hours ?? 0);
+  if (Number.isFinite(legacyHours) && legacyHours > 0) {
+    return { amount: legacyHours, unit: "hours" };
+  }
+
+  const legacyDays = Number(config?.days ?? 0);
+  if (Number.isFinite(legacyDays) && legacyDays > 0) {
+    return { amount: legacyDays, unit: "days" };
+  }
+
+  return null;
 }
 
 function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
   const d = new Date(base);
+
   if (unit === "hours") {
     d.setTime(d.getTime() + amount * 60 * 60 * 1000);
     return d;
   }
+
   if (unit === "days") {
     d.setDate(d.getDate() + amount);
     return d;
   }
+
   if (unit === "weeks") {
     d.setDate(d.getDate() + amount * 7);
     return d;
   }
+
   // months
   d.setMonth(d.getMonth() + amount);
   return d;
@@ -215,30 +210,21 @@ function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
  * Core runner
  * -----------------------------------*/
 
-export async function runAutomation(
-  automationId: string,
-  steps: AutomationStep[],
-  ctx: RunContext
-) {
+export async function runAutomation(automationId: string, steps: AutomationStep[], ctx: RunContext) {
   const [user, contact, listing] = await Promise.all([
     prisma.user.findUnique({ where: { id: ctx.userId } }),
     ctx.contactId
-      ? prisma.contact.findFirst({
-          where: { id: ctx.contactId, userId: ctx.userId },
-        })
+      ? prisma.contact.findFirst({ where: { id: ctx.contactId, userId: ctx.userId } })
       : Promise.resolve(null),
     ctx.listingId
-      ? prisma.listing.findFirst({
-          where: { id: ctx.listingId, userId: ctx.userId },
-        })
+      ? prisma.listing.findFirst({ where: { id: ctx.listingId, userId: ctx.userId } })
       : Promise.resolve(null),
   ]);
 
   const templateVars: Record<string, string> = {
     firstName: contact?.firstName ?? contact?.name?.split(" ")[0] ?? "",
     agentName: user?.name ?? "",
-    propertyAddress:
-      listing?.address ?? listing?.fullAddress ?? listing?.streetAddress ?? "",
+    propertyAddress: listing?.address ?? listing?.fullAddress ?? listing?.streetAddress ?? "",
   };
 
   let toEmail: string | null = contact?.email ?? contact?.primaryEmail ?? null;
@@ -286,8 +272,8 @@ export async function runAutomation(
     });
   };
 
-  // ✅ The key: a "virtual clock" that WAIT moves forward
-  let cursorTime = new Date();
+  // ✅ Virtual clock
+  let cursorTime = run.executedAt ?? new Date();
 
   const executeSteps = async (stepsToRun: AutomationStep[]) => {
     for (const step of stepsToRun) {
@@ -312,10 +298,7 @@ export async function runAutomation(
             if (!toEmail) throw new Error("No email on contact.");
 
             const subject = renderTemplate(step.config?.subject ?? "", templateVars);
-            const html = renderTemplate(
-              (step.config?.body ?? "").replace(/\n/g, "<br />"),
-              templateVars
-            );
+            const html = renderTemplate((step.config?.body ?? "").replace(/\n/g, "<br />"), templateVars);
 
             await sendAutomationEmail({ to: toEmail, subject, html });
 
@@ -362,21 +345,11 @@ export async function runAutomation(
           }
 
           case "TASK": {
-            const title =
-              step.config?.title ??
-              step.config?.taskTitle ??
-              step.config?.name ??
-              step.config?.text ??
-              "Task";
+            const title = step.config?.title ?? step.config?.taskTitle ?? step.config?.name ?? step.config?.text ?? "Task";
 
-            const notes =
-              step.config?.notes ??
-              step.config?.description ??
-              "";
+            const notes = step.config?.notes ?? step.config?.description ?? "";
 
-            // 1) if TASK config explicitly sets a dueAt / dueIn fields, respect it
-            // 2) otherwise use cursorTime (so WAIT → TASK produces a proper due date)
-            const explicitDueAt = computeExplicitDueAtFromTaskConfig(step.config);
+            const explicitDueAt = computeExplicitDueAtFromTaskConfig(step.config, cursorTime);
             const dueAt = explicitDueAt ?? cursorTime;
 
             const created = await createAutopilotTask({
@@ -418,6 +391,19 @@ export async function runAutomation(
             const branch = result ? step.thenSteps ?? [] : step.elseSteps ?? [];
             if (branch.length) await executeSteps(branch);
             break;
+          }
+
+          default: {
+            await recordStep({
+              stepId: step.id,
+              stepType: step.type,
+              status: "error",
+              message: `Unknown step type: ${String(step.type)}`,
+            });
+
+            runStatus = "failed";
+            runMessage = `Unknown step type: ${String(step.type)}`;
+            return;
           }
         }
       } catch (err: any) {

@@ -665,23 +665,28 @@ export default function DashboardPage() {
                         {formatDueLabel(t.dueAt)}
                       </p>
 
-                      <div className="mt-1 flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => markTaskDone(t.id)}
-                          disabled={taskBusyId === t.id}
-                          className="rounded-lg border border-emerald-200/35 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100 hover:border-emerald-200/60 disabled:opacity-50"
-                          title="Mark done"
-                        >
-                          Done
-                        </button>
-                        <button
-                          onClick={() => deleteTask(t.id)}
-                          disabled={taskBusyId === t.id}
-                          className="rounded-lg border border-rose-200/30 bg-rose-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-100 hover:border-rose-200/55 disabled:opacity-50"
-                          title="Delete task"
-                        >
-                          Delete
-                        </button>
+                      <div className="flex items-center gap-2">
+                     {/* Done */}
+                    <button
+                    onClick={() => markTaskDone(t.id)}
+                    className="h-7 w-7 rounded-md flex items-center justify-center
+                              text-emerald-400/70 hover:text-emerald-400
+                              hover:bg-emerald-400/10 transition"
+                    aria-label="Mark done"
+                    >
+                      ✓
+                    </button>
+
+                    {/* Delete */}
+                    <button
+                      onClick={() => deleteTask(t.id)}
+                      className="h-7 w-7 rounded-md flex items-center justify-center
+                                text-rose-400/60 hover:text-rose-400
+                                hover:bg-rose-400/10 transition"
+                      aria-label="Delete task"
+                    >
+                      ✕
+                    </button>
                       </div>
                     </div>
                   </div>

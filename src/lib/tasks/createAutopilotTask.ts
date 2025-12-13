@@ -1,4 +1,5 @@
 // src/lib/tasks/createAutopilotTask.ts
+
 type AutopilotTaskInput = {
   userId: string;
   title: string;
@@ -41,7 +42,7 @@ export async function createAutopilotTask(input: AutopilotTaskInput) {
 
   if (existing) return existing;
 
-  return prisma.task.create({
+  const created = await prisma.task.create({
     data: {
       userId: input.userId,
       contactId,
@@ -53,4 +54,27 @@ export async function createAutopilotTask(input: AutopilotTaskInput) {
       status: "OPEN",
     },
   });
+
+  // --- CRM TIMELINE LOG ---
+  // Only log if this task is tied to a contact (so it can show on their timeline).
+  // We log to CRMActivity (not ContactNote) so the notes area stays human-authored.
+  if (created.contactId) {
+    await prisma.cRMActivity.create({
+      data: {
+        userId: created.userId,
+        contactId: created.contactId,
+        type: "task_created",
+        summary: `Autopilot task created: ${created.title}`,
+        data: {
+          source: "AUTOPILOT",
+          taskId: created.id,
+          title: created.title,
+          dueAt: created.dueAt ? created.dueAt.toISOString() : null,
+          listingId: created.listingId ?? null,
+        },
+      },
+    });
+  }
+
+  return created;
 }
