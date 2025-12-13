@@ -21,7 +21,7 @@ type ContactNote = {
   id: string;
   text: string;
   createdAt: string;
-  reminderAt?: string | null;
+  taskAt?: string | null;
 };
 
 type LinkedListing = {
@@ -170,7 +170,7 @@ export default function CrmPage() {
 
   // Notes (per contact) drafts + saving state
   const [noteDrafts, setNoteDrafts] = useState<
-    Record<string, { text: string; reminderAt: string }>
+    Record<string, { text: string; taskAt: string }>
   >({});
   const [noteSaving, setNoteSaving] = useState(false);
 
@@ -432,15 +432,15 @@ export default function CrmPage() {
 
   function updateNoteDraft(
     contactId: string,
-    field: "text" | "reminderAt",
+    field: "text" | "taskAt",
     value: string
   ) {
     setNoteDrafts((prev) => ({
       ...prev,
       [contactId]: {
         text: field === "text" ? value : prev[contactId]?.text ?? "",
-        reminderAt:
-          field === "reminderAt" ? value : prev[contactId]?.reminderAt ?? "",
+        taskAt:
+          field === "taskAt" ? value : prev[contactId]?.taskAt ?? "",
       },
     }));
   }
@@ -458,7 +458,7 @@ export default function CrmPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: draft.text,
-          reminderAt: draft.reminderAt || undefined,
+          taskAt: draft.taskAt || undefined,
         }),
       });
 
@@ -487,7 +487,7 @@ export default function CrmPage() {
       // clear draft
       setNoteDrafts((prev) => ({
         ...prev,
-        [contactId]: { text: "", reminderAt: "" },
+        [contactId]: { text: "", taskAt: "" },
       }));
     } catch (err: any) {
       console.error("Save note error", err);
@@ -1413,16 +1413,16 @@ export default function CrmPage() {
                     )}
                   </div>
 
-                  {/* Notes & reminders */}
+                  {/* Notes & tasks */}
                   <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
                     <p className="text-[11px] font-semibold text-amber-100/90">
-                      Notes & reminders
+                      Notes & tasks
                     </p>
 
                     {!activeContact.id ? (
                       <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
                         Save this contact first, then you’ll be able to log notes
-                        and create reminders tied to your dashboard.
+                        and create tasks tied to your dashboard.
                       </p>
                     ) : (
                       <>
@@ -1457,11 +1457,11 @@ export default function CrmPage() {
                                       minute: "2-digit",
                                     })}
                                   </span>
-                                  {note.reminderAt && (
+                                  {note.taskAt && (
                                     <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                                      Reminder{" "}
+                                      Task{" "}
                                       {new Date(
-                                        note.reminderAt
+                                        note.taskAt
                                       ).toLocaleString(undefined, {
                                         month: "short",
                                         day: "numeric",
@@ -1501,12 +1501,12 @@ export default function CrmPage() {
 
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <label className="flex items-center gap-2 text-[10px] text-[var(--avillo-cream-muted)]">
-                              Reminder
+                              Set to create a Task:
                               <input
                                 type="datetime-local"
                                 value={
                                   activeContact.id
-                                    ? noteDrafts[activeContact.id]?.reminderAt ??
+                                    ? noteDrafts[activeContact.id]?.taskAt ??
                                       ""
                                     : ""
                                 }
@@ -1514,7 +1514,7 @@ export default function CrmPage() {
                                   activeContact.id &&
                                   updateNoteDraft(
                                     activeContact.id,
-                                    "reminderAt",
+                                    "taskAt",
                                     e.target.value
                                   )
                                 }

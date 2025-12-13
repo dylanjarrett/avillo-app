@@ -1,5 +1,4 @@
 // src/lib/automations/messaging.ts
-// src/lib/automations/messaging.ts
 
 import { sendSms } from "@/lib/twilioClient";
 import { sendEmail } from "@/lib/resendClient";

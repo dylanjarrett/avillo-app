@@ -54,7 +54,7 @@ function shapeContactNote(note: any) {
     id: note.id,
     text: note.text,
     createdAt: note.createdAt?.toISOString?.() ?? new Date().toISOString(),
-    reminderAt: note.reminderAt ? note.reminderAt.toISOString() : null,
+    taskAt: note.reminderAt ? note.reminderAt.toISOString() : null,
   };
 }
 
@@ -477,12 +477,17 @@ export async function DELETE(req: NextRequest) {
         where: { contactId, userId: user.id },
       });
 
-      // 5) Delete contact notes for this contact
+      // 5) Delete tasks for this contact
+      await tx.task.deleteMany({
+        where: { contactId, userId: user.id },
+      });
+
+      // 6) Delete contact notes for this contact
       await tx.contactNote.deleteMany({
         where: { contactId },
       });
 
-      // 6) Finally delete the contact itself
+      // 7) Finally delete the contact itself
       await tx.contact.delete({
         where: { id: contactId },
       });

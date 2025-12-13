@@ -30,6 +30,17 @@ enum IntelligenceEngine {
   NEIGHBORHOOD
 }
 
+enum TaskStatus {
+  OPEN
+  DONE
+}
+
+enum TaskSource {
+  PEOPLE_NOTE
+  AUTOPILOT
+  MANUAL
+}
+
 // ---------------------------
 // USER
 // ---------------------------
@@ -61,7 +72,7 @@ model User {
   crmActivity            CRMActivity[]
   passwordResetTokens    PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
-
+  tasks                  Task[]
   intelligenceOutputs    IntelligenceOutput[] // <-- NEW
 
   stripeCustomerId       String?  @db.VarChar(255)
@@ -96,6 +107,7 @@ model Contact {
 
   // Structured note entries per contact
   contactNotes ContactNote[]
+  tasks        Task[]
 
   // Relationships to listings
   listingsAsSeller Listing[]        @relation("SellerListings")
@@ -135,7 +147,7 @@ model Listing {
   // Listing photos (1-many)
   photos     ListingPhoto[]
   activities Activity[]
-
+  tasks      Task[]
   intelligenceOutputs IntelligenceOutput[] // <-- NEW
 
   createdAt DateTime @default(now())
@@ -247,6 +259,32 @@ model ContactNote {
   reminderAt DateTime?
   createdAt  DateTime @default(now())
 }
+
+model Task {
+
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactId String?
+  contact   Contact?   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  listingId String?
+  listing   Listing?   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  title     String
+  notes     String?
+  dueAt     DateTime?
+  status    TaskStatus @default(OPEN)
+  source    TaskSource @default(MANUAL)
+  
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  completedAt DateTime?
+
+  @@index([userId, status, dueAt])
+  @@index([userId, contactId, status, dueAt])
+  @@index([userId, listingId, status, dueAt])
+}
+
 
 // ---------------------------
 // NEXTAUTH

@@ -3,6 +3,11 @@ import {
   sendAutomationEmail,
   sendAutomationSms,
 } from "@/lib/automations/messaging";
+import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
+
+/* ------------------------------------
+ * Types
+ * -----------------------------------*/
 
 export type StepType = "SMS" | "EMAIL" | "TASK" | "WAIT" | "IF";
 
@@ -23,7 +28,7 @@ type RunContext = {
 };
 
 /* ------------------------------------
- * Condition helpers (unchanged)
+ * IF / Condition helpers (unchanged)
  * -----------------------------------*/
 
 type ConditionJoin = "AND" | "OR";
@@ -39,7 +44,6 @@ type NormalizedIfConfig = {
   conditions: ConditionConfig[];
 };
 
-// Very simple {{var}} templating
 function renderTemplate(template: string, vars: Record<string, string>): string {
   if (!template) return "";
   return template.replace(/{{\s*([\w.]+)\s*}}/g, (_, key) => {
@@ -98,17 +102,19 @@ function normalizeIfConfig(raw: any): NormalizedIfConfig {
     };
   }
 
-  const field = raw?.field as string | undefined;
-  const operator = (raw?.operator as string | undefined) ?? "equals";
-  const value = raw?.value as string | undefined;
-
-  if (!field || !value) {
+  if (!raw?.field || !raw?.value) {
     return { join: "AND", conditions: [] };
   }
 
   return {
     join: "AND",
-    conditions: [{ field, operator, value }],
+    conditions: [
+      {
+        field: String(raw.field),
+        operator: String(raw.operator ?? "equals"),
+        value: String(raw.value),
+      },
+    ],
   };
 }
 
@@ -125,6 +131,84 @@ function evaluateIfGroup(
   );
 
   return join === "OR" ? results.some(Boolean) : results.every(Boolean);
+}
+
+/* ------------------------------------
+ * Timing helpers
+ * -----------------------------------*/
+
+function parseDueAt(raw: any): Date | null {
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * If the TASK step explicitly includes a timestamp or "due in X" fields,
+ * compute a dueAt. Otherwise return null (caller will use cursorTime).
+ */
+function computeExplicitDueAtFromTaskConfig(config: any): Date | null {
+  const direct =
+    config?.dueAt ??
+    config?.taskAt ??
+    config?.reminderAt ??
+    config?.date ??
+    config?.datetime ??
+    null;
+
+  const parsed = parseDueAt(direct);
+  if (parsed) return parsed;
+
+  const minutes = Number(config?.minutes ?? config?.dueInMinutes ?? 0);
+  const hours = Number(config?.hours ?? config?.dueInHours ?? 0);
+  const days = Number(config?.days ?? config?.dueInDays ?? 0);
+
+  if (!minutes && !hours && !days) return null;
+
+  const d = new Date();
+  d.setMinutes(d.getMinutes() + minutes + hours * 60);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+type WaitUnit = "hours" | "days" | "weeks" | "months";
+
+function normalizeWait(config: any): { amount: number; unit: WaitUnit } | null {
+  // support older config: { hours: 24 }
+  const hours = Number(config?.hours ?? 0);
+  if (Number.isFinite(hours) && hours > 0) return { amount: hours, unit: "hours" };
+
+  // support: { amount: 2, unit: "days" }
+  const amountRaw = config?.amount ?? config?.value ?? null;
+  const unitRaw = String(config?.unit ?? "").toLowerCase().trim();
+
+  const amount = Number(amountRaw ?? 0);
+  const unit =
+    unitRaw === "days" || unitRaw === "weeks" || unitRaw === "months" || unitRaw === "hours"
+      ? (unitRaw as WaitUnit)
+      : null;
+
+  if (!unit || !Number.isFinite(amount) || amount <= 0) return null;
+  return { amount, unit };
+}
+
+function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
+  const d = new Date(base);
+  if (unit === "hours") {
+    d.setTime(d.getTime() + amount * 60 * 60 * 1000);
+    return d;
+  }
+  if (unit === "days") {
+    d.setDate(d.getDate() + amount);
+    return d;
+  }
+  if (unit === "weeks") {
+    d.setDate(d.getDate() + amount * 7);
+    return d;
+  }
+  // months
+  d.setMonth(d.getMonth() + amount);
+  return d;
 }
 
 /* ------------------------------------
@@ -150,44 +234,21 @@ export async function runAutomation(
       : Promise.resolve(null),
   ]);
 
-  const firstName =
-    (contact as any)?.firstName ??
-    (contact as any)?.name?.split(" ")[0] ??
-    "";
-
-  const agentName = user?.name ?? "";
-
-  const propertyAddress =
-    (listing as any)?.address ??
-    (listing as any)?.fullAddress ??
-    (listing as any)?.streetAddress ??
-    "";
-
   const templateVars: Record<string, string> = {
-    firstName,
-    agentName,
-    propertyAddress,
+    firstName: contact?.firstName ?? contact?.name?.split(" ")[0] ?? "",
+    agentName: user?.name ?? "",
+    propertyAddress:
+      listing?.address ?? listing?.fullAddress ?? listing?.streetAddress ?? "",
   };
 
-  // --- FIXED FALLBACK LOGIC ---
-let toEmail: string | null =
-  (contact as any)?.email ??
-  (contact as any)?.primaryEmail ??
-  null;
+  let toEmail: string | null = contact?.email ?? contact?.primaryEmail ?? null;
+  let toPhone: string | null = contact?.phone ?? contact?.phoneNumber ?? null;
 
-let toPhone: string | null =
-  (contact as any)?.phone ??
-  (contact as any)?.phoneNumber ??
-  null;
-
-// If no contact → test mode: send to user's email only
-if (!contact) {
-  toEmail = user?.email ?? null;
-  // Users don’t have phone numbers — do NOT assign user.phone
-  toPhone = null;
-}
-
-  console.log("Sending automation email to:", toEmail);
+  // Test mode: if no contact, send emails to the user only
+  if (!contact) {
+    toEmail = user?.email ?? null;
+    toPhone = null;
+  }
 
   let runStatus: "success" | "failed" = "success";
   let runMessage: string | null = null;
@@ -225,22 +286,15 @@ if (!contact) {
     });
   };
 
+  // ✅ The key: a "virtual clock" that WAIT moves forward
+  let cursorTime = new Date();
+
   const executeSteps = async (stepsToRun: AutomationStep[]) => {
     for (const step of stepsToRun) {
       try {
         switch (step.type) {
           case "SMS": {
-            if (!toPhone) {
-              await recordStep({
-                stepId: step.id,
-                stepType: "SMS",
-                status: "error",
-                message: "No phone number on contact.",
-              });
-              runStatus = "failed";
-              runMessage = "Missing phone number for SMS step.";
-              return;
-            }
+            if (!toPhone) throw new Error("No phone number on contact.");
 
             const body = renderTemplate(step.config?.text ?? "", templateVars);
             await sendAutomationSms({ to: toPhone, body });
@@ -249,39 +303,21 @@ if (!contact) {
               stepId: step.id,
               stepType: "SMS",
               status: "success",
-              payload: { to: toPhone, body },
+              payload: { to: toPhone },
             });
             break;
           }
 
           case "EMAIL": {
-            if (!toEmail) {
-              await recordStep({
-                stepId: step.id,
-                stepType: "EMAIL",
-                status: "error",
-                message: "No email on contact.",
-              });
-              runStatus = "failed";
-              runMessage = "Missing email for EMAIL step.";
-              return;
-            }
+            if (!toEmail) throw new Error("No email on contact.");
 
-            const subject = renderTemplate(
-              step.config?.subject ?? "",
-              templateVars
-            );
-            const rawBody = step.config?.body ?? "";
+            const subject = renderTemplate(step.config?.subject ?? "", templateVars);
             const html = renderTemplate(
-              rawBody.replace(/\n/g, "<br />"),
+              (step.config?.body ?? "").replace(/\n/g, "<br />"),
               templateVars
             );
 
-            await sendAutomationEmail({
-              to: toEmail,
-              subject,
-              html,
-            });
+            await sendAutomationEmail({ to: toEmail, subject, html });
 
             await recordStep({
               stepId: step.id,
@@ -292,26 +328,78 @@ if (!contact) {
             break;
           }
 
+          case "WAIT": {
+            const wait = normalizeWait(step.config);
+            const before = cursorTime;
+
+            if (wait) {
+              cursorTime = addToDate(cursorTime, wait.amount, wait.unit);
+
+              await recordStep({
+                stepId: step.id,
+                stepType: "WAIT",
+                status: "success",
+                message: `Advanced time by ${wait.amount} ${wait.unit}.`,
+                payload: {
+                  ...step.config,
+                  cursorBefore: before.toISOString(),
+                  cursorAfter: cursorTime.toISOString(),
+                },
+              });
+            } else {
+              await recordStep({
+                stepId: step.id,
+                stepType: "WAIT",
+                status: "success",
+                message: "Wait recorded (no timing applied — missing amount/unit).",
+                payload: {
+                  ...step.config,
+                  cursorAt: cursorTime.toISOString(),
+                },
+              });
+            }
+            break;
+          }
+
           case "TASK": {
+            const title =
+              step.config?.title ??
+              step.config?.taskTitle ??
+              step.config?.name ??
+              step.config?.text ??
+              "Task";
+
+            const notes =
+              step.config?.notes ??
+              step.config?.description ??
+              "";
+
+            // 1) if TASK config explicitly sets a dueAt / dueIn fields, respect it
+            // 2) otherwise use cursorTime (so WAIT → TASK produces a proper due date)
+            const explicitDueAt = computeExplicitDueAtFromTaskConfig(step.config);
+            const dueAt = explicitDueAt ?? cursorTime;
+
+            const created = await createAutopilotTask({
+              userId: ctx.userId,
+              contactId: ctx.contactId ?? null,
+              listingId: ctx.listingId ?? null,
+              title: String(title).trim(),
+              notes: String(notes).trim() || null,
+              dueAt,
+              dedupeWindowMinutes: 60,
+            });
+
             await recordStep({
               stepId: step.id,
               stepType: "TASK",
               status: "success",
-              message: step.config?.text ?? "",
-            });
-            break;
-          }
-
-          case "WAIT": {
-            const hours = step.config?.hours ?? null;
-            await recordStep({
-              stepId: step.id,
-              stepType: "WAIT",
-              status: "success",
-              message: hours
-                ? `Logical wait of ${hours} hours (no runtime delay in test mode).`
-                : "Wait step recorded.",
-              payload: { hours },
+              message: created ? "Task created." : "Task skipped.",
+              payload: {
+                taskId: created?.id ?? null,
+                dueAt: dueAt ? dueAt.toISOString() : null,
+                dueAtSource: explicitDueAt ? "explicit" : "cursor",
+                cursorAt: cursorTime.toISOString(),
+              },
             });
             break;
           }
@@ -323,27 +411,18 @@ if (!contact) {
               stepId: step.id,
               stepType: "IF",
               status: "success",
-              message: `Condition evaluated to ${
-                result ? "true" : "false"
-              }.`,
+              message: `Condition evaluated to ${result}.`,
               payload: normalizeIfConfig(step.config),
             });
 
-            const branchSteps = result
-              ? step.thenSteps ?? []
-              : step.elseSteps ?? [];
-
-            if (branchSteps.length > 0) {
-              await executeSteps(branchSteps);
-            }
+            const branch = result ? step.thenSteps ?? [] : step.elseSteps ?? [];
+            if (branch.length) await executeSteps(branch);
             break;
           }
         }
       } catch (err: any) {
-        console.error("[runAutomation] Step error", err);
         runStatus = "failed";
-        runMessage =
-          err?.message ?? `Automation step of type ${step.type} failed.`;
+        runMessage = err?.message ?? "Automation step failed.";
 
         await recordStep({
           stepId: step.id,
@@ -351,7 +430,6 @@ if (!contact) {
           status: "error",
           message: runMessage,
         });
-
         return;
       }
     }
@@ -361,9 +439,6 @@ if (!contact) {
 
   await prisma.automationRun.update({
     where: { id: run.id },
-    data: {
-      status: runStatus,
-      message: runMessage,
-    },
+    data: { status: runStatus, message: runMessage },
   });
 }

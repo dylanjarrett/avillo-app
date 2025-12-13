@@ -13,7 +13,7 @@ async function getPrisma() {
 
 type CreateNoteBody = {
   text?: string;
-  reminderAt?: string | null;
+  taskAt?: string | null;
 };
 
 export async function POST(
@@ -33,18 +33,12 @@ export async function POST(
     });
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Account not found." }, { status: 404 });
     }
 
     const contactId = params.id;
     if (!contactId) {
-      return NextResponse.json(
-        { error: "Contact id is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Contact id is required." }, { status: 400 });
     }
 
     const contact = await prisma.contact.findFirst({
@@ -52,26 +46,20 @@ export async function POST(
     });
 
     if (!contact) {
-      return NextResponse.json(
-        { error: "Contact not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Contact not found." }, { status: 404 });
     }
 
     const body = (await req.json().catch(() => null)) as CreateNoteBody | null;
 
     if (!body?.text || !body.text.trim()) {
-      return NextResponse.json(
-        { error: "Note text is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Note text is required." }, { status: 400 });
     }
 
-    let reminderDate: Date | null = null;
-    if (body.reminderAt) {
-      const parsed = new Date(body.reminderAt);
+    let taskDate: Date | null = null;
+    if (body.taskAt) {
+      const parsed = new Date(body.taskAt);
       if (!isNaN(parsed.getTime())) {
-        reminderDate = parsed;
+        taskDate = parsed;
       }
     }
 
@@ -79,7 +67,7 @@ export async function POST(
       data: {
         contactId: contact.id,
         text: body.text.trim(),
-        reminderAt: reminderDate,
+        reminderAt: taskDate,
       },
     });
 
@@ -93,16 +81,59 @@ export async function POST(
           `New note logged for ${(contact.firstName ?? "").trim()} ${(contact.lastName ?? "")
             .trim()}`.trim() || "New contact note",
         data: {
-          hasReminder: !!reminderDate,
+          hasTask: !!taskDate,
         },
       },
     });
+
+    // -----------------------------
+    // NEW: If task exists, create a Task row so it appears on Dashboard
+    // -----------------------------
+    if (taskDate) {
+      const first = (contact.firstName ?? "").trim();
+      const last = (contact.lastName ?? "").trim();
+      const name = `${first} ${last}`.trim() || "Contact";
+
+      const title = `Task for: ${name}`;
+      const notes = body.text.trim();
+
+      // lightweight dedupe: prevent double-POST creating duplicates
+      const windowStart = new Date(Date.now() - 10 * 60 * 1000);
+
+      const existing = await prisma.task.findFirst({
+        where: {
+          userId: user.id,
+          contactId: contact.id,
+          status: "OPEN",
+          source: "PEOPLE_NOTE",
+          title,
+          dueAt: taskDate,
+          createdAt: { gte: windowStart },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!existing) {
+        await prisma.task.create({
+          data: {
+            userId: user.id,
+            contactId: contact.id,
+            listingId: null,
+            title,
+            notes,
+            dueAt: taskDate,
+            status: "OPEN",
+            source: "PEOPLE_NOTE",
+          },
+        });
+      }
+    }
 
     const shaped = {
       id: note.id,
       text: note.text,
       createdAt: note.createdAt.toISOString(),
-      reminderAt: note.reminderAt ? note.reminderAt.toISOString() : null,
+      taskAt: note.reminderAt ? note.reminderAt.toISOString() : null,
     };
 
     return NextResponse.json({ note: shaped });
