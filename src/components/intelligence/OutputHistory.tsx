@@ -1,4 +1,3 @@
-// src/components/intelligence/OutputHistory.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -37,7 +36,10 @@ const ENGINE_FILTERS: { label: string; value: EngineFilter }[] = [
   { label: "Neighborhood", value: "neighborhood" },
 ];
 
-export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHistoryProps) {
+export default function OutputHistory({
+  onSelectEntry,
+  refreshKey,
+}: OutputHistoryProps) {
   const [entries, setEntries] = useState<OutputHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,16 +47,6 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
   const [search, setSearch] = useState("");
   const [engineFilter, setEngineFilter] = useState<EngineFilter>("all");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
-
-  // transient highlight only
-  const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
-
-  // Auto-clear highlight after a short time (prevents “stuck active”)
-  useEffect(() => {
-    if (!activeEntryId) return;
-    const t = window.setTimeout(() => setActiveEntryId(null), 2500);
-    return () => window.clearTimeout(t);
-  }, [activeEntryId]);
 
   // --- Fetch recent entries ---------------------------------------------------
   useEffect(() => {
@@ -75,7 +67,6 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
           if (!cancelled) {
             setError(data?.error || "Could not load recent AI activity.");
             setEntries([]);
-            setActiveEntryId(null);
           }
           return;
         }
@@ -83,14 +74,12 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
         const data = (await res.json()) as { entries?: OutputHistoryEntry[] };
         if (!cancelled) {
           setEntries(data?.entries ?? []);
-          setActiveEntryId(null); // ✅ clear highlight on refresh
         }
       } catch (err) {
         if (!cancelled) {
           console.error("Prompt history error", err);
           setError("Could not load recent AI activity.");
           setEntries([]);
-          setActiveEntryId(null);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -108,13 +97,16 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
     let list = [...entries];
 
     if (engineFilter !== "all") {
-      list = list.filter((entry) => (entry.engineSlug ?? "unknown") === engineFilter);
+      list = list.filter((entry) => {
+        const slug = entry.engineSlug ?? "unknown";
+        return slug === engineFilter;
+      });
     }
 
     const q = search.trim().toLowerCase();
     if (q.length > 0) {
       list = list.filter((entry) => {
-        const ctx =
+        const contextLabel =
           entry.contextType === "listing" && entry.contextLabel
             ? `Listing · ${entry.contextLabel}`
             : entry.contextType === "contact" && entry.contextLabel
@@ -125,7 +117,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
           (entry.snippet ?? "").toLowerCase().includes(q) ||
           (entry.prompt ?? "").toLowerCase().includes(q) ||
           (entry.engine ?? "").toLowerCase().includes(q) ||
-          ctx.toLowerCase().includes(q)
+          contextLabel.toLowerCase().includes(q)
         );
       });
     }
@@ -144,28 +136,28 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
   async function handleDeleteEntry(id: string) {
     const prev = entries;
 
-    // Optimistic remove
+    // Optimistic UI remove
     setEntries((list) => list.filter((e) => e.id !== id));
 
     try {
-      const res = await fetch(`/api/intelligence/history/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/intelligence/history/${id}`, {
+        method: "DELETE",
+      });
+
       if (!res.ok) throw new Error("Delete failed");
-      if (activeEntryId === id) setActiveEntryId(null);
     } catch (err) {
       console.error("Delete history entry error", err);
-      setEntries(prev); // rollback
+      // rollback
+      setEntries(prev);
     }
-  }
-
-  function selectEntry(entry: OutputHistoryEntry) {
-    setActiveEntryId(entry.id); // highlight immediately
-    onSelectEntry?.(entry);      // parent loads prompt
   }
 
   // --- Render -----------------------------------------------------------------
   return (
     <section className="mt-10">
+      {/* Outer panel – matches other Intelligence cards */}
       <div className="relative overflow-hidden rounded-2xl border border-slate-800/70 bg-slate-950/75 px-6 py-5 shadow-[0_18px_40px_rgba(0,0,0,0.7)]">
+        {/* Header + controls */}
         <header className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
@@ -176,12 +168,14 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
             </h3>
 
             <p className="mt-1 text-[11px] text-slate-300/90">
-              Every time you hit “Save Prompt”, Avillo logs the engine, the original input,
-              and any attached listing or contact. History auto-clears after 60 days.
+              Every time you hit “Save Prompt”, Avillo logs the engine, the
+              original input, and any attached listing or contact. History
+              auto-clears after 60 days.
             </p>
           </div>
 
           <div className="flex flex-col gap-2 md:items-end">
+            {/* Engine filter pills */}
             <div className="inline-flex rounded-full border border-slate-700/80 bg-slate-900/70 p-1 text-[11px]">
               {ENGINE_FILTERS.map((f) => {
                 const active = engineFilter === f.value;
@@ -192,7 +186,9 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                     onClick={() => setEngineFilter(f.value)}
                     className={[
                       "px-3 py-1 rounded-full whitespace-nowrap transition-colors",
-                      active ? "bg-amber-200 text-slate-900" : "text-slate-200/80 hover:bg-slate-800",
+                      active
+                        ? "bg-amber-200 text-slate-900"
+                        : "text-slate-200/80 hover:bg-slate-800",
                     ].join(" ")}
                   >
                     {f.label}
@@ -201,10 +197,13 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
               })}
             </div>
 
+            {/* Sort + search */}
             <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
               <select
                 value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as "newest" | "oldest")}
+                onChange={(e) =>
+                  setSortOrder(e.target.value as "newest" | "oldest")
+                }
                 className="h-8 rounded-full border border-slate-700/80 bg-slate-900/80 px-3 text-[11px] text-slate-100 outline-none focus:border-amber-200"
               >
                 <option value="newest">Newest first</option>
@@ -226,8 +225,11 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
           </div>
         </header>
 
+        {/* States */}
         {loading && (
-          <p className="text-[11px] text-slate-300/90">Loading your recent AI runs…</p>
+          <p className="text-[11px] text-slate-300/90">
+            Loading your recent AI runs…
+          </p>
         )}
 
         {!loading && error && (
@@ -236,110 +238,97 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
           </p>
         )}
 
+        {/* IMPORTANT: use filteredEntries here (not entries) */}
         {!loading && !error && filteredEntries.length === 0 && (
           <p className="text-[11px] text-slate-300/90">
-            No recent runs found. Try adjusting filters/search, or save a new prompt above.
+            No recent runs found. Try adjusting filters/search, or save a new
+            prompt above.
           </p>
         )}
 
         {/* Entries list */}
-        {!loading && !error && filteredEntries.length > 0 && (
-          <ul className="mt-3 max-h-80 overflow-y-auto text-xs">
-            {filteredEntries.map((entry, idx) => {
-              const created = entry.createdAt ? new Date(entry.createdAt) : null;
+      {!loading && !error && filteredEntries.length > 0 && (
+        <ul className="mt-3 max-h-80 overflow-y-auto text-xs">
+          {filteredEntries.map((entry, idx) => {
+            const created = entry.createdAt ? new Date(entry.createdAt) : null;
 
-              const dateLabel = created
-                ? created.toLocaleDateString(undefined, { month: "short", day: "numeric" })
-                : "";
+            const dateLabel = created
+              ? created.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+              : "";
 
-              const timeLabel = created
-                ? created.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-                : "";
+            const timeLabel = created
+              ? created.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+              : "";
 
-              const contextLabel =
-                entry.contextType === "listing" && entry.contextLabel
-                  ? `Listing · ${entry.contextLabel}`
-                  : entry.contextType === "contact" && entry.contextLabel
-                  ? `Contact · ${entry.contextLabel}`
-                  : "No record attached";
+            const contextLabel =
+              entry.contextType === "listing" && entry.contextLabel
+                ? `Listing · ${entry.contextLabel}`
+                : entry.contextType === "contact" && entry.contextLabel
+                ? `Contact · ${entry.contextLabel}`
+                : "No record attached";
 
-              const preview = entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
-              const isActive = activeEntryId === entry.id;
+            const preview =
+              entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
 
-              return (
-                <li
-                  key={entry.id}
-                  className={idx !== filteredEntries.length - 1 ? "border-b border-slate-800/80" : ""}
+            return (
+              <li
+                key={entry.id}
+                className={[
+                  "group flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
+                  idx !== filteredEntries.length - 1 ? "border-b border-slate-800/80" : "",
+                  // IMPORTANT: only apply hover styles on devices that actually support hover
+                  "supports-[hover:hover]:hover:bg-slate-900/70",
+                ].join(" ")}
+              >
+                {/* Clickable row (separate from trash button) */}
+                <button
+                  type="button"
+                  onClick={() => onSelectEntry?.(entry)}
+                  className="min-w-0 flex-1 text-left touch-manipulation"
                 >
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onPointerUp={() => selectEntry(entry)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        selectEntry(entry);
-                      }
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center rounded-full bg-slate-800/90 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100/90">
+                      {entry.engine}
+                    </span>
+
+                    <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
+                      {contextLabel}
+                    </span>
+                  </div>
+
+                  <p className="line-clamp-2 text-[12px] leading-relaxed text-slate-200/90">
+                    {preview || "No input captured for this run."}
+                  </p>
+                </button>
+
+                {/* Right side: timestamp + quick delete (hover only on desktop) */}
+                <div className="shrink-0 flex items-center gap-2">
+                  <div className="text-right text-[10px] text-slate-400">
+                    {dateLabel && <div>{dateLabel}</div>}
+                    {timeLabel && <div>{timeLabel}</div>}
+                  </div>
+
+                  <button
+                    type="button"
+                    title="Delete saved prompt"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteEntry(entry.id);
                     }}
                     className={[
-                      "group w-full select-none text-left",
-                      "touch-manipulation",
-                      "flex items-start justify-between gap-3 rounded-2xl px-3 py-2",
-                      "transition-all",
-                      isActive
-                        ? "border border-amber-200/60 bg-amber-50/10 shadow-[0_0_18px_rgba(248,220,120,0.18)]"
-                        : "border border-transparent",
-                      "supports-[hover:hover]:hover:bg-slate-900/70",
-                      "focus:outline-none focus:ring-2 focus:ring-amber-200/30",
+                      "rounded-full p-1 text-slate-400 hover:text-red-400 transition-opacity",
+                      // IMPORTANT: only hide/show on hover-capable devices (desktop)
+                      "supports-[hover:hover]:opacity-0 supports-[hover:hover]:group-hover:opacity-100",
                     ].join(" ")}
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-1 flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center rounded-full bg-slate-800/90 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100/90">
-                          {entry.engine}
-                        </span>
-
-                        <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
-                          {contextLabel}
-                        </span>
-                      </div>
-
-                      <p className="line-clamp-2 text-[12px] leading-relaxed text-slate-200/90">
-                        {preview || "No input captured for this run."}
-                      </p>
-                    </div>
-
-                    <div className="shrink-0 flex items-center gap-2">
-                      <div className="text-right text-[10px] text-slate-400">
-                        {dateLabel && <div>{dateLabel}</div>}
-                        {timeLabel && <div>{timeLabel}</div>}
-                      </div>
-
-                      <button
-                        type="button"
-                        title="Delete saved prompt"
-                        onPointerUp={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleDeleteEntry(entry.id);
-                        }}
-                        className={[
-                          "rounded-full p-1 text-slate-400 hover:text-red-400 transition-opacity",
-                          // Desktop hover reveal
-                          "supports-[hover:hover]:opacity-0 supports-[hover:hover]:group-hover:opacity-100",
-                          // Mobile: show only when selected (since no hover)
-                          isActive ? "opacity-100" : "opacity-0",
-                        ].join(" ")}
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                    🗑️
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       </div>
     </section>
   );
