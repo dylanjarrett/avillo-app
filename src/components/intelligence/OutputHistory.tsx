@@ -47,6 +47,7 @@ export default function OutputHistory({
   const [search, setSearch] = useState("");
   const [engineFilter, setEngineFilter] = useState<EngineFilter>("all");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+  const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
 
   // --- Fetch recent entries ---------------------------------------------------
   useEffect(() => {
@@ -253,17 +254,11 @@ export default function OutputHistory({
       const created = entry.createdAt ? new Date(entry.createdAt) : null;
 
       const dateLabel = created
-        ? created.toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-          })
+        ? created.toLocaleDateString(undefined, { month: "short", day: "numeric" })
         : "";
 
       const timeLabel = created
-        ? created.toLocaleTimeString(undefined, {
-            hour: "numeric",
-            minute: "2-digit",
-          })
+        ? created.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
         : "";
 
       const contextLabel =
@@ -274,28 +269,33 @@ export default function OutputHistory({
           : "No record attached";
 
       const preview =
-        entry.snippet?.trim() ||
-        entry.prompt?.trim().split("\n")[0] ||
-        "";
+        entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
+
+      // NOTE: add this state at the top of OutputHistory:
+      // const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
+      const isActive = activeEntryId === entry.id;
 
       return (
         <li
           key={entry.id}
           className={[
             "group",
-            idx !== filteredEntries.length - 1
-              ? "border-b border-slate-800/80"
-              : "",
+            idx !== filteredEntries.length - 1 ? "border-b border-slate-800/80" : "",
           ].join(" ")}
         >
-          {/* Full-row button for reliable mobile taps */}
           <button
             type="button"
-            onClick={() => onSelectEntry?.(entry)}
+            onClick={() => {
+              setActiveEntryId(entry.id);
+              onSelectEntry?.(entry);
+            }}
             className={[
               "w-full text-left",
-              "flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
-              // 🔑 FIX: hover styles only apply on real hover devices (desktop)
+              "flex items-start justify-between gap-3 rounded-2xl px-3 py-2",
+              "transition-all",
+              isActive
+                ? "border border-amber-200/60 bg-amber-50/10 shadow-[0_0_18px_rgba(248,220,120,0.18)]"
+                : "border border-transparent",
               "supports-[hover:hover]:hover:bg-slate-900/70",
             ].join(" ")}
           >
@@ -308,6 +308,12 @@ export default function OutputHistory({
                 <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
                   {contextLabel}
                 </span>
+
+                {isActive && (
+                  <span className="inline-flex items-center rounded-full border border-amber-200/60 bg-amber-50/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-200">
+                    Active
+                  </span>
+                )}
               </div>
 
               <p className="line-clamp-2 text-[12px] leading-relaxed text-slate-200/90">
@@ -315,13 +321,13 @@ export default function OutputHistory({
               </p>
             </div>
 
-            {/* Right side: timestamp + delete */}
             <div className="shrink-0 flex items-center gap-2">
               <div className="text-right text-[10px] text-slate-400">
                 {dateLabel && <div>{dateLabel}</div>}
                 {timeLabel && <div>{timeLabel}</div>}
               </div>
 
+              {/* Trash: hover on desktop, visible when active on mobile */}
               <button
                 type="button"
                 title="Delete saved prompt"
@@ -331,12 +337,9 @@ export default function OutputHistory({
                   handleDeleteEntry(entry.id);
                 }}
                 className={[
-                  "rounded-full p-1 transition-opacity",
-                  "opacity-0",
-                  // 🔑 Desktop-only hover reveal
-                  "supports-[hover:hover]:group-hover:opacity-100",
-                  "text-slate-400",
-                  "supports-[hover:hover]:hover:text-red-400",
+                  "rounded-full p-1 text-slate-400 hover:text-red-400 transition-opacity",
+                  "supports-[hover:hover]:opacity-0 supports-[hover:hover]:group-hover:opacity-100",
+                  isActive ? "opacity-100" : "opacity-0",
                 ].join(" ")}
               >
                 🗑️
