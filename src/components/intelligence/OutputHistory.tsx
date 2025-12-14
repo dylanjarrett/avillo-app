@@ -253,11 +253,17 @@ export default function OutputHistory({
       const created = entry.createdAt ? new Date(entry.createdAt) : null;
 
       const dateLabel = created
-        ? created.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+        ? created.toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+          })
         : "";
 
       const timeLabel = created
-        ? created.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+        ? created.toLocaleTimeString(undefined, {
+            hour: "numeric",
+            minute: "2-digit",
+          })
         : "";
 
       const contextLabel =
@@ -268,57 +274,75 @@ export default function OutputHistory({
           : "No record attached";
 
       const preview =
-        entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
+        entry.snippet?.trim() ||
+        entry.prompt?.trim().split("\n")[0] ||
+        "";
 
       return (
         <li
           key={entry.id}
           className={[
-            "group flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
-            idx !== filteredEntries.length - 1 ? "border-b border-slate-800/80" : "",
-            "hover:bg-slate-900/70",
+            "group",
+            idx !== filteredEntries.length - 1
+              ? "border-b border-slate-800/80"
+              : "",
           ].join(" ")}
         >
-          {/* Clickable row (no nested buttons) */}
+          {/* Full-row button for reliable mobile taps */}
           <button
             type="button"
             onClick={() => onSelectEntry?.(entry)}
-            className="min-w-0 flex-1 text-left touch-manipulation"
+            className={[
+              "w-full text-left",
+              "flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
+              // 🔑 FIX: hover styles only apply on real hover devices (desktop)
+              "supports-[hover:hover]:hover:bg-slate-900/70",
+            ].join(" ")}
           >
-            <div className="mb-1 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-full bg-slate-800/90 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100/90">
-                {entry.engine}
-              </span>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center rounded-full bg-slate-800/90 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100/90">
+                  {entry.engine}
+                </span>
 
-              <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
-                {contextLabel}
-              </span>
+                <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
+                  {contextLabel}
+                </span>
+              </div>
+
+              <p className="line-clamp-2 text-[12px] leading-relaxed text-slate-200/90">
+                {preview || "No input captured for this run."}
+              </p>
             </div>
 
-            <p className="line-clamp-2 text-[12px] leading-relaxed text-slate-200/90">
-              {preview || "No input captured for this run."}
-            </p>
+            {/* Right side: timestamp + delete */}
+            <div className="shrink-0 flex items-center gap-2">
+              <div className="text-right text-[10px] text-slate-400">
+                {dateLabel && <div>{dateLabel}</div>}
+                {timeLabel && <div>{timeLabel}</div>}
+              </div>
+
+              <button
+                type="button"
+                title="Delete saved prompt"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleDeleteEntry(entry.id);
+                }}
+                className={[
+                  "rounded-full p-1 transition-opacity",
+                  "opacity-0",
+                  // 🔑 Desktop-only hover reveal
+                  "supports-[hover:hover]:group-hover:opacity-100",
+                  "text-slate-400",
+                  "supports-[hover:hover]:hover:text-red-400",
+                ].join(" ")}
+              >
+                🗑️
+              </button>
+            </div>
           </button>
-
-          {/* Right side: timestamp + delete */}
-          <div className="shrink-0 flex items-center gap-2">
-            <div className="text-right text-[10px] text-slate-400">
-              {dateLabel && <div>{dateLabel}</div>}
-              {timeLabel && <div>{timeLabel}</div>}
-            </div>
-
-            <button
-              type="button"
-              title="Delete saved prompt"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDeleteEntry(entry.id);
-              }}
-              className="opacity-0 group-hover:opacity-100 transition-opacity rounded-full p-1 text-slate-400 hover:text-red-400"
-            >
-              🗑️
-            </button>
-          </div>
         </li>
       );
     })}
