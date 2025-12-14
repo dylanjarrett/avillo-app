@@ -625,6 +625,8 @@ export default function AutomationPage() {
 
     // 🔼 Mobile: collapse + scroll back immediately
     if (isMobile) {
+      setActiveWorkflow(null);
+      setSelectedId(null);
       setWorkspaceOpenMobile(false);
       scrollBackToListHeader();
     }
