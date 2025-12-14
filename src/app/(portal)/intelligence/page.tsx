@@ -147,7 +147,7 @@ export default function IntelligencePage() {
     switch (activeEngine) {
       case "listing":
         return "Listing Engine";
-      case "seller":
+        case "seller":
         return "Seller Studio";
       case "buyer":
         return "Buyer Studio";
@@ -182,8 +182,8 @@ export default function IntelligencePage() {
     <div className="space-y-8">
       <PageHeader
         eyebrow="AI Tools for Real Estate"
-        title="Avillo AI Command Center"
-        subtitle="Turn messy notes into listing packs, seller scripts, buyer follow-ups, and neighborhood snapshots — all wired into your CRM and listings."
+        title="Avillo AI Studio"
+        subtitle="Turn messy notes into listing packs, seller scripts, buyer follow-ups, and neighborhood snapshots — built for fast iteration and reruns."
       />
 
       {/* ENGINE SELECTOR */}
@@ -296,6 +296,12 @@ function EngineSelector({
             onClick={() => setActiveEngine("listing")}
           />
           <EnginePill
+            label="Neighborhood Engine"
+            description="Schools, lifestyle, access, talking points."
+            active={activeEngine === "neighborhood"}
+            onClick={() => setActiveEngine("neighborhood")}
+          />
+          <EnginePill
             label="Seller Studio"
             description="Prelistings, presentations, objections."
             active={activeEngine === "seller"}
@@ -307,13 +313,6 @@ function EngineSelector({
             active={activeEngine === "buyer"}
             onClick={() => setActiveEngine("buyer")}
           />
-          <EnginePill
-            label="Neighborhood Engine"
-            description="Schools, lifestyle, access, talking points."
-            active={activeEngine === "neighborhood"}
-            onClick={() => setActiveEngine("neighborhood")}
-          />
-
           <div className="w-2 flex-shrink-0 sm:hidden" />
         </div>
       </div>
@@ -379,7 +378,6 @@ function ContextStrip({
   allowContactContext: boolean;
   optionsLoading: boolean;
 }) {
-  const isNeighborhood = activeEngine === "neighborhood";
 
   const contextBadgeLabel =
     engineContext.type === "listing"
@@ -412,16 +410,8 @@ function ContextStrip({
             <span className="font-semibold text-[var(--avillo-cream)]">
               {engineLabel}
             </span>{" "}
-            outputs to the right record.
+            prompt to the right record.
           </p>
-
-          {isNeighborhood && (
-            <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-              <span className="font-semibold">Neighborhood Engine</span>{" "}
-              snapshots are typically tied to a listing so you can reuse them in
-              MLS remarks, emails, and tours.
-            </p>
-          )}
 
           <div className="inline-flex items-center gap-2 rounded-full border border-slate-700/80 bg-slate-950/80 px-3 py-1 text-[10px]">
             <span className="rounded-full border border-amber-100/60 bg-amber-50/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-amber-100">

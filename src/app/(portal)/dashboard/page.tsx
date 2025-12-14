@@ -439,7 +439,7 @@ export default function DashboardPage() {
     <div className="space-y-8">
       <PageHeader
         eyebrow="DASHBOARD"
-        title="Your Avillo command center"
+        title="Your Avillo Command Center"
         subtitle="A bird’s-eye view of what’s moving, what needs attention today, and what Avillo is generating for you."
       />
 

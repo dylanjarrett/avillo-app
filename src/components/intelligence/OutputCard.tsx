@@ -1,7 +1,7 @@
 // src/components/intelligence/OutputCard.tsx
 "use client";
 
-import React, { ReactNode, useState } from "react";
+import React, { ReactNode, useEffect, useMemo, useState } from "react";
 import type {
   IntelligencePack,
   ListingTabId,
@@ -43,15 +43,12 @@ export type BuyerToolId = "search" | "tour" | "offer";
 
 export type BuyerPack = {
   search?: {
-    // NEW richer fields
     recapEmail?: string;
     bulletSummary?: string;
     nextSteps?: string;
     smsFollowUp?: string;
     questionsToAsk?: string;
-
-    // backwards-compat
-    summary?: string;
+    summary?: string; // backwards-compat
   };
   tour?: {
     recapEmail?: string;
@@ -70,7 +67,134 @@ export type BuyerPack = {
 };
 
 /* ----------------------------------------
-  Shared shell + row components
+  Shared helpers
+---------------------------------------- */
+
+type OutputRowModel = {
+  id: string; // stable within the current canvas
+  title: string;
+  value?: string | null;
+};
+
+function cleanValue(v?: string | null) {
+  if (typeof v !== "string") return "";
+  const t = v.trim();
+  return t.length > 0 ? t : "";
+}
+
+async function copyToClipboard(text: string) {
+  await navigator.clipboard.writeText(text);
+}
+
+function buildCopyPayload(rows: OutputRowModel[], selected: Record<string, boolean>) {
+  const selectedRows = rows.filter((r) => selected[r.id]);
+
+  const blocks = selectedRows.map((r) => {
+    const body = cleanValue(r.value);
+    return `${r.title}\n${body}`;
+  });
+
+  // Separate blocks with two newlines for readability when pasting into docs
+  return blocks.join("\n\n");
+}
+
+/* ----------------------------------------
+  Toolbar
+---------------------------------------- */
+
+function CopyToolbar({
+  rows,
+  selected,
+  setSelected,
+}: {
+  rows: OutputRowModel[];
+  selected: Record<string, boolean>;
+  setSelected: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+}) {
+  const selectableRows = useMemo(
+    () => rows.filter((r) => cleanValue(r.value).length > 0),
+    [rows]
+  );
+
+  const selectedCount = useMemo(() => {
+    return selectableRows.reduce((acc, r) => acc + (selected[r.id] ? 1 : 0), 0);
+  }, [selectableRows, selected]);
+
+  const allSelected = selectableRows.length > 0 && selectedCount === selectableRows.length;
+
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopySelected() {
+  try {
+    const payload = buildCopyPayload(selectableRows, selected);
+
+    // Guard against empty payload
+    if (!payload.trim()) return;
+
+    await copyToClipboard(payload);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  } catch (err) {
+    console.error("Failed to copy selected outputs", err);
+  }
+}
+
+  function handleSelectAll() {
+    setSelected((prev) => {
+      const next = { ...prev };
+      for (const r of selectableRows) next[r.id] = true;
+      return next;
+    });
+  }
+
+  function handleClear() {
+    setSelected({});
+  }
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/60 px-3 py-2">
+      <div className="text-[10px] text-slate-300/90">
+        {selectedCount > 0 ? (
+          <span>
+            <span className="font-semibold text-slate-100">{selectedCount}</span>{" "}
+            selected
+          </span>
+        ) : (
+          <span>Select outputs to copy</span>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={allSelected ? handleClear : handleSelectAll}
+          className="inline-flex items-center rounded-full border border-slate-600/80 bg-slate-950/70 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-200 hover:border-amber-100/70 hover:text-amber-50"
+        >
+          {allSelected ? "Clear" : "Select all"}
+        </button>
+
+        <button
+          type="button"
+          disabled={selectedCount === 0}
+          onClick={handleCopySelected}
+          className={
+            "inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors " +
+            (copied
+              ? "border-emerald-300/80 bg-emerald-400/10 text-emerald-100"
+              : selectedCount === 0
+              ? "border-slate-700/70 bg-slate-900/40 text-slate-500 cursor-not-allowed"
+              : "border-amber-100/70 bg-amber-50/10 text-amber-100 hover:bg-amber-50/20")
+          }
+        >
+          {copied ? "Copied ✓" : "Copy selected"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------
+  Shell + Row components
 ---------------------------------------- */
 
 type OutputShellProps = {
@@ -100,7 +224,7 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
           disabled={savingOutput}
           className="inline-flex items-center rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {savingOutput ? "Saving…" : "Save output"}
+          {savingOutput ? "Saving…" : "Save Prompt"}
         </button>
       </div>
 
@@ -109,54 +233,56 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
   );
 }
 
-type OutputRowProps = {
+function OutputRow({
+  title,
+  value,
+  checked,
+  onToggle,
+}: {
   title: string;
   value?: string | null;
-};
-
-function OutputRow({ title, value }: OutputRowProps) {
-  const [copied, setCopied] = useState(false);
-
-  const displayValue =
-    typeof value === "string" && value.trim().length > 0
-      ? value.trim()
-      : "—";
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(
-        displayValue === "—" ? "" : displayValue
-      );
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch (err) {
-      console.error("Failed to copy", err);
-    }
-  }
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  const displayValue = cleanValue(value) || "—";
+  const disabled = displayValue === "—";
 
   return (
-    <div className="flex items-start justify-between gap-3 rounded-2xl border border-slate-700/80 bg-slate-900/80 px-4 py-3 text-xs">
+    <div
+      onClick={!disabled ? onToggle : undefined}
+      className={[
+        "flex items-start gap-3 rounded-2xl border px-4 py-3 text-xs transition-colors",
+        "border-slate-700/80 bg-slate-900/80",
+        !disabled ? "cursor-pointer hover:border-amber-100/60" : "",
+      ].join(" ")}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation(); // prevent double toggle
+          onToggle();
+        }}
+        disabled={disabled}
+        className={[
+          "mt-1 inline-flex h-5 w-5 items-center justify-center rounded-md border transition-colors",
+          disabled
+            ? "border-slate-700/70 bg-slate-950/40 opacity-50 cursor-not-allowed"
+            : checked
+            ? "border-amber-100/80 bg-amber-50/15 shadow-[0_0_16px_rgba(248,250,252,0.18)]"
+            : "border-slate-600/80 bg-slate-950/70 hover:border-amber-100/70",
+        ].join(" ")}
+        aria-label={checked ? "Deselect output" : "Select output"}
+        title={disabled ? "No content to copy" : checked ? "Selected" : "Select to copy"}
+      >
+        {checked ? <span className="text-[10px] text-amber-100">✓</span> : null}
+      </button>
+
       <div className="flex-1">
-        <p className="mb-1 text-[11px] font-semibold text-slate-50">
-          {title}
-        </p>
+        <p className="mb-1 text-[11px] font-semibold text-slate-50">{title}</p>
         <pre className="whitespace-pre-wrap text-[12px] leading-relaxed text-slate-100/90">
           {displayValue}
         </pre>
       </div>
-
-      <button
-        type="button"
-        onClick={handleCopy}
-        className={
-          "mt-1 inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition-colors " +
-          (copied
-            ? "border-emerald-300/80 bg-emerald-400/10 text-emerald-100"
-            : "border-slate-600/80 bg-slate-950/80 text-slate-200 hover:border-amber-100/70 hover:text-amber-50")
-        }
-      >
-        {copied ? "Copied ✓" : "Copy"}
-      </button>
     </div>
   );
 }
@@ -189,6 +315,101 @@ export function ListingOutputCanvas({
   onSaveOutput,
   savingOutput,
 }: ListingOutputCanvasProps) {
+  const rows: OutputRowModel[] = useMemo(() => {
+    if (activeTab === "listing") {
+      return [
+        { id: "listing.long", title: "Long MLS description", value: pack?.listing?.long },
+        { id: "listing.short", title: "Short description", value: pack?.listing?.short },
+        {
+          id: "listing.bullets",
+          title: "Feature bullets",
+          value:
+            pack?.listing?.bullets?.length
+              ? pack.listing.bullets.map((b) => `• ${b}`).join("\n")
+              : "",
+        },
+      ];
+    }
+
+    if (activeTab === "social") {
+      return [
+        { id: "social.ig", title: "Instagram caption", value: pack?.social?.instagram_caption },
+        { id: "social.fb", title: "Facebook post", value: pack?.social?.facebook_post },
+        { id: "social.li", title: "LinkedIn post", value: pack?.social?.linkedin_post },
+        { id: "social.ttHook", title: "TikTok hook", value: pack?.social?.tiktok_hook },
+        { id: "social.ttScript", title: "TikTok script", value: pack?.social?.tiktok_script },
+      ];
+    }
+
+    if (activeTab === "emails") {
+      return [
+        { id: "emails.buyer", title: "Buyer email", value: pack?.emails?.buyer_email },
+        { id: "emails.seller", title: "Seller email", value: pack?.emails?.seller_email },
+      ];
+    }
+
+    if (activeTab === "talking") {
+      return [
+        {
+          id: "talking.highlights",
+          title: "Seller highlights",
+          value:
+            pack?.talking_points?.highlights?.length
+              ? pack.talking_points.highlights.map((b) => `• ${b}`).join("\n")
+              : "",
+        },
+        {
+          id: "talking.concerns",
+          title: "Buyer concerns",
+          value:
+            pack?.talking_points?.buyer_concerns?.length
+              ? pack.talking_points.buyer_concerns.map((b) => `• ${b}`).join("\n")
+              : "",
+        },
+        {
+          id: "talking.responses",
+          title: "Suggested responses",
+          value:
+            pack?.talking_points?.responses?.length
+              ? pack.talking_points.responses.map((b) => `• ${b}`).join("\n")
+              : "",
+        },
+      ];
+    }
+
+    if (activeTab === "insights") {
+      return [
+        {
+          id: "insights.score",
+          title: "Marketability score (1–10)",
+          value:
+            pack?.marketability?.score_1_to_10 != null
+              ? String(pack.marketability.score_1_to_10)
+              : "",
+        },
+        { id: "insights.summary", title: "Marketability summary", value: pack?.marketability?.summary },
+        {
+          id: "insights.improvements",
+          title: "Improvement suggestions",
+          value:
+            pack?.marketability?.improvement_suggestions?.length
+              ? pack.marketability.improvement_suggestions.map((b) => `• ${b}`).join("\n")
+              : "",
+        },
+      ];
+    }
+
+    // pitch
+    return [{ id: "pitch", title: "Open-house pitch", value: pack?.open_house_pitch }];
+  }, [activeTab, pack]);
+
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+  // Reset selection when tab/pack changes to prevent cross-tab surprises
+  useEffect(() => {
+    setSelected({});
+  }, [activeTab]);
+
   return (
     <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
       {/* Tab pills */}
@@ -210,140 +431,25 @@ export function ListingOutputCanvas({
         ))}
       </div>
 
-      {/* Tab content */}
+      <CopyToolbar rows={rows} selected={selected} setSelected={setSelected} />
+
       <div className="space-y-3 text-xs text-slate-100/90">
-        {/* Listing copy */}
-        {activeTab === "listing" && (
-          <>
-            <OutputRow
-              title="Long MLS description"
-              value={pack?.listing?.long}
-            />
-            <OutputRow
-              title="Short description"
-              value={pack?.listing?.short}
-            />
-            <OutputRow
-              title="Feature bullets"
-              value={
-                pack?.listing?.bullets?.length
-                  ? pack.listing.bullets.map((b) => `• ${b}`).join("\n")
-                  : ""
-              }
-            />
-          </>
-        )}
-
-        {/* Social kit */}
-        {activeTab === "social" && (
-          <>
-            <OutputRow
-              title="Instagram caption"
-              value={pack?.social?.instagram_caption}
-            />
-            <OutputRow
-              title="Facebook post"
-              value={pack?.social?.facebook_post}
-            />
-            <OutputRow
-              title="LinkedIn post"
-              value={pack?.social?.linkedin_post}
-            />
-            <OutputRow title="TikTok hook" value={pack?.social?.tiktok_hook} />
-            <OutputRow
-              title="TikTok script"
-              value={pack?.social?.tiktok_script}
-            />
-          </>
-        )}
-
-        {/* Emails */}
-        {activeTab === "emails" && (
-          <>
-            <OutputRow title="Buyer email" value={pack?.emails?.buyer_email} />
-            <OutputRow
-              title="Seller email"
-              value={pack?.emails?.seller_email}
-            />
-          </>
-        )}
-
-        {/* Talking points */}
-        {activeTab === "talking" && (
-          <>
-            <OutputRow
-              title="Seller highlights"
-              value={
-                pack?.talking_points?.highlights?.length
-                  ? pack.talking_points.highlights
-                      .map((b) => `• ${b}`)
-                      .join("\n")
-                  : ""
-              }
-            />
-            <OutputRow
-              title="Buyer concerns"
-              value={
-                pack?.talking_points?.buyer_concerns?.length
-                  ? pack.talking_points.buyer_concerns
-                      .map((b) => `• ${b}`)
-                      .join("\n")
-                  : ""
-              }
-            />
-            <OutputRow
-              title="Suggested responses"
-              value={
-                pack?.talking_points?.responses?.length
-                  ? pack.talking_points.responses
-                      .map((b) => `• ${b}`)
-                      .join("\n")
-                  : ""
-              }
-            />
-          </>
-        )}
-
-        {/* Insights */}
-        {activeTab === "insights" && (
-          <>
-            <OutputRow
-              title="Marketability score (1–10)"
-              value={
-                pack?.marketability?.score_1_to_10 != null
-                  ? String(pack.marketability.score_1_to_10)
-                  : ""
-              }
-            />
-            <OutputRow
-              title="Marketability summary"
-              value={pack?.marketability?.summary}
-            />
-            <OutputRow
-              title="Improvement suggestions"
-              value={
-                pack?.marketability?.improvement_suggestions?.length
-                  ? pack.marketability.improvement_suggestions
-                      .map((b) => `• ${b}`)
-                      .join("\n")
-                  : ""
-              }
-            />
-          </>
-        )}
-
-        {/* Open-house pitch */}
-        {activeTab === "pitch" && (
+        {rows.map((r) => (
           <OutputRow
-            title="Open-house pitch"
-            value={pack?.open_house_pitch}
+            key={r.id}
+            title={r.title}
+            value={r.value}
+            checked={!!selected[r.id]}
+            onToggle={() =>
+              setSelected((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+            }
           />
-        )}
+        ))}
 
         {!pack && (
           <p className="pt-2 text-[11px] text-slate-300/90">
-            Run the Listing Engine to populate this canvas with MLS copy, social
-            content, emails, and talking points.
+            Run the Listing Engine to populate this canvas with MLS copy, social content,
+            emails, and talking points.
           </p>
         )}
       </div>
@@ -368,72 +474,63 @@ export function SellerOutputCanvas({
   onSaveOutput,
   savingOutput,
 }: SellerOutputCanvasProps) {
+  const rows: OutputRowModel[] = useMemo(() => {
+    if (activeTool === "prelisting") {
+      return [
+        { id: "prelisting.email1", title: "Email 1", value: pack?.prelisting?.email1 },
+        { id: "prelisting.email2", title: "Email 2", value: pack?.prelisting?.email2 },
+        { id: "prelisting.email3", title: "Email 3", value: pack?.prelisting?.email3 },
+      ];
+    }
+
+    if (activeTool === "presentation") {
+      return [
+        { id: "presentation.opening", title: "Opening & rapport", value: pack?.presentation?.opening },
+        { id: "presentation.questions", title: "Questions to ask them", value: pack?.presentation?.questions },
+        { id: "presentation.story", title: "Property & neighborhood story", value: pack?.presentation?.story },
+        { id: "presentation.pricing", title: "Pricing strategy", value: pack?.presentation?.pricing },
+        { id: "presentation.marketing", title: "Marketing plan", value: pack?.presentation?.marketing },
+        { id: "presentation.process", title: "Process & timeline", value: pack?.presentation?.process },
+        { id: "presentation.value", title: "Your value", value: pack?.presentation?.value },
+        { id: "presentation.nextSteps", title: "Next steps", value: pack?.presentation?.nextSteps },
+      ];
+    }
+
+    // objection
+    return [
+      { id: "objection.talkTrack", title: "Live talk track", value: pack?.objection?.talkTrack },
+      { id: "objection.smsReply", title: "Text message reply", value: pack?.objection?.smsReply },
+      { id: "objection.emailFollowUp", title: "Email follow-up", value: pack?.objection?.emailFollowUp },
+    ];
+  }, [activeTool, pack]);
+
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setSelected({});
+  }, [activeTool]);
+
   return (
     <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
+      <CopyToolbar rows={rows} selected={selected} setSelected={setSelected} />
+
       <div className="space-y-3 text-xs text-slate-100/90">
-        {activeTool === "prelisting" && (
-          <>
-            <OutputRow title="Email 1" value={pack?.prelisting?.email1} />
-            <OutputRow title="Email 2" value={pack?.prelisting?.email2} />
-            <OutputRow title="Email 3" value={pack?.prelisting?.email3} />
-          </>
-        )}
-
-        {activeTool === "presentation" && (
-          <>
-            <OutputRow
-              title="Opening & rapport"
-              value={pack?.presentation?.opening}
-            />
-            <OutputRow
-              title="Questions to ask them"
-              value={pack?.presentation?.questions}
-            />
-            <OutputRow
-              title="Property & neighborhood story"
-              value={pack?.presentation?.story}
-            />
-            <OutputRow
-              title="Pricing strategy"
-              value={pack?.presentation?.pricing}
-            />
-            <OutputRow
-              title="Marketing plan"
-              value={pack?.presentation?.marketing}
-            />
-            <OutputRow
-              title="Process & timeline"
-              value={pack?.presentation?.process}
-            />
-            <OutputRow title="Your value" value={pack?.presentation?.value} />
-            <OutputRow
-              title="Next steps"
-              value={pack?.presentation?.nextSteps}
-            />
-          </>
-        )}
-
-        {activeTool === "objection" && (
-          <>
-            <OutputRow
-              title="Live talk track"
-              value={pack?.objection?.talkTrack}
-            />
-            <OutputRow
-              title="Text message reply"
-              value={pack?.objection?.smsReply}
-            />
-            <OutputRow
-              title="Email follow-up"
-              value={pack?.objection?.emailFollowUp}
-            />
-          </>
-        )}
+        {rows.map((r) => (
+          <OutputRow
+            key={r.id}
+            title={r.title}
+            value={r.value}
+            checked={!!selected[r.id]}
+            onToggle={() =>
+              setSelected((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+            }
+          />
+        ))}
 
         {!pack && (
           <p className="pt-2 text-[11px] text-slate-300/90">
-            Run a Seller Studio tool to populate this canvas with emails,
-            presentation talking points, or objection scripts.
+            Run a Seller Studio tool to populate this canvas with emails, presentation
+            talking points, or objection scripts.
           </p>
         )}
       </div>
@@ -462,89 +559,64 @@ export function BuyerOutputCanvas({
   const tour = pack?.tour;
   const offer = pack?.offer;
 
+  const rows: OutputRowModel[] = useMemo(() => {
+    if (activeTool === "search") {
+      return [
+        { id: "search.recapEmail", title: "Search recap email", value: search?.recapEmail ?? search?.summary },
+        { id: "search.bulletSummary", title: "Snapshot of criteria", value: search?.bulletSummary },
+        { id: "search.nextSteps", title: "Recommended next steps", value: search?.nextSteps },
+        { id: "search.smsFollowUp", title: "Text / DM follow-up", value: search?.smsFollowUp },
+        { id: "search.questionsToAsk", title: "Questions for next check-in", value: search?.questionsToAsk },
+      ];
+    }
+
+    if (activeTool === "tour") {
+      return [
+        { id: "tour.recapEmail", title: "Tour follow-up email", value: tour?.recapEmail },
+        { id: "tour.highlights", title: "Highlights & standouts", value: tour?.highlights },
+        { id: "tour.concerns", title: "Concerns / open questions", value: tour?.concerns },
+        { id: "tour.decisionFrame", title: "Decision framing", value: tour?.decisionFrame },
+        { id: "tour.nextSteps", title: "Next steps", value: tour?.nextSteps },
+      ];
+    }
+
+    // offer
+    return [
+      { id: "offer.offerEmail", title: "Offer-prep email", value: offer?.offerEmail },
+      { id: "offer.strategySummary", title: "Strategy summary", value: offer?.strategySummary },
+      { id: "offer.negotiationPoints", title: "Negotiation points", value: offer?.negotiationPoints },
+      { id: "offer.riskNotes", title: "Risk & contingency notes", value: offer?.riskNotes },
+      { id: "offer.smsUpdate", title: "Quick SMS / DM update", value: offer?.smsUpdate },
+    ];
+  }, [activeTool, offer, search, tour]);
+
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setSelected({});
+  }, [activeTool]);
+
   return (
     <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
+      <CopyToolbar rows={rows} selected={selected} setSelected={setSelected} />
+
       <div className="space-y-3 text-xs text-slate-100/90">
-        {/* SEARCH RECAP */}
-        {activeTool === "search" && (
-          <>
-            <OutputRow
-              title="Search recap email"
-              value={search?.recapEmail ?? search?.summary}
-            />
-            <OutputRow
-              title="Snapshot of criteria"
-              value={search?.bulletSummary}
-            />
-            <OutputRow
-              title="Recommended next steps"
-              value={search?.nextSteps}
-            />
-            <OutputRow
-              title="Text / DM follow-up"
-              value={search?.smsFollowUp}
-            />
-            <OutputRow
-              title="Questions for next check-in"
-              value={search?.questionsToAsk}
-            />
-          </>
-        )}
-
-        {/* TOUR FOLLOW-UP */}
-        {activeTool === "tour" && (
-          <>
-            <OutputRow
-              title="Tour follow-up email"
-              value={tour?.recapEmail}
-            />
-            <OutputRow
-              title="Highlights & standouts"
-              value={tour?.highlights}
-            />
-            <OutputRow
-              title="Concerns / open questions"
-              value={tour?.concerns}
-            />
-            <OutputRow
-              title="Decision framing"
-              value={tour?.decisionFrame}
-            />
-            <OutputRow title="Next steps" value={tour?.nextSteps} />
-          </>
-        )}
-
-        {/* OFFER STRATEGY */}
-        {activeTool === "offer" && (
-          <>
-            <OutputRow
-              title="Offer-prep email"
-              value={offer?.offerEmail}
-            />
-            <OutputRow
-              title="Strategy summary"
-              value={offer?.strategySummary}
-            />
-            <OutputRow
-              title="Negotiation points"
-              value={offer?.negotiationPoints}
-            />
-            <OutputRow
-              title="Risk & contingency notes"
-              value={offer?.riskNotes}
-            />
-            <OutputRow
-              title="Quick SMS / DM update"
-              value={offer?.smsUpdate}
-            />
-          </>
-        )}
+        {rows.map((r) => (
+          <OutputRow
+            key={r.id}
+            title={r.title}
+            value={r.value}
+            checked={!!selected[r.id]}
+            onToggle={() =>
+              setSelected((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+            }
+          />
+        ))}
 
         {!pack && (
           <p className="pt-2 text-[11px] text-slate-300/90">
-            Run a Buyer Studio tool to populate this canvas with search recaps,
-            tour follow-ups, and offer strategy language you can reuse across
-            email, text, and calls.
+            Run a Buyer Studio tool to populate this canvas with search recaps, tour follow-ups,
+            and offer strategy language you can reuse across email, text, and calls.
           </p>
         )}
       </div>
@@ -579,6 +651,67 @@ export function NeighborhoodOutputCanvas({
   onSaveOutput,
   savingOutput,
 }: NeighborhoodOutputCanvasProps) {
+  const rows: OutputRowModel[] = useMemo(() => {
+    if (activeTab === "overview") {
+      return [
+        { id: "overview.areaSummary", title: "Area summary", value: pack?.overview?.areaSummary },
+        { id: "overview.whoItFits", title: "Who this area fits", value: pack?.overview?.whoItFits },
+        { id: "overview.priceVibe", title: "Price & housing vibe", value: pack?.overview?.priceVibe },
+        {
+          id: "overview.talkingPoints",
+          title: "Buyer-ready talking points",
+          value:
+            pack?.overview?.talkingPoints?.length
+              ? pack.overview.talkingPoints.map((b) => `• ${b}`).join("\n")
+              : "",
+        },
+      ];
+    }
+
+    if (activeTab === "schools") {
+      return [
+        { id: "schools.overview", title: "Schools overview", value: pack?.schools?.schoolsOverview },
+        { id: "schools.notable", title: "Notable schools", value: pack?.schools?.notableSchools },
+        { id: "schools.disclaimer", title: "Schools disclaimer", value: pack?.schools?.schoolsDisclaimer },
+      ];
+    }
+
+    if (activeTab === "mobility") {
+      return [
+        { id: "mobility.walkability", title: "Walkability", value: pack?.mobility?.walkability },
+        { id: "mobility.bikeability", title: "Bikeability", value: pack?.mobility?.bikeability },
+        { id: "mobility.transit", title: "Transit overview", value: pack?.mobility?.transitOverview },
+        { id: "mobility.driving", title: "Driving access", value: pack?.mobility?.drivingAccess },
+        { id: "mobility.airports", title: "Airports", value: pack?.mobility?.airports },
+        { id: "mobility.commute", title: "Commute examples", value: pack?.mobility?.commuteExamples },
+      ];
+    }
+
+    if (activeTab === "essentials") {
+      return [
+        { id: "essentials.groceries", title: "Groceries & essentials", value: pack?.essentials?.groceries },
+        { id: "essentials.gyms", title: "Gyms & fitness", value: pack?.essentials?.gyms },
+        { id: "essentials.errands", title: "Daily errands", value: pack?.essentials?.errands },
+        { id: "essentials.healthcare", title: "Healthcare options", value: pack?.essentials?.healthcare },
+      ];
+    }
+
+    // lifestyle
+    return [
+      { id: "lifestyle.parks", title: "Parks & outdoors", value: pack?.lifestyle?.parksAndOutdoors },
+      { id: "lifestyle.dining", title: "Dining & nightlife", value: pack?.lifestyle?.diningNightlife },
+      { id: "lifestyle.family", title: "Family activities", value: pack?.lifestyle?.familyActivities },
+      { id: "lifestyle.safety", title: "Safety overview", value: pack?.lifestyle?.safetyOverview },
+      { id: "lifestyle.disclaimer", title: "Safety disclaimer", value: pack?.lifestyle?.safetyDisclaimer },
+    ];
+  }, [activeTab, pack]);
+
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setSelected({});
+  }, [activeTab]);
+
   return (
     <OutputShell onSaveOutput={onSaveOutput} savingOutput={savingOutput}>
       {/* Tab pills */}
@@ -600,133 +733,25 @@ export function NeighborhoodOutputCanvas({
         ))}
       </div>
 
-      {/* Tabbed content */}
+      <CopyToolbar rows={rows} selected={selected} setSelected={setSelected} />
+
       <div className="space-y-3 text-xs text-slate-100/90">
-        {/* OVERVIEW TAB */}
-        {activeTab === "overview" && (
-          <>
-            <OutputRow
-              title="Area summary"
-              value={pack?.overview?.areaSummary}
-            />
-            <OutputRow
-              title="Who this area fits"
-              value={pack?.overview?.whoItFits}
-            />
-            <OutputRow
-              title="Price & housing vibe"
-              value={pack?.overview?.priceVibe}
-            />
-            <OutputRow
-              title="Buyer-ready talking points"
-              value={
-                pack?.overview?.talkingPoints?.length
-                  ? pack.overview.talkingPoints
-                      .map((b) => `• ${b}`)
-                      .join("\n")
-                  : ""
-              }
-            />
-          </>
-        )}
-
-        {/* SCHOOLS TAB */}
-        {activeTab === "schools" && (
-          <>
-            <OutputRow
-              title="Schools overview"
-              value={pack?.schools?.schoolsOverview}
-            />
-            <OutputRow
-              title="Notable schools"
-              value={pack?.schools?.notableSchools}
-            />
-            <OutputRow
-              title="Schools disclaimer"
-              value={pack?.schools?.schoolsDisclaimer}
-            />
-          </>
-        )}
-
-        {/* MOBILITY TAB */}
-        {activeTab === "mobility" && (
-          <>
-            <OutputRow
-              title="Walkability"
-              value={pack?.mobility?.walkability}
-            />
-            <OutputRow
-              title="Bikeability"
-              value={pack?.mobility?.bikeability}
-            />
-            <OutputRow
-              title="Transit overview"
-              value={pack?.mobility?.transitOverview}
-            />
-            <OutputRow
-              title="Driving access"
-              value={pack?.mobility?.drivingAccess}
-            />
-            <OutputRow title="Airports" value={pack?.mobility?.airports} />
-            <OutputRow
-              title="Commute examples"
-              value={pack?.mobility?.commuteExamples}
-            />
-          </>
-        )}
-
-        {/* ESSENTIALS TAB */}
-        {activeTab === "essentials" && (
-          <>
-            <OutputRow
-              title="Groceries & essentials"
-              value={pack?.essentials?.groceries}
-            />
-            <OutputRow
-              title="Gyms & fitness"
-              value={pack?.essentials?.gyms}
-            />
-            <OutputRow
-              title="Daily errands"
-              value={pack?.essentials?.errands}
-            />
-            <OutputRow
-              title="Healthcare options"
-              value={pack?.essentials?.healthcare}
-            />
-          </>
-        )}
-
-        {/* LIFESTYLE TAB */}
-        {activeTab === "lifestyle" && (
-          <>
-            <OutputRow
-              title="Parks & outdoors"
-              value={pack?.lifestyle?.parksAndOutdoors}
-            />
-            <OutputRow
-              title="Dining & nightlife"
-              value={pack?.lifestyle?.diningNightlife}
-            />
-            <OutputRow
-              title="Family activities"
-              value={pack?.lifestyle?.familyActivities}
-            />
-            <OutputRow
-              title="Safety overview"
-              value={pack?.lifestyle?.safetyOverview}
-            />
-            <OutputRow
-              title="Safety disclaimer"
-              value={pack?.lifestyle?.safetyDisclaimer}
-            />
-          </>
-        )}
+        {rows.map((r) => (
+          <OutputRow
+            key={r.id}
+            title={r.title}
+            value={r.value}
+            checked={!!selected[r.id]}
+            onToggle={() =>
+              setSelected((prev) => ({ ...prev, [r.id]: !prev[r.id] }))
+            }
+          />
+        ))}
 
         {!pack && (
           <p className="pt-2 text-[11px] text-slate-300/90">
-            Run the Neighborhood Engine to populate this canvas with an area
-            overview you can reuse in emails, tours, and listing presentations.
+            Run the Neighborhood Engine to populate this canvas with an area overview you can reuse
+            in emails, tours, and listing presentations.
           </p>
         )}
       </div>

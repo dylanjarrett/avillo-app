@@ -77,7 +77,7 @@ export default function OutputHistory({
         }
       } catch (err) {
         if (!cancelled) {
-          console.error("Output history error", err);
+          console.error("Prompt history error", err);
           setError("Could not load recent AI activity.");
           setEntries([]);
         }
@@ -132,6 +132,26 @@ export default function OutputHistory({
     return list;
   }, [entries, engineFilter, search, sortOrder]);
 
+  // --- Delete entry (quick cleanup) ------------------------------------------
+  async function handleDeleteEntry(id: string) {
+    const prev = entries;
+
+    // Optimistic UI remove
+    setEntries((list) => list.filter((e) => e.id !== id));
+
+    try {
+      const res = await fetch(`/api/intelligence/history/${id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) throw new Error("Delete failed");
+    } catch (err) {
+      console.error("Delete history entry error", err);
+      // rollback
+      setEntries(prev);
+    }
+  }
+
   // --- Render -----------------------------------------------------------------
   return (
     <section className="mt-10">
@@ -148,8 +168,9 @@ export default function OutputHistory({
             </h3>
 
             <p className="mt-1 text-[11px] text-slate-300/90">
-              Every time you hit “Save Output”, Avillo logs the engine, the
-              original input, and any attached listing or contact. History auto-clears after 60 days.
+              Every time you hit “Save Prompt”, Avillo logs the engine, the
+              original input, and any attached listing or contact. History
+              auto-clears after 60 days.
             </p>
           </div>
 
@@ -213,24 +234,23 @@ export default function OutputHistory({
 
         {!loading && error && (
           <p className="text-[11px] text-slate-300/90">
-            {error} You can still generate and save new outputs above.
+            {error} You can still generate and save new prompts above.
           </p>
         )}
 
-        {!loading && !error && entries.length === 0 && (
+        {/* IMPORTANT: use filteredEntries here (not entries) */}
+        {!loading && !error && filteredEntries.length === 0 && (
           <p className="text-[11px] text-slate-300/90">
-            No recent runs yet. As you save listing packs, seller scripts, and
-            buyer follow-ups, they’ll show up here with their original prompts.
+            No recent runs found. Try adjusting filters/search, or save a new
+            prompt above.
           </p>
         )}
 
         {/* Entries list */}
-        {!loading && !error && entries.length > 0 && (
+        {!loading && !error && filteredEntries.length > 0 && (
           <ul className="mt-3 max-h-80 overflow-y-auto text-xs">
             {filteredEntries.map((entry, idx) => {
-              const created = entry.createdAt
-                ? new Date(entry.createdAt)
-                : null;
+              const created = entry.createdAt ? new Date(entry.createdAt) : null;
 
               const dateLabel = created
                 ? created.toLocaleDateString(undefined, {
@@ -287,9 +307,24 @@ export default function OutputHistory({
                     </p>
                   </div>
 
-                  <div className="shrink-0 text-right text-[10px] text-slate-400">
-                    {dateLabel && <div>{dateLabel}</div>}
-                    {timeLabel && <div>{timeLabel}</div>}
+                  {/* Right side: timestamp + quick delete (hover only) */}
+                  <div className="shrink-0 flex items-center gap-2">
+                    <div className="text-right text-[10px] text-slate-400">
+                      {dateLabel && <div>{dateLabel}</div>}
+                      {timeLabel && <div>{timeLabel}</div>}
+                    </div>
+
+                    <button
+                      type="button"
+                      title="Delete saved prompt"
+                      onClick={(e) => {
+                        e.stopPropagation(); // prevent selecting the entry
+                        handleDeleteEntry(entry.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity rounded-full p-1 text-slate-400 hover:text-red-400"
+                    >
+                      🗑️
+                    </button>
                   </div>
                 </li>
               );

@@ -162,8 +162,7 @@ export default function ListingEngine({
         </button>
 
         <p className="mt-2 text-[11px] text-slate-300/90">
-          Save the best packs to your history using the button in the output
-          panel.
+          Save the prompt to your history using the "Save Prompt" button.
         </p>
       </div>
 
