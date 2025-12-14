@@ -206,12 +206,6 @@ export default function DashboardPage() {
     const data: TasksResponse = await res.json().catch(() => ({ tasks: [] } as TasksResponse));
     const rows = Array.isArray(data.tasks) ? data.tasks : [];
 
-    // Group ordering:
-    // 1) overdue (with dueAt)
-    // 2) due today
-    // 3) due within 7 days
-    // 4) future (beyond 7 days)
-    // 5) no due date
     const start = startOfDay(new Date()).getTime();
     const end7 = start + 1000 * 60 * 60 * 24 * 7;
 
@@ -244,7 +238,6 @@ export default function DashboardPage() {
     if (!taskId) return;
     setTaskBusyId(taskId);
 
-    // optimistic remove
     const prev = openTasks;
     setOpenTasks((p) => p.filter((t) => t.id !== taskId));
 
@@ -256,7 +249,6 @@ export default function DashboardPage() {
       });
 
       if (!res.ok) {
-        // revert on failure
         setOpenTasks(prev);
       }
     } catch {
@@ -300,7 +292,6 @@ export default function DashboardPage() {
 
         if (cancelled) return;
 
-        // --- profile ---
         if (profileRes && profileRes.ok) {
           const data: ProfileResponse = await profileRes.json();
           if ("success" in data && data.success) {
@@ -309,12 +300,10 @@ export default function DashboardPage() {
           }
         }
 
-        // --- contacts -> pipeline + buyer summary ---
         if (contactsRes && contactsRes.ok) {
           const data: CRMContactsResponse = await contactsRes.json();
           if ("contacts" in data && Array.isArray(data.contacts)) {
             const counts: StageCounts = { new: 0, warm: 0, hot: 0, past: 0 };
-
             let activeBuyers = 0;
             let nurtureBuyers = 0;
 
@@ -335,7 +324,6 @@ export default function DashboardPage() {
           }
         }
 
-        // --- listings -> listing summary ---
         if (listingsRes && listingsRes.ok) {
           const data: ListingsResponse = await listingsRes.json();
           if ("success" in data && data.success) {
@@ -358,7 +346,7 @@ export default function DashboardPage() {
           }
         }
 
-        // --- intelligence recent ---
+        // still used for AI runs stat
         if (intelligenceRes && intelligenceRes.ok) {
           const data: IntelligenceRecentResponse = await intelligenceRes.json();
           if ("entries" in data && Array.isArray(data.entries)) {
@@ -366,14 +354,11 @@ export default function DashboardPage() {
           }
         }
 
-        // --- tasks (OPEN) ---
         const tasks = await fetchTasks();
         if (!cancelled) setOpenTasks(tasks);
       } catch (err: any) {
         console.error("Dashboard load error", err);
-        if (!cancelled) {
-          setError(err?.message || "We couldn’t load your dashboard. Try refreshing in a moment.");
-        }
+        if (!cancelled) setError(err?.message || "We couldn’t load your dashboard. Try refreshing in a moment.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -397,7 +382,6 @@ export default function DashboardPage() {
 
   const taskCounts = useMemo(() => {
     const start = startOfDay(new Date()).getTime();
-
     let overdue = 0;
     let today = 0;
 
@@ -461,12 +445,10 @@ export default function DashboardPage() {
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">{greeting}</p>
               <h2 className="mt-1 text-lg font-semibold text-[var(--avillo-cream-strong)]">Welcome back, {firstName}.</h2>
               <p className="mt-1 max-w-md text-[11px] text-[var(--avillo-cream-soft)]">
-                Your business is moving in a dozen directions — this is the one screen that keeps it all calm, clear, and in
-                motion.
+                Your business is moving in a dozen directions — this is the one screen that keeps it all calm, clear, and in motion.
               </p>
             </div>
 
-            {/* Avatar bubble */}
             <div className="shrink-0">
               <div className="relative flex h-11 w-11 items-center justify-center rounded-full border border-amber-100/50 bg-gradient-to-br from-slate-950 to-slate-900 text-sm font-semibold text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.25)]">
                 <span>{avatarInitials}</span>
@@ -474,7 +456,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Mini metrics */}
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <MiniMetric label="Pipeline total" value={totalPipelineContacts} loading={loading && !stageCounts} />
             <MiniMetric
@@ -484,42 +465,13 @@ export default function DashboardPage() {
             />
             <MiniMetric label="Open tasks" value={taskCounts.openTotal} loading={loading && openTasks.length === 0} />
           </div>
-
-          <div className="mt-3 rounded-2xl border border-slate-700/70 bg-slate-950/65 px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
-                  Today’s priority
-                </p>
-                <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                  {taskCounts.overdue > 0
-                    ? `Handle your ${taskCounts.overdue} overdue task${taskCounts.overdue === 1 ? "" : "s"} first.`
-                    : taskCounts.today > 0
-                    ? `You’ve got ${taskCounts.today} task${taskCounts.today === 1 ? "" : "s"} due today.`
-                    : (stageCounts?.hot ?? 0) > 0
-                    ? "Work your hot relationships while they’re hot."
-                    : (listingSummary?.pendingCount ?? 0) > 0
-                    ? "You’ve got pendings — push them forward today."
-                    : "Add 1 contact + set 1 task to build momentum."}
-                </p>
-              </div>
-
-              <div className="relative">
-                <div className="flex h-10 min-w-[44px] items-center justify-center rounded-xl border border-amber-100/35 bg-amber-500/10 px-3 text-sm font-semibold text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.25)]">
-                  {taskCounts.today + taskCounts.overdue}
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Suggestions / Improvements */}
         <div className="relative overflow-hidden rounded-3xl border border-slate-700/80 bg-slate-950/90 px-5 py-4 shadow-[0_0_60px_rgba(15,23,42,0.98)]">
           <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.16),transparent_55%)] opacity-60 blur-3xl" />
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Suggestions / improvements</p>
-          <p className="mt-2 text-[11px] text-[var(--avillo-cream-soft)]">
-            Tell us what would make Avillo feel 10x better. One sentence is enough.
-          </p>
+          <p className="mt-2 text-[11px] text-[var(--avillo-cream-soft)]">Tell us what would make Avillo feel 10x better. One sentence is enough.</p>
 
           <div className="mt-3 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-3">
             <textarea
@@ -542,28 +494,18 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            {feedbackSent && (
-              <p className="mt-2 text-[10px] font-medium text-emerald-200">Ready to send — your mail app will open.</p>
-            )}
+            {feedbackSent && <p className="mt-2 text-[10px] font-medium text-emerald-200">Ready to send — your mail app will open.</p>}
           </div>
 
-          <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">
-            Beta goal: collect 3–5 “pain points” per user and ship weekly improvements.
-          </p>
+          <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">Beta goal: collect 3–5 “pain points” per user and ship weekly improvements.</p>
         </div>
       </section>
 
       {/* TODAY AT A GLANCE */}
       <section>
         <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-            Today at a glance
-          </p>
-          {!loading && (
-            <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-              Live numbers based on your People, Listings, Tasks, and AI usage.
-            </p>
-          )}
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">Today at a glance</p>
+          {!loading && <p className="text-[10px] text-[var(--avillo-cream-muted)]">Live numbers based on your People, Listings, Tasks, and AI usage.</p>}
         </div>
 
         <div className="grid gap-4 md:grid-cols-4">
@@ -602,9 +544,9 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* MIDDLE ROW */}
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)]">
-        {/* Today’s focus (tasks list, scrollable) */}
+      {/* MAIN WORK ROW (fills the awkward gaps) */}
+      <section className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] items-stretch">
+        {/* Today’s focus (left, tall) */}
         <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/85 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
           <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)] opacity-45 blur-3xl" />
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -613,27 +555,21 @@ export default function DashboardPage() {
               <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">Your open tasks — ordered by what’s due next.</p>
             </div>
             <a
-              href="http:///people"
-              className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60"
-             target="_blank" rel="noopener">
+              href="/people"
+              className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60">
               Open People
             </a>
           </div>
 
-          {loading && openTasks.length === 0 && (
-            <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your tasks…</p>
-          )}
+          {loading && openTasks.length === 0 && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your tasks…</p>}
 
           {!loading && openTasks.length === 0 ? (
             <div className="space-y-2">
-              <EmptyPill
-                title="Nothing open right now (nice)."
-                body="Tasks created from People notes and Autopilot will show here automatically."
-              />
+              <EmptyPill title="Nothing open right now (nice)." body="Tasks created from People notes and Autopilot will show here automatically." />
               <EmptyPill title="Pro move" body="Set 2 follow-ups for tomorrow so you start the day already ahead." />
             </div>
           ) : (
-            <div className="mt-2 max-h-[320px] space-y-2 overflow-y-auto pr-1">
+            <div className="mt-2 max-h-[440px] space-y-2 overflow-y-auto pr-1">
               {openTasks.slice(0, 60).map((t) => (
                 <div key={t.id} className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2">
                   <div className="flex items-start justify-between gap-3">
@@ -657,180 +593,98 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="shrink-0 text-right">
-                      <p
-                        className={`text-[10px] ${
-                          isOverdue(t.dueAt) ? "text-rose-200" : "text-[var(--avillo-cream-muted)]"
-                        }`}
-                      >
+                      <p className={`text-[10px] ${isOverdue(t.dueAt) ? "text-rose-200" : "text-[var(--avillo-cream-muted)]"}`}>
                         {formatDueLabel(t.dueAt)}
                       </p>
 
-                      <div className="flex items-center gap-2">
-                     {/* Done */}
-                    <button
-                    onClick={() => markTaskDone(t.id)}
-                    className="h-7 w-7 rounded-md flex items-center justify-center
-                              text-emerald-400/70 hover:text-emerald-400
-                              hover:bg-emerald-400/10 transition"
-                    aria-label="Mark done"
-                    >
-                      ✓
-                    </button>
+                      <div className="mt-1 flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => markTaskDone(t.id)}
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-emerald-400/70 transition hover:bg-emerald-400/10 hover:text-emerald-400 disabled:opacity-40"
+                          aria-label="Mark done"
+                          disabled={taskBusyId === t.id}
+                        >
+                          ✓
+                        </button>
 
-                    {/* Delete */}
-                    <button
-                      onClick={() => deleteTask(t.id)}
-                      className="h-7 w-7 rounded-md flex items-center justify-center
-                                text-rose-400/60 hover:text-rose-400
-                                hover:bg-rose-400/10 transition"
-                      aria-label="Delete task"
-                    >
-                      ✕
-                    </button>
+                        <button
+                          onClick={() => deleteTask(t.id)}
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-rose-400/60 transition hover:bg-rose-400/10 hover:text-rose-400 disabled:opacity-40"
+                          aria-label="Delete task"
+                          disabled={taskBusyId === t.id}
+                        >
+                          ✕
+                        </button>
                       </div>
                     </div>
                   </div>
 
-                  {t.notes && (
-                    <p className="mt-1 line-clamp-2 text-[11px] text-[var(--avillo-cream-soft)]">{t.notes}</p>
-                  )}
+                  {t.notes && <p className="mt-1 line-clamp-2 text-[11px] text-[var(--avillo-cream-soft)]">{t.notes}</p>}
                 </div>
               ))}
             </div>
           )}
 
           <div className="mt-3 rounded-xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] text-[var(--avillo-cream-muted)]">
-            Autopilot tasks will appear here automatically as soon as they’re created. Mark a task <span className="text-[var(--avillo-cream-strong)]">Done</span> to remove it from your open list.
+            Autopilot tasks will appear here automatically as soon as they’re created. Mark a task{" "}
+            <span className="text-[var(--avillo-cream-strong)]">Done</span> to remove it from your open list.
           </div>
         </div>
 
-        {/* Pipeline snapshot */}
-        <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
-          <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.22),transparent_60%)] opacity-40 blur-3xl" />
+        {/* Right column (stacked to eliminate dead space) */}
+        <div className="space-y-4">
+          {/* Pipeline snapshot */}
+          <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
+            <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.22),transparent_60%)] opacity-40 blur-3xl" />
 
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Pipeline health</p>
-              <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                A clean snapshot of where relationships sit right now.
-              </p>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Pipeline health</p>
+                <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">A clean snapshot of where relationships sit right now.</p>
+              </div>
+              <a
+                href="/people"
+                className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60">
+                View pipeline
+              </a>
             </div>
-            <a
-              href="http:///people"
-              className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60"
-             target="_blank" rel="noopener">
-              View pipeline
-            </a>
+
+            {loading && !stageCounts && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your pipeline…</p>}
+
+            {!loading && !stageCounts && (
+              <p className="text-[11px] text-[var(--avillo-cream-muted)]">No CRM activity yet. Add your first contact to start building a pipeline.</p>
+            )}
+
+            {stageCounts && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <PipelineStage label="New" count={stageCounts.new} description="Fresh leads to qualify." />
+                <PipelineStage label="Warm" count={stageCounts.warm} description="Nurturing, follow-up scheduled." />
+                <PipelineStage label="Hot" count={stageCounts.hot} description="Actively buying or selling." />
+                <PipelineStage label="Past / sphere" count={stageCounts.past} description="Closed, referrals, and long-term." />
+              </div>
+            )}
+
+            <div className="mt-3 rounded-xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] text-[var(--avillo-cream-muted)]">
+              Healthy pipelines are built in small daily touches, not big weekend catch-ups.
+            </div>
           </div>
 
-          {loading && !stageCounts && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your pipeline…</p>}
+          {/* Create Momentum (now “fills” the space under Pipeline Health) */}
+          <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
+            <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.24),transparent_60%)] opacity-40 blur-3xl" />
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Create momentum</p>
+            <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">Quick actions that keep your day moving.</p>
 
-          {!loading && !stageCounts && (
-            <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-              No CRM activity yet. Add your first contact to start building a pipeline.
-            </p>
-          )}
-
-          {stageCounts && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <PipelineStage label="New" count={stageCounts.new} description="Fresh leads to qualify." />
-              <PipelineStage label="Warm" count={stageCounts.warm} description="Nurturing, follow-up scheduled." />
-              <PipelineStage label="Hot" count={stageCounts.hot} description="Actively buying or selling." />
-              <PipelineStage label="Past / sphere" count={stageCounts.past} description="Closed, referrals, and long-term." />
-            </div>
-          )}
-
-          <div className="mt-3 rounded-xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] text-[var(--avillo-cream-muted)]">
-            Healthy pipelines are built in small daily touches, not big weekend catch-ups.
-          </div>
-        </div>
-      </section>
-
-      {/* BOTTOM ROW */}
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-        {/* Recent AI */}
-        <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/85 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
-          <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
-
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Recent AI decisions</p>
-              <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                Your last few runs across Listing Engine, Buyer/Seller Studio, and Neighborhood Engine.
-              </p>
-              <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                History auto-clears after 60 days to keep storage lean.
-              </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <QuickLaunchButton label="Run Listing Engine" description="Generate MLS + social + email copy fast." href="/intelligence?engine=listing" />
+              <QuickLaunchButton label="Buyer Studio" description="Follow-ups, search recaps, and offer language." href="/intelligence?engine=buyer" />
+              <QuickLaunchButton label="Add a contact" description="Drop in a lead and start tracking touches." href="/people" />
+              <QuickLaunchButton label="Add a listing" description="Start a listing record and keep details organized." href="/listings" />
             </div>
 
-            <a
-              href="http:///intelligence"
-              className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60"
-             target="_blank" rel="noopener">
-              Open Intelligence
-            </a>
-          </div>
-
-          {loading && aiRecent.length === 0 && (
-            <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading recent AI activity…</p>
-          )}
-
-          {!loading && aiRecent.length === 0 ? (
-            <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-3 py-3 text-[11px] text-[var(--avillo-cream-soft)]">
-              <p className="font-semibold text-slate-50">No AI runs yet.</p>
-              <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
-                Start with the Listing Engine or Buyer Studio to generate your first outputs.
-              </p>
+            <div className="mt-3 rounded-xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] text-[var(--avillo-cream-muted)]">
+              Keep it simple: pick one action and ship it in the next 5 minutes.
             </div>
-          ) : (
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              {aiRecent.slice(0, 6).map((item: any) => (
-                <div
-                  key={item.id}
-                  className="flex flex-col justify-between rounded-xl border border-slate-700/80 bg-slate-900/75 px-3 py-2 text-[11px]"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={engineBadgeClass(item.engineSlug)}>{engineLabel(item.engineSlug)}</span>
-                    <span className="text-[10px] text-[var(--avillo-cream-muted)]">
-                      {new Date(item.createdAt).toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
-
-                  <p className="mt-2 line-clamp-3 text-[11px] text-[var(--avillo-cream-soft)]">
-                    {item.snippet || "No summary available."}
-                  </p>
-
-                  {item.contextLabel && (
-                    <p className="mt-2 text-[10px] text-[var(--avillo-cream-muted)]">
-                      Context: <span className="text-[var(--avillo-cream-strong)]">{item.contextLabel}</span>
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Create Momentum (quick actions) */}
-        <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
-          <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.24),transparent_60%)] opacity-40 blur-3xl" />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Create momentum</p>
-          <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">Quick actions that keep your day moving.</p>
-
-          <div className="mt-3 space-y-2">
-            <QuickLaunchButton label="Run Listing Engine" description="Generate MLS + social + email copy fast." href="/intelligence?engine=listing" />
-            <QuickLaunchButton label="Add a contact" description="Drop in a lead and start tracking touches." href="/people" />
-            <QuickLaunchButton label="Add a listing" description="Start a listing record and keep details organized." href="/listings" />
-            <QuickLaunchButton label="Buyer Studio" description="Follow-ups, search recaps, and offer language." href="/intelligence?engine=buyer" />
-          </div>
-
-          <div className="mt-3 rounded-xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] text-[var(--avillo-cream-muted)]">
-            Keep it simple: pick one action and ship it in the next 5 minutes.
           </div>
         </div>
       </section>
@@ -863,11 +717,7 @@ function StatCard({
 
       <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">{label}</p>
 
-      {loading ? (
-        <div className="mt-2 h-6 w-12 animate-pulse rounded-md bg-slate-700/60" />
-      ) : (
-        <p className="mt-2 text-2xl font-semibold text-slate-50">{value}</p>
-      )}
+      {loading ? <div className="mt-2 h-6 w-12 animate-pulse rounded-md bg-slate-700/60" /> : <p className="mt-2 text-2xl font-semibold text-slate-50">{value}</p>}
 
       {hint && <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">{hint}</p>}
 
@@ -887,11 +737,7 @@ function MiniMetric({ label, value, loading }: { label: string; value: number; l
   return (
     <div className="rounded-2xl border border-slate-700/80 bg-slate-950/80 px-3 py-2.5">
       <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--avillo-cream-muted)]">{label}</p>
-      {loading ? (
-        <div className="mt-1.5 h-4 w-10 animate-pulse rounded-md bg-slate-700/60" />
-      ) : (
-        <p className="mt-1 text-sm font-semibold text-[var(--avillo-cream-strong)]">{value}</p>
-      )}
+      {loading ? <div className="mt-1.5 h-4 w-10 animate-pulse rounded-md bg-slate-700/60" /> : <p className="mt-1 text-sm font-semibold text-[var(--avillo-cream-strong)]">{value}</p>}
     </div>
   );
 }
@@ -912,10 +758,11 @@ function QuickLaunchButton({ label, description, href }: { label: string; descri
   return (
     <a
       href={href}
-      className="block rounded-2xl border border-slate-700/80 bg-slate-900/75 px-4 py-3 text-left transition-colors hover:border-amber-100/80 hover:bg-slate-900/95"
+      className="block rounded-2xl border border-slate-700/80 bg-slate-900/75 px-4 py-3 text-left no-underline transition-colors hover:border-amber-100/80 hover:bg-slate-900/95 hover:no-underline focus:no-underline"
+      style={{ textDecoration: "none" }} // hard override for any global a:hover underline
     >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/90">{label}</p>
-      <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">{description}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/90 no-underline">{label}</p>
+      <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)] no-underline">{description}</p>
     </a>
   );
 }
@@ -931,6 +778,7 @@ function EmptyPill({ title, body }: { title: string; body: string }) {
 
 /* -----------------------------
  * Helpers for AI badges
+ * (kept so this file stays drop-in compatible if you reintroduce AI tiles later)
  * ----------------------------*/
 
 function engineLabel(slug: "listing" | "buyer" | "seller" | "neighborhood" | "unknown") {
