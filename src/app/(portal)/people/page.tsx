@@ -902,7 +902,7 @@ export default function CrmPage() {
       <PageHeader
         eyebrow="People"
         title="Pipeline & relationships"
-        subtitle="A light CRM tuned for real estate — keep leads, active clients, and past relationships organized and ready to flow into your AI engines."
+        subtitle="Manage buyers, sellers, and past relationships — with notes, tasks, activity tracking, and listing context."
       />
 
       <section className="space-y-5">
@@ -913,9 +913,7 @@ export default function CrmPage() {
               Contacts & opportunities
             </p>
             <p className="mt-1 max-w-xl text-xs text-[var(--avillo-cream-soft)]">
-              Filter by stage, search by name or area, then drill into details
-              on the right. Closed / past contacts are hidden by default under{" "}
-              <span className="font-semibold">“Past / sphere”</span>.
+              Filter by contact type, stage, or search by name or area. Select a contact to view their overview and recent activity.
             </p>
           </div>
 

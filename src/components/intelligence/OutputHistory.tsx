@@ -247,47 +247,53 @@ export default function OutputHistory({
         )}
 
         {/* Entries list */}
-        {!loading && !error && filteredEntries.length > 0 && (
-          <ul className="mt-3 max-h-80 overflow-y-auto text-xs">
-            {filteredEntries.map((entry, idx) => {
-              const created = entry.createdAt ? new Date(entry.createdAt) : null;
+      {!loading && !error && filteredEntries.length > 0 && (
+        <ul className="mt-3 max-h-80 overflow-y-auto text-xs">
+          {filteredEntries.map((entry, idx) => {
+            const created = entry.createdAt ? new Date(entry.createdAt) : null;
 
-              const dateLabel = created
-                ? created.toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })
-                : "";
+            const dateLabel = created
+              ? created.toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })
+              : "";
 
-              const timeLabel = created
-                ? created.toLocaleTimeString(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })
-                : "";
+            const timeLabel = created
+              ? created.toLocaleTimeString(undefined, {
+                  hour: "numeric",
+                  minute: "2-digit",
+                })
+              : "";
 
-              const contextLabel =
-                entry.contextType === "listing" && entry.contextLabel
-                  ? `Listing · ${entry.contextLabel}`
-                  : entry.contextType === "contact" && entry.contextLabel
-                  ? `Contact · ${entry.contextLabel}`
-                  : "No record attached";
+            const contextLabel =
+              entry.contextType === "listing" && entry.contextLabel
+                ? `Listing · ${entry.contextLabel}`
+                : entry.contextType === "contact" && entry.contextLabel
+                ? `Contact · ${entry.contextLabel}`
+                : "No record attached";
 
-              // single, clean preview text – no duplicates
-              const preview =
-                entry.snippet?.trim() ||
-                entry.prompt?.trim().split("\n")[0] ||
-                "";
+            // single, clean preview text – no duplicates
+            const preview =
+              entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
 
-              return (
-                <li
-                  key={entry.id}
+            return (
+              <li
+                key={entry.id}
+                className={[
+                  "group",
+                  idx !== filteredEntries.length - 1
+                    ? "border-b border-slate-800/80"
+                    : "",
+                ].join(" ")}
+              >
+                {/* Make the entire row a real button for reliable mobile taps */}
+                <button
+                  type="button"
                   onClick={() => onSelectEntry?.(entry)}
                   className={[
-                    "group flex cursor-pointer items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
-                    idx !== filteredEntries.length - 1
-                      ? "border-b border-slate-800/80"
-                      : "",
+                    "w-full text-left",
+                    "flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
                     "hover:bg-slate-900/70",
                   ].join(" ")}
                 >
@@ -318,6 +324,7 @@ export default function OutputHistory({
                       type="button"
                       title="Delete saved prompt"
                       onClick={(e) => {
+                        e.preventDefault(); // prevent parent button click
                         e.stopPropagation(); // prevent selecting the entry
                         handleDeleteEntry(entry.id);
                       }}
@@ -326,11 +333,12 @@ export default function OutputHistory({
                       🗑️
                     </button>
                   </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       </div>
     </section>
   );
