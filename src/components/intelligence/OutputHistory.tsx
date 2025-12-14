@@ -247,98 +247,83 @@ export default function OutputHistory({
         )}
 
         {/* Entries list */}
-      {!loading && !error && filteredEntries.length > 0 && (
-        <ul className="mt-3 max-h-80 overflow-y-auto text-xs">
-          {filteredEntries.map((entry, idx) => {
-            const created = entry.createdAt ? new Date(entry.createdAt) : null;
+{!loading && !error && filteredEntries.length > 0 && (
+  <ul className="mt-3 max-h-80 overflow-y-auto text-xs">
+    {filteredEntries.map((entry, idx) => {
+      const created = entry.createdAt ? new Date(entry.createdAt) : null;
 
-            const dateLabel = created
-              ? created.toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })
-              : "";
+      const dateLabel = created
+        ? created.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+        : "";
 
-            const timeLabel = created
-              ? created.toLocaleTimeString(undefined, {
-                  hour: "numeric",
-                  minute: "2-digit",
-                })
-              : "";
+      const timeLabel = created
+        ? created.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+        : "";
 
-            const contextLabel =
-              entry.contextType === "listing" && entry.contextLabel
-                ? `Listing · ${entry.contextLabel}`
-                : entry.contextType === "contact" && entry.contextLabel
-                ? `Contact · ${entry.contextLabel}`
-                : "No record attached";
+      const contextLabel =
+        entry.contextType === "listing" && entry.contextLabel
+          ? `Listing · ${entry.contextLabel}`
+          : entry.contextType === "contact" && entry.contextLabel
+          ? `Contact · ${entry.contextLabel}`
+          : "No record attached";
 
-            // single, clean preview text – no duplicates
-            const preview =
-              entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
+      const preview =
+        entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
 
-            return (
-              <li
-                key={entry.id}
-                className={[
-                  "group",
-                  idx !== filteredEntries.length - 1
-                    ? "border-b border-slate-800/80"
-                    : "",
-                ].join(" ")}
-              >
-                {/* Make the entire row a real button for reliable mobile taps */}
-                <button
-                  type="button"
-                  onClick={() => onSelectEntry?.(entry)}
-                  className={[
-                    "w-full text-left",
-                    "flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
-                    "hover:bg-slate-900/70",
-                  ].join(" ")}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-1 flex flex-wrap items-center gap-2">
-                      <span className="inline-flex items-center rounded-full bg-slate-800/90 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100/90">
-                        {entry.engine}
-                      </span>
+      return (
+        <li
+          key={entry.id}
+          className={[
+            "group flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
+            idx !== filteredEntries.length - 1 ? "border-b border-slate-800/80" : "",
+            "hover:bg-slate-900/70",
+          ].join(" ")}
+        >
+          {/* Clickable row (no nested buttons) */}
+          <button
+            type="button"
+            onClick={() => onSelectEntry?.(entry)}
+            className="min-w-0 flex-1 text-left touch-manipulation"
+          >
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center rounded-full bg-slate-800/90 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100/90">
+                {entry.engine}
+              </span>
 
-                      <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
-                        {contextLabel}
-                      </span>
-                    </div>
+              <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
+                {contextLabel}
+              </span>
+            </div>
 
-                    <p className="line-clamp-2 text-[12px] leading-relaxed text-slate-200/90">
-                      {preview || "No input captured for this run."}
-                    </p>
-                  </div>
+            <p className="line-clamp-2 text-[12px] leading-relaxed text-slate-200/90">
+              {preview || "No input captured for this run."}
+            </p>
+          </button>
 
-                  {/* Right side: timestamp + quick delete (hover only) */}
-                  <div className="shrink-0 flex items-center gap-2">
-                    <div className="text-right text-[10px] text-slate-400">
-                      {dateLabel && <div>{dateLabel}</div>}
-                      {timeLabel && <div>{timeLabel}</div>}
-                    </div>
+          {/* Right side: timestamp + delete */}
+          <div className="shrink-0 flex items-center gap-2">
+            <div className="text-right text-[10px] text-slate-400">
+              {dateLabel && <div>{dateLabel}</div>}
+              {timeLabel && <div>{timeLabel}</div>}
+            </div>
 
-                    <button
-                      type="button"
-                      title="Delete saved prompt"
-                      onClick={(e) => {
-                        e.preventDefault(); // prevent parent button click
-                        e.stopPropagation(); // prevent selecting the entry
-                        handleDeleteEntry(entry.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity rounded-full p-1 text-slate-400 hover:text-red-400"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+            <button
+              type="button"
+              title="Delete saved prompt"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteEntry(entry.id);
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity rounded-full p-1 text-slate-400 hover:text-red-400"
+            >
+              🗑️
+            </button>
+          </div>
+        </li>
+      );
+    })}
+  </ul>
+)}
       </div>
     </section>
   );
