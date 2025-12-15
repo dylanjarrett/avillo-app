@@ -1,31 +1,54 @@
-
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
 
 type BillingPeriod = "monthly" | "annual";
+type CheckoutPlan = "starter" | "pro" | "founding_pro";
 
 export default function BillingPage() {
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState<CheckoutPlan | null>(null);
   const [portalLoading, setPortalLoading] = useState(false);
 
   const isAnnual = billingPeriod === "annual";
 
-  async function startCheckout() {
+  // Prices (display only) — actual Stripe price IDs live server-side in /api/stripe/checkout
+  const display = useMemo(() => {
+    return {
+      starter: {
+        amount: isAnnual ? 490 : 49,
+        suffix: isAnnual ? "/yr" : "/mo",
+        caption: isAnnual ? "Billed annually — save 2 months" : "Billed monthly — cancel anytime",
+      },
+      pro: {
+        amount: isAnnual ? 1290 : 129,
+        suffix: isAnnual ? "/yr" : "/mo",
+        caption: isAnnual ? "Billed annually — save 2 months" : "Billed monthly — cancel anytime",
+      },
+      founding_pro: {
+        amount: isAnnual ? 990 : 99,
+        suffix: isAnnual ? "/yr" : "/mo",
+        caption: isAnnual ? "Billed annually — save 2 months" : "Billed monthly — cancel anytime",
+      },
+    };
+  }, [isAnnual]);
+
+  async function startCheckout(plan: CheckoutPlan) {
     if (checkoutLoading) return;
+
     try {
-      setCheckoutLoading(true);
+      setCheckoutLoading(plan);
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: "pro", period: billingPeriod }),
+        body: JSON.stringify({ plan, period: billingPeriod }),
       });
 
       const data = await res.json();
-      if (data?.url) {
+
+      if (res.ok && data?.url) {
         window.location.href = data.url;
         return;
       }
@@ -35,20 +58,19 @@ export default function BillingPage() {
       console.error("Checkout error", err);
       alert("Unable to start checkout.");
     } finally {
-      setCheckoutLoading(false);
+      setCheckoutLoading(null);
     }
   }
 
   async function openBillingPortal() {
     if (portalLoading) return;
+
     try {
       setPortalLoading(true);
 
-      const res = await fetch("/api/stripe/portal", {
-        method: "POST",
-      });
-
+      const res = await fetch("/api/stripe/portal", { method: "POST" });
       const data = await res.json();
+
       if (res.ok && data?.url) {
         window.location.href = data.url;
         return;
@@ -63,12 +85,20 @@ export default function BillingPage() {
     }
   }
 
+  /**
+   * NOTE:
+   * Replace these with real subscription data when you wire webhooks.
+   * For now, keep copy neutral so we don't lie to users.
+   */
+  const currentPlanLabel = "Early Access";
+  const currentPlanStatus = "Active";
+
   return (
     <div className="space-y-8">
       <PageHeader
         eyebrow="BILLING"
         title="Choose your Avillo plan"
-        subtitle="Upgrade your plan to unlock more automation, intelligence, and CRM capabilities."
+        subtitle="Upgrade to unlock advanced automation, continuous intelligence, and priority performance."
       />
 
       {/* Current plan / status */}
@@ -78,15 +108,17 @@ export default function BillingPage() {
             <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
               Current plan
             </p>
+
             <p className="mt-1 text-sm font-semibold text-slate-50">
-              Founding Agent
+              {currentPlanLabel}
               <span className="ml-2 inline-flex items-center rounded-full bg-emerald-400/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
-                Active
+                {currentPlanStatus}
               </span>
             </p>
+
             <p className="mt-1 text-[11px] text-slate-400/90">
-              You’re part of the early access cohort. Upgrading to Avillo Pro
-              adds all intelligence engines and CRM.
+              Paid plans include a <span className="font-semibold text-slate-200">30-day trial</span>. Upgrade anytime to unlock
+              branching Autopilot, run-now testing, and continuous intelligence.
             </p>
           </div>
 
@@ -100,11 +132,12 @@ export default function BillingPage() {
                 billing@avillo.io
               </a>
             </p>
+
             <button
               type="button"
               onClick={openBillingPortal}
               disabled={portalLoading}
-              className="inline-flex items-center rounded-full border border-slate-600 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 transition disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex items-center rounded-full border border-slate-600 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200 transition hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-70"
             >
               {portalLoading ? "Opening billing portal…" : "Manage billing"}
             </button>
@@ -112,13 +145,12 @@ export default function BillingPage() {
         </div>
       </div>
 
-       {/* Billing period toggle */}
+      {/* Billing period toggle */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-xs text-slate-300/90">
           Toggle between monthly and yearly. Yearly plans save 2 months.
         </p>
 
-        {/* Wrapper so the pill can go full-width on mobile */}
         <div className="w-full sm:w-auto">
           <div className="flex w-full rounded-full border border-slate-700 bg-slate-950/80 p-1 text-[11px] font-semibold text-slate-300 shadow-[0_0_24px_rgba(15,23,42,0.85)]">
             <button
@@ -144,7 +176,7 @@ export default function BillingPage() {
                   : "text-slate-400")
               }
             >
-              Yearly~{" "}
+              Yearly{" "}
               <span className="block text-[9px] uppercase tracking-wide sm:inline">
                 Save 2 months
               </span>
@@ -155,116 +187,175 @@ export default function BillingPage() {
 
       {/* Pricing grid */}
       <div className="grid gap-6 md:grid-cols-3">
-        {/* Founding Agent */}
+        {/* Starter */}
         <div className="relative overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/80 px-6 py-6 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
-          <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_left,rgba(253,230,138,0.15),transparent_55%)]" />
+          <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_left,rgba(248,250,252,0.10),transparent_55%)]" />
 
-          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-100/90">
-            Founding Agent
+          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-200">
+            Starter
           </p>
 
           <p className="mt-3 text-3xl font-semibold text-slate-50">
-            {isAnnual ? (
-              <>
-                $290<span className="text-base font-normal opacity-70">/yr</span>
-              </>
-            ) : (
-              <>
-                $29<span className="text-base font-normal opacity-70">/mo</span>
-              </>
-            )}
-          </p>
-          <p className="text-xs text-slate-400">
-            {isAnnual
-              ? "Billed annually — save 2 months"
-              : "Billed monthly — cancel anytime"}
+            ${display.starter.amount}
+            <span className="text-base font-normal opacity-70">{display.starter.suffix}</span>
           </p>
 
+          <p className="text-xs text-slate-400">{display.starter.caption}</p>
+
+          <div className="mt-3 rounded-xl border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-300/90">
+            Includes a 30-day trial on upgrade.
+          </div>
+
           <ul className="mt-5 space-y-2 text-xs text-slate-200/90">
-            <li>• Access to the Listing Engine</li>
-            <li>• Saved search history</li>
+            <li>• CRM + Listings</li>
+            <li>• Manual tasks & reminders</li>
+            <li>• Basic linear automations</li>
+            <li>• Limited AI runs (manual)</li>
           </ul>
 
           <button
-            disabled
-            className="mt-6 w-full rounded-full border border-slate-600 bg-slate-800/50 py-2 text-xs font-semibold text-slate-400 cursor-not-allowed"
+            onClick={() => startCheckout("starter")}
+            disabled={checkoutLoading !== null}
+            className="mt-6 w-full rounded-full border border-slate-600 bg-slate-900/60 py-2 text-xs font-semibold text-slate-200 transition hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            Included in early access
+            {checkoutLoading === "starter"
+              ? "Starting checkout…"
+              : isAnnual
+              ? "Start Starter (Yearly)"
+              : "Start Starter (Monthly)"}
           </button>
         </div>
 
-        {/* Avillo Pro */}
+        {/* Pro (Featured) */}
         <div className="relative overflow-hidden rounded-2xl border border-amber-200/40 bg-slate-950/90 px-6 py-6 shadow-[0_0_55px_rgba(251,191,36,0.35)]">
           <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.25),transparent_60%)]" />
 
-          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-200">
-            Avillo Pro
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-200">
+              Avillo Pro
+            </p>
+
+            <span className="inline-flex items-center rounded-full border border-amber-200/50 bg-amber-100/10 px-2 py-0.5 text-[10px] font-semibold text-amber-100">
+              Recommended
+            </span>
+          </div>
 
           <p className="mt-3 text-3xl font-semibold text-amber-100">
-            {isAnnual ? (
-              <>
-                $790<span className="text-base font-normal opacity-75">/yr</span>
-              </>
-            ) : (
-              <>
-                $79<span className="text-base font-normal opacity-75">/mo</span>
-              </>
-            )}
-          </p>
-          <p className="text-xs text-slate-300">
-            {isAnnual
-              ? "Billed annually — save 2 months"
-              : "Billed monthly — cancel anytime"}
+            ${display.pro.amount}
+            <span className="text-base font-normal opacity-75">{display.pro.suffix}</span>
           </p>
 
+          <p className="text-xs text-slate-300">{display.pro.caption}</p>
+
+          <div className="mt-3 rounded-xl border border-amber-200/30 bg-amber-100/10 px-3 py-2 text-[11px] text-amber-50/90">
+            30-day Pro trial included. Unlock branching Autopilot + continuous intelligence.
+          </div>
+
           <ul className="mt-5 space-y-2 text-xs text-amber-50">
-            <li>• Access to all intelligence engines</li>
-            <li>• CRM & contact management</li>
-            <li>• Buyer / Seller / Listing Engines</li>
+            <li>• Full Autopilot + advanced workflows</li>
+            <li>• IF / ELSE branching logic</li>
+            <li>• Continuous AI intelligence & next actions</li>
+            <li>• Priority processing & support</li>
           </ul>
 
           <button
-            onClick={startCheckout}
-            disabled={checkoutLoading}
-            className="mt-6 w-full rounded-full border border-amber-200/70 bg-amber-50/10 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-50/20 transition disabled:cursor-not-allowed disabled:opacity-70"
+            onClick={() => startCheckout("pro")}
+            disabled={checkoutLoading !== null}
+            className="mt-6 w-full rounded-full border border-amber-200/70 bg-amber-50/10 py-2 text-xs font-semibold text-amber-100 transition hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {checkoutLoading
+            {checkoutLoading === "pro"
               ? "Starting checkout…"
               : isAnnual
-              ? "Subscribe Yearly (save 2 months)"
-              : "Subscribe Monthly"}
+              ? "Start Pro (Yearly)"
+              : "Start Pro (Monthly)"}
           </button>
+
+          <p className="mt-3 text-[11px] text-slate-300/80">
+            Pro is designed for leverage — less admin, more revenue time.
+          </p>
         </div>
 
-        {/* Enterprise */}
+        {/* Founding Pro */}
         <div className="relative overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/80 px-6 py-6 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
-          <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_bottom_left,rgba(248,250,252,0.12),transparent_55%)]" />
+          <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_left,rgba(253,230,138,0.18),transparent_55%)]" />
 
-          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-300">
-            Enterprise
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-100/90">
+              Founding Pro
+            </p>
+
+            <span className="inline-flex items-center rounded-full border border-emerald-300/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+              Locked for life
+            </span>
+          </div>
+
+          <p className="mt-3 text-3xl font-semibold text-slate-50">
+            ${display.founding_pro.amount}
+            <span className="text-base font-normal opacity-70">{display.founding_pro.suffix}</span>
           </p>
 
-          <p className="mt-3 text-3xl font-semibold text-slate-50">Custom</p>
-          <p className="text-xs text-slate-400">Contact sales for pricing</p>
+          <p className="text-xs text-slate-400">{display.founding_pro.caption}</p>
+
+          <div className="mt-3 rounded-xl border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-300/90">
+            Limited availability during early adoption. Includes a 30-day trial.
+          </div>
 
           <ul className="mt-5 space-y-2 text-xs text-slate-200/90">
-            <li>• Designed for brokerages & real estate teams</li>
-            <li>• Centralized CRM, agent oversight & permissions</li>
-            <li>• Team reporting, lead routing & custom workflows</li>
-            <li>• Priority onboarding and dedicated support</li>
+            <li>• Everything in Pro</li>
+            <li>• Founding pricing locked for life</li>
+            <li>• Early access cohort badge</li>
+            <li>• Priority roadmap influence</li>
           </ul>
+
+          <button
+            onClick={() => startCheckout("founding_pro")}
+            disabled={checkoutLoading !== null}
+            className="mt-6 w-full rounded-full border border-amber-100/40 bg-slate-900/60 py-2 text-xs font-semibold text-amber-100 transition hover:border-amber-100/70 hover:bg-amber-50/10 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {checkoutLoading === "founding_pro"
+              ? "Starting checkout…"
+              : isAnnual
+              ? "Claim Founding Pro (Yearly)"
+              : "Claim Founding Pro (Monthly)"}
+          </button>
+
+          <p className="mt-3 text-[11px] text-slate-400/80">
+            Founding Pro will be removed once early adoption is established.
+          </p>
+        </div>
+      </div>
+
+      {/* Enterprise */}
+      <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-6 text-xs text-slate-200/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
+        <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_bottom_left,rgba(248,250,252,0.12),transparent_55%)]" />
+
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-300">
+              Enterprise
+            </p>
+            <p className="mt-2 text-lg font-semibold text-slate-50">Custom pricing</p>
+            <p className="mt-1 text-slate-400/90">
+              Built for brokerages and larger teams: permissions, reporting, lead routing, and custom workflows.
+            </p>
+
+            <ul className="mt-4 space-y-2 text-[11px] text-slate-200/90">
+              <li>• Centralized CRM + agent oversight</li>
+              <li>• Lead routing, reporting, and governance</li>
+              <li>• Priority onboarding and dedicated support</li>
+            </ul>
+          </div>
 
           <a
             href="mailto:sales@avillo.io"
-            className="mt-6 block w-full rounded-full border border-slate-600 bg-slate-900/60 py-2 text-center text-xs font-semibold text-slate-200 hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 transition"
+            className="inline-flex items-center justify-center rounded-full border border-slate-600 bg-slate-900/60 px-5 py-2 text-center text-xs font-semibold text-slate-200 transition hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100"
           >
             Contact Sales
           </a>
         </div>
       </div>
 
-      {/* FAQ Card (unchanged) */}
+      {/* FAQ */}
       <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-6 text-xs text-slate-200/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
         <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
           Billing FAQ
@@ -272,43 +363,30 @@ export default function BillingPage() {
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div>
-            <p className="font-semibold text-slate-50">
-              Can I switch between monthly and yearly?
-            </p>
+            <p className="font-semibold text-slate-50">Can I switch between monthly and yearly?</p>
             <p className="mt-1 text-slate-400/90">
-              Yes. You can upgrade from monthly to yearly at any time. Your next
-              billing cycle will reflect the new plan.
+              Yes. You can switch any time. Your next billing cycle will reflect the new period.
             </p>
           </div>
 
           <div>
-            <p className="font-semibold text-slate-50">
-              What happens if I cancel?
-            </p>
+            <p className="font-semibold text-slate-50">What happens if I cancel?</p>
             <p className="mt-1 text-slate-400/90">
-              You’ll keep access until the end of your current billing period.
-              Your workspace and data remain safely stored.
+              You’ll keep access through the end of your billing period. Your workspace and data remain stored.
             </p>
           </div>
 
           <div>
-            <p className="font-semibold text-slate-50">
-              Is the Founding Agent plan going away?
-            </p>
+            <p className="font-semibold text-slate-50">How does the 30-day trial work?</p>
             <p className="mt-1 text-slate-400/90">
-              Founding Agents lock in early access pricing during the beta. You
-              can upgrade to Avillo Pro at any time.
+              Paid plans include a 30-day trial period. You can cancel any time before the trial ends.
             </p>
           </div>
 
           <div>
-            <p className="font-semibold text-slate-50">
-              How do Enterprise plans work?
-            </p>
+            <p className="font-semibold text-slate-50">How do Enterprise plans work?</p>
             <p className="mt-1 text-slate-400/90">
-              Enterprise is tailored for broker/owner and team leads. Pricing is
-              based on agent count, integrations, and support level. Reach out
-              to{" "}
+              Enterprise pricing is based on agent count, integrations, and onboarding/support needs. Email{" "}
               <a
                 href="mailto:sales@avillo.io"
                 className="font-semibold text-amber-100 underline-offset-2 hover:underline"

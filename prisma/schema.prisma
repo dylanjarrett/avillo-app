@@ -10,17 +10,27 @@ datasource db {
 }
 
 // ---------------------------
-// ENUMS (NEW)
+// ENUMS
 // ---------------------------
 enum UserRole {
   USER
   ADMIN
 }
 
+// Plans you sell (Starter / Pro / Founding Pro)
 enum SubscriptionPlan {
-  FOUNDING_AGENT
+  STARTER
   PRO
-  FREE_TRIAL
+  FOUNDING_PRO
+}
+
+// Stripe lifecycle status (trialing/active/etc.)
+enum SubscriptionStatus {
+  NONE
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
 }
 
 enum IntelligenceEngine {
@@ -45,75 +55,85 @@ enum TaskSource {
 // USER
 // ---------------------------
 model User {
-  id                String   @id @default(cuid())
-  name              String?
-  email             String   @unique
-  emailVerified     DateTime?
-  passwordHash      String?  @map("password_hash")
-  image             String?
-  brokerage         String?
+  id               String   @id @default(cuid())
+  name             String?
+  email            String   @unique
+  emailVerified    DateTime?
+  passwordHash     String?  @map("password_hash")
+  image            String?
+  brokerage        String?
 
-  // NEW: auth / billing metadata
-  role              UserRole        @default(USER)
-  plan              SubscriptionPlan @default(FOUNDING_AGENT)
-  currentSessionKey String?         @db.VarChar(255)
+  // Auth / app metadata
+  role             UserRole @default(USER)
+  currentSessionKey String? @db.VarChar(255)
   lastLoginAt       DateTime?
-  openAITokensUsed  Int             @default(0)
+  openAITokensUsed  Int      @default(0)
+
+  // Billing / subscription state (NEW)
+  plan                 SubscriptionPlan   @default(STARTER)
+  subscriptionStatus   SubscriptionStatus @default(NONE)
+  trialEndsAt          DateTime?
+  currentPeriodEnd     DateTime?
+
+  stripeCustomerId     String? @db.VarChar(255)
+  stripeSubscriptionId String? @db.VarChar(255)
+  stripePriceId        String? @db.VarChar(255)
 
   // Auth relations
   accounts Account[]
   sessions Session[]
 
   // App relations
-  contacts               Contact[]
-  listings               Listing[]
-  activities             Activity[]
-  CRMRecord              CRMRecord[]
-  crmActivity            CRMActivity[]
-  passwordResetTokens    PasswordResetToken[]
-  emailVerificationTokens EmailVerificationToken[]
-  tasks                  Task[]
-  intelligenceOutputs    IntelligenceOutput[] // <-- NEW
+  contacts                 Contact[]
+  listings                 Listing[]
+  activities               Activity[]
+  CRMRecord                CRMRecord[]
+  crmActivity              CRMActivity[]
+  passwordResetTokens      PasswordResetToken[]
+  emailVerificationTokens  EmailVerificationToken[]
+  tasks                    Task[]
+  intelligenceOutputs      IntelligenceOutput[] // <-- NEW
 
-  stripeCustomerId       String?  @db.VarChar(255)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ---------------------------
 // CONTACTS
 // ---------------------------
 model Contact {
-  id        String  @id @default(cuid())
-  user      User    @relation(fields: [userId], references: [id])
+  id        String @id @default(cuid())
+  user      User   @relation(fields: [userId], references: [id])
   userId    String
+
   firstName String?
   lastName  String?
   email     String?
   phone     String?
+
   stage     String  @default("new") // new → warm → hot → past
   tags      String[] @default([])
 
   // Legacy free-form notes field (kept for backwards compatibility)
-  notes  String?
-  source String? // Zillow, Open House, Referral, Social, etc.
+  notes     String?
+  source    String? // Zillow, Open House, Referral, Social, etc.
 
   // Avillo CRM — pipeline + profile fields
-  label      String? // e.g. "potential buy"
-  type       String? // "Buyer" | "Seller" | "Past / sphere"
+  label     String? // e.g. "potential buy"
+  type      String? // "Buyer" | "Seller" | "Past / sphere"
   priceRange String?
-  areas      String?
-  timeline   String?
+  areas     String?
+  timeline  String?
 
   // Structured note entries per contact
   contactNotes ContactNote[]
   tasks        Task[]
 
   // Relationships to listings
-  listingsAsSeller Listing[]        @relation("SellerListings")
-  buyerListings   ListingBuyerLink[]
-  activities      Activity[]
-  crmActivity     CRMActivity[]
+  listingsAsSeller Listing[]       @relation("SellerListings")
+  buyerListings    ListingBuyerLink[]
+  activities       Activity[]
+  crmActivity      CRMActivity[]
 
   intelligenceOutputs IntelligenceOutput[] // <-- NEW
 
@@ -136,7 +156,7 @@ model Listing {
   address     String
   mlsId       String?
   price       Int?
-  status      String  @default("draft")
+  status      String @default("draft")
   description String?
   aiCopy      String?
   aiNotes     String?
@@ -145,9 +165,9 @@ model Listing {
   buyers ListingBuyerLink[]
 
   // Listing photos (1-many)
-  photos     ListingPhoto[]
-  activities Activity[]
-  tasks      Task[]
+  photos             ListingPhoto[]
+  activities         Activity[]
+  tasks              Task[]
   intelligenceOutputs IntelligenceOutput[] // <-- NEW
 
   createdAt DateTime @default(now())
@@ -161,9 +181,11 @@ model ListingPhoto {
   id        String  @id @default(cuid())
   listing   Listing @relation(fields: [listingId], references: [id])
   listingId String
+
   url       String
   isCover   Boolean @default(false)
   sortOrder Int     @default(0)
+
   createdAt DateTime @default(now())
 }
 
@@ -174,9 +196,12 @@ model ListingBuyerLink {
   id        String  @id @default(cuid())
   listing   Listing @relation(fields: [listingId], references: [id])
   listingId String
+
   contact   Contact @relation(fields: [contactId], references: [id])
   contactId String
+
   role      String? // "primary", "backup", "interested", etc.
+
   createdAt DateTime @default(now())
 
   @@unique([listingId, contactId])
@@ -189,12 +214,16 @@ model Activity {
   id        String  @id @default(cuid())
   user      User    @relation(fields: [userId], references: [id])
   userId    String
+
   contact   Contact? @relation(fields: [contactId], references: [id])
   contactId String?
+
   listing   Listing? @relation(fields: [listingId], references: [id])
   listingId String?
+
   type      String // "call", "email", "note", "showing", "task"
   details   String?
+
   createdAt DateTime @default(now())
 }
 
@@ -206,9 +235,11 @@ model CRMActivity {
   id        String  @id @default(cuid())
   userId    String
   contactId String?
+
   type      String // "created", "updated", "stage_change", "note", "call", "ai_generated"
   summary   String
   data      Json?
+
   createdAt DateTime @default(now())
 
   user    User    @relation(fields: [userId], references: [id])
@@ -219,27 +250,27 @@ model CRMActivity {
 // INTELLIGENCE OUTPUTS (ENGINE RUNS)
 // ---------------------------
 model IntelligenceOutput {
-  id       String             @id @default(cuid())
+  id String @id @default(cuid())
 
   // owner
-  userId   String
-  user     User               @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   // which engine
-  engine   IntelligenceEngine
+  engine IntelligenceEngine
 
   // optional context
   listingId String?
-  listing   Listing?          @relation(fields: [listingId], references: [id])
+  listing   Listing? @relation(fields: [listingId], references: [id])
 
   contactId String?
-  contact   Contact?          @relation(fields: [contactId], references: [id])
+  contact   Contact? @relation(fields: [contactId], references: [id])
 
   // request + response blobs
   engineInput  Json?
-  inputSummary String?        // short line of what the user typed / selected
-  payload      Json?          // full pack
-  preview      String?        // short preview of output
+  inputSummary String? // short line of what the user typed / selected
+  payload      Json?   // full pack
+  preview      String? // short preview of output
 
   createdAt DateTime @default(now())
 
@@ -252,32 +283,39 @@ model IntelligenceOutput {
 // CONTACT NOTES (STRUCTURED)
 // ---------------------------
 model ContactNote {
-  id         String  @id @default(cuid())
-  contact    Contact @relation(fields: [contactId], references: [id])
-  contactId  String
-  text       String
+  id        String  @id @default(cuid())
+  contact   Contact @relation(fields: [contactId], references: [id])
+  contactId String
+
+  text      String
   reminderAt DateTime?
-  createdAt  DateTime @default(now())
+
+  createdAt DateTime @default(now())
 }
 
+// ---------------------------
+// TASKS
+// ---------------------------
 model Task {
+  id        String @id @default(cuid())
 
-  id        String     @id @default(cuid())
-  userId    String
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   contactId String?
-  contact   Contact?   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   listingId String?
-  listing   Listing?   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
   title     String
   notes     String?
   dueAt     DateTime?
   status    TaskStatus @default(OPEN)
   source    TaskSource @default(MANUAL)
-  
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   completedAt DateTime?
 
   @@index([userId, status, dueAt])
@@ -285,23 +323,24 @@ model Task {
   @@index([userId, listingId, status, dueAt])
 }
 
-
 // ---------------------------
 // NEXTAUTH
 // ---------------------------
 model Account {
-  id                 String @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?
-  access_token       String?
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String?
-  session_state      String?
+  id                String @id @default(cuid())
+  userId            String
+
+  type              String
+  provider          String
+  providerAccountId String
+
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -313,12 +352,13 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
-  user         User     @relation(fields: [userId], references: [id])
+
+  user User @relation(fields: [userId], references: [id])
 }
 
 model VerificationToken {
   identifier String
-  token      String   @unique
+  token      String @unique
   expires    DateTime
 
   @@unique([identifier, token])
@@ -358,7 +398,7 @@ model PasswordResetToken {
 // CRM RAW RECORDS
 // ---------------------------
 model CRMRecord {
-  id        String   @id @default(cuid())
+  id        String @id @default(cuid())
   userId    String
   raw       String
   processed String
@@ -368,37 +408,36 @@ model CRMRecord {
   user User @relation(fields: [userId], references: [id])
 }
 
-
 // ---------------------------
 // AUTOMATION (workflow definition)
 // ---------------------------
 model Automation {
-  id              String   @id @default(cuid())
-  userId          String
-  name            String
-  description     String?
-  status          String   @default("draft") // draft | active | paused | archived
+  id          String @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  status      String @default("draft") // draft | active | paused | archived
 
-  trigger         String
-  triggerConfig   Json?
+  trigger       String
+  triggerConfig Json?
   entryConditions Json?
   exitConditions  Json?
   schedule        Json?
 
-  folder          String?
+  folder String?
 
-  active          Boolean  @default(true)
-  reEnroll        Boolean  @default(true)
-  timezone        String?
+  active   Boolean @default(true)
+  reEnroll Boolean @default(true)
+  timezone String?
 
   lastTriggeredAt DateTime?
   lastExecutedAt  DateTime?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  steps           AutomationStepGroup?
-  runs            AutomationRun[]
+  steps AutomationStepGroup?
+  runs  AutomationRun[]
 
   @@index([userId])
   @@index([userId, active])
@@ -406,31 +445,32 @@ model Automation {
 }
 
 model AutomationStepGroup {
-  id            String @id @default(cuid())
-  automationId  String @unique
-  steps         Json
-  automation    Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  id           String @id @default(cuid())
+  automationId String @unique
+  steps        Json
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 }
 
 model AutomationRun {
-  id             String @id @default(cuid())
-  automationId   String
+  id           String @id @default(cuid())
+  automationId String
 
-  contactId      String?
-  listingId      String?
+  contactId String?
+  listingId String?
 
   trigger        String?
   triggerPayload Json?
 
-  status         String
-  message        String?
+  status   String
+  message  String?
 
-  executedAt     DateTime @default(now())
-  lockId         String?
+  executedAt DateTime @default(now())
+  lockId    String?
 
-  steps          AutomationRunStep[]
+  steps AutomationRunStep[]
 
-  automation     Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 
   @@index([automationId])
   @@index([contactId])
@@ -439,18 +479,18 @@ model AutomationRun {
 }
 
 model AutomationRunStep {
-  id         String @id @default(cuid())
-  runId      String
+  id       String @id @default(cuid())
+  runId    String
 
-  stepId     String?
-  stepIndex  Int
-  stepType   String
-  status     String
-  message    String?
+  stepId   String?
+  stepIndex Int
+  stepType  String
+  status    String
+  message   String?
   executedAt DateTime @default(now())
   payload    Json?
 
-  run        AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@index([runId])
   @@index([stepType])
