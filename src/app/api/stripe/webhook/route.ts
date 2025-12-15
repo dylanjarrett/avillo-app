@@ -103,7 +103,9 @@ async function updateUserByCustomerId(params: {
 
   // These keys are what Stripe sends in Subscription payloads
   const trialEndUnix = getUnixField(subscription, "trial_end");
-  const currentPeriodEndUnix = getUnixField(subscription, "current_period_end");
+  const currentPeriodEndUnix = 
+                getUnixField(subscription, "current_period_end");
+                getUnixField(subscription, "trial_end");
 
   const trialEndsAt = unixToDate(trialEndUnix);
   const currentPeriodEnd = unixToDate(currentPeriodEndUnix);
