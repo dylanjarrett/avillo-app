@@ -6,6 +6,9 @@ import StepModal, { StepType } from "@/components/autopilot/StepModal";
 import { FilterPill } from "@/components/ui/filter-pill";
 import { useAutopilotMobileWorkspaceScroll } from "@/hooks/useAutopilotMobileWorkspaceScroll";
 
+const UpgradeModal = require("@/components/billing/UpgradeModal").default as any;
+const entitlementLib = require("@/lib/entitlements") as any;
+
 /* ------------------------------------
  * Types
  * -----------------------------------*/
@@ -39,6 +42,14 @@ type ConditionConfig = {
   field: string;
   operator: "equals" | "not_equals";
   value: string;
+};
+
+type AccountMe = {
+  id?: string;
+  email?: string | null;
+  plan?: string | null;
+  entitlements?: Record<string, any> | null;
+  [key: string]: any;
 };
 
 /* ------------------------------------
@@ -179,8 +190,7 @@ const RECOMMENDED_TEMPLATES: {
               id: crypto.randomUUID(),
               type: "TASK",
               config: {
-                text:
-                  "Text or call {{firstName}} to confirm showings for this week.",
+                text: "Text or call {{firstName}} to confirm showings for this week.",
               },
             },
           ],
@@ -311,26 +321,37 @@ function getConditionScopeForTrigger(
   trigger: string | null
 ): "contact" | "listing" | "both" | undefined {
   if (!trigger) return undefined;
-
-  if (trigger === "LISTING_CREATED" || trigger === "LISTING_STAGE_CHANGE") {
-    return "listing";
-  }
-  if (trigger === "NEW_CONTACT" || trigger === "LEAD_STAGE_CHANGE") {
-    return "contact";
-  }
+  if (trigger === "LISTING_CREATED" || trigger === "LISTING_STAGE_CHANGE") return "listing";
+  if (trigger === "NEW_CONTACT" || trigger === "LEAD_STAGE_CHANGE") return "contact";
   return undefined;
 }
 
 function isWorkflowBlank(wf: AutomationWorkflow | null): boolean {
   if (!wf) return true;
-
   const hasName = wf.name.trim().length > 0;
   const hasDesc = wf.description.trim().length > 0;
   const hasTrigger = !!wf.trigger;
   const hasSteps = (wf.steps?.length ?? 0) > 0;
-
   return !hasName && !hasDesc && !hasTrigger && !hasSteps;
 }
+
+function safeHasAutopilotEntitlement(account: AccountMe | null): boolean {
+  if (!account) return false;
+
+  const ent = (account.entitlements ?? {}) as any;
+
+  // Source of truth: entitlements
+  const plan = String(ent.plan ?? account.plan ?? "").toLowerCase();
+  const isPaidTier = Boolean(ent.isPaidTier);
+
+  if (plan === "pro" || plan === "founding_pro") return true;
+  if (isPaidTier) return true;
+
+  // Capability-based fallback
+  const can = (ent.can ?? {}) as Record<string, boolean>;
+  return Boolean(can.AUTOMATIONS_RUN || can.AUTOMATIONS_PERSIST);
+}
+
 
 /* ------------------------------------
  * Page
@@ -355,6 +376,26 @@ export default function AutomationPage() {
   const { listHeaderRef, workspaceRef, scrollToWorkspace, scrollBackToListHeader } =
     useAutopilotMobileWorkspaceScroll();
 
+  // Entitlements
+  const [account, setAccount] = useState<AccountMe | null>(null);
+  const [accountLoading, setAccountLoading] = useState(true);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const hasAutopilot = safeHasAutopilotEntitlement(account);
+
+  function openUpgrade(reason?: string) {
+    // pass reason through if your modal uses it (it will just ignore if not)
+    setUpgradeOpen(true);
+    // you can also store reason in state if your modal expects it; keeping minimal to not break.
+    void reason;
+  }
+
+  function requireAutopilotOrUpgrade(reason: string): boolean {
+    if (accountLoading) return false; // avoid weird flash; just ignore clicks until loaded
+    if (hasAutopilot) return true;
+    openUpgrade(reason);
+    return false;
+  }
+
   // ---------- Derived counts for workflow filter pills ----------
   const totalWorkflows = workflows.length;
   const activeWorkflowsCount = workflows.filter((w) => w.active).length;
@@ -368,6 +409,44 @@ export default function AutomationPage() {
   // ------- Scroll refs (Listings-like card scroll) -------
   const listScrollRef = useRef<HTMLDivElement | null>(null);
   const workspaceScrollRef = useRef<HTMLDivElement | null>(null);
+
+  // ------- Load /api/account/me -------
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAccount() {
+      try {
+        setAccountLoading(true);
+        const res = await fetch("/api/account/me").catch(() => null);
+        if (!res || !res.ok) {
+          if (!cancelled) setAccount(null);
+          return;
+        }
+        const raw = (await res.json().catch(() => null)) as any;
+        if (!raw) {
+          if (!cancelled) setAccount(null);
+          return;
+        }
+
+        // Normalize /api/account/me shape into what this page expects
+        const normalized: AccountMe = {
+          id: raw?.user?.id,
+          email: raw?.user?.email ?? null,
+          plan: raw?.user?.plan ?? null,
+          entitlements: raw?.entitlements ?? null,
+        };
+
+        if (!cancelled) setAccount(normalized);
+      } finally {
+        if (!cancelled) setAccountLoading(false);
+      }
+    }
+
+    void loadAccount();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ------- Helpers -------
   function openWorkspaceForSelection() {
@@ -384,6 +463,7 @@ export default function AutomationPage() {
   }
 
   function startNewWorkflow() {
+
     const fresh: AutomationWorkflow = {
       id: undefined,
       name: "",
@@ -607,6 +687,7 @@ export default function AutomationPage() {
 
   // ------- Save / Delete / Run -------
   async function handleSave() {
+    if (!requireAutopilotOrUpgrade("save_workflow")) return;
     if (!activeWorkflow) return;
 
     const wfToSave = activeWorkflow;
@@ -783,14 +864,7 @@ export default function AutomationPage() {
     }
   }
 
-  /* ------------------------------------
-   * Render
-   * -----------------------------------*/
-
-  const triggerSentence = activeWorkflow?.trigger
-    ? triggerPlainSentence(activeWorkflow.trigger)
-    : null;
-
+  const triggerSentence = activeWorkflow?.trigger ? triggerPlainSentence(activeWorkflow.trigger) : null;
   const conditionScopeForActive = getConditionScopeForTrigger(activeWorkflow?.trigger ?? null);
 
   return (
@@ -812,12 +886,19 @@ export default function AutomationPage() {
               Build simple, powerful automations that connect your contacts and listings to real-world
               actions. Start from templates or craft your own — no tech skills needed.
             </p>
+
+            {!accountLoading && !hasAutopilot && (
+              <p className="mt-2 text-[10px] text-amber-100/80">
+                Autopilot is locked on your current plan.
+              </p>
+            )}
           </div>
 
           <button
             type="button"
             onClick={startNewWorkflow}
-            className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20"
+            disabled={accountLoading}
+            className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             + New workflow
           </button>
@@ -870,8 +951,8 @@ export default function AutomationPage() {
             ref={listHeaderRef}
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
-              (workspaceOpenMobile ? "hidden" : "block") +
-              " lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-170px)]"
+              (workspaceOpenMobile ? "hidden " : "block ") +
+              "lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-170px)]"
             }
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)] opacity-40 blur-3xl" />
@@ -899,9 +980,8 @@ export default function AutomationPage() {
 
               {!loading && filteredWorkflows.length === 0 && (
                 <p className="py-6 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-                  No workflows yet. Click{" "}
-                  <span className="font-semibold">“New workflow”</span> above or start from a
-                  template on the right.
+                  No workflows yet. Click <span className="font-semibold">“New workflow”</span> above
+                  or start from a template on the right.
                 </p>
               )}
 
@@ -919,9 +999,7 @@ export default function AutomationPage() {
                       key={wf.id ?? "new-workflow-row"}
                       data-workflow-id={wf.id ?? "new"}
                       type="button"
-                      onClick={() =>
-                        selectWorkflow(((wf.id as string | undefined) ?? "new") as any)
-                      }
+                      onClick={() => selectWorkflow(((wf.id as string | undefined) ?? "new") as any)}
                       className={
                         "w-full rounded-xl border px-4 py-3 text-left transition-colors " +
                         (isSelected
@@ -934,9 +1012,7 @@ export default function AutomationPage() {
                           <p className="text-[12px] font-semibold text-slate-50">
                             {wf.name || "Untitled workflow"}
                           </p>
-                          <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                            {triggerLabel}
-                          </p>
+                          <p className="text-[10px] text-[var(--avillo-cream-muted)]">{triggerLabel}</p>
                         </div>
 
                         <span
@@ -971,8 +1047,8 @@ export default function AutomationPage() {
             ref={workspaceRef}
             className={
               "relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)] " +
-              (workspaceOpenMobile ? "block" : "hidden") +
-              " lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-170px)]"
+              (workspaceOpenMobile ? "block " : "hidden ") +
+              "lg:block lg:flex lg:flex-col lg:max-h-[calc(100vh-170px)]"
             }
           >
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
@@ -980,9 +1056,7 @@ export default function AutomationPage() {
             {/* Empty state */}
             {!activeWorkflow && (
               <div className="flex h-full flex-col">
-                {/* Make a scroll container so sticky works if needed */}
                 <div className="flex-1 min-h-0 overflow-y-auto lg:pr-1">
-                  {/* Recommended templates pinned near the top */}
                   <div className="sticky top-0 z-10 mb-4 rounded-xl border border-slate-700/80 bg-slate-900/85 px-4 py-3 backdrop-blur">
                     <p className="text-[11px] font-semibold text-amber-100/90">
                       Recommended workflow templates
@@ -1008,13 +1082,11 @@ export default function AutomationPage() {
                     </div>
                   </div>
 
-                  {/* Empty message below it */}
-                  <div className="flex flex-col items-center justify-center text-center text-[11px] text-[var(--avillo-cream-muted)] py-10">
-                    <p className="font-semibold text-[var(--avillo-cream-soft)]">
-                      No workflow selected
-                    </p>
+                  <div className="flex flex-col items-center justify-center py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+                    <p className="font-semibold text-[var(--avillo-cream-soft)]">No workflow selected</p>
                     <p className="mt-1 max-w-xs">
-                      Choose an existing workflow from the library, start with a recommended playbook above, or start from scratch with "+ New Workflow".
+                      Choose an existing workflow from the library, start with a recommended playbook
+                      above, or start from scratch with “+ New workflow”.
                     </p>
                   </div>
                 </div>
@@ -1073,10 +1145,7 @@ export default function AutomationPage() {
                         <input
                           value={activeWorkflow.name}
                           onChange={(e) =>
-                            setActiveWorkflow({
-                              ...activeWorkflow,
-                              name: e.target.value,
-                            })
+                            setActiveWorkflow({ ...activeWorkflow, name: e.target.value })
                           }
                           placeholder="Ex: New online lead follow-up"
                           className="avillo-input w-full text-slate-50"
@@ -1091,13 +1160,10 @@ export default function AutomationPage() {
                           rows={2}
                           value={activeWorkflow.description}
                           onChange={(e) =>
-                            setActiveWorkflow({
-                              ...activeWorkflow,
-                              description: e.target.value,
-                            })
+                            setActiveWorkflow({ ...activeWorkflow, description: e.target.value })
                           }
                           placeholder="Ex: Welcomes new website leads and reminds me to call in 24 hours."
-                          className="avillo-input w-full h-20 resize-none overflow-y-auto text-slate-50"
+                          className="avillo-input h-20 w-full resize-none overflow-y-auto text-slate-50"
                         />
                       </div>
                     </div>
@@ -1146,20 +1212,15 @@ export default function AutomationPage() {
 
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       {TRIGGERS.map((t) => {
-                        const active = activeWorkflow.trigger === t.id;
+                        const isActive = activeWorkflow.trigger === t.id;
                         return (
                           <button
                             key={t.id}
                             type="button"
-                            onClick={() =>
-                              setActiveWorkflow({
-                                ...activeWorkflow,
-                                trigger: t.id,
-                              })
-                            }
+                            onClick={() => setActiveWorkflow({ ...activeWorkflow, trigger: t.id })}
                             className={
                               "rounded-xl border px-3 py-2 text-left text-[10px] transition-colors " +
-                              (active
+                              (isActive
                                 ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
                                 : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-soft)] hover:border-amber-100/70 hover:text-amber-50")
                             }
@@ -1235,18 +1296,14 @@ export default function AutomationPage() {
                               (() => {
                                 const cfg = s.config || {};
                                 const join = cfg.join ?? "AND";
-
                                 const conditions: ConditionConfig[] = Array.isArray(cfg.conditions)
                                   ? cfg.conditions
                                   : [];
-
                                 if (!conditions.length) return "If condition is not configured yet";
-
                                 const parts = conditions.map((c) => {
                                   const opLabel = c.operator === "not_equals" ? "is not" : "is";
                                   return `${c.field} ${opLabel} ${c.value}`;
                                 });
-
                                 const condText = parts.join(` ${join} `);
                                 const thenCount = s.thenSteps?.length ?? 0;
                                 const elseCount = s.elseSteps?.length ?? 0;
@@ -1291,10 +1348,7 @@ export default function AutomationPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        setActiveWorkflow({
-                          ...activeWorkflow,
-                          active: !activeWorkflow.active,
-                        })
+                        setActiveWorkflow({ ...activeWorkflow, active: !activeWorkflow.active })
                       }
                       className={
                         "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
@@ -1389,6 +1443,14 @@ export default function AutomationPage() {
           setEditingStep(null);
         }}
         onSave={handleStepSave}
+      />
+
+      {/* Upgrade modal */}
+      <UpgradeModal
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        feature="autopilot"
+        source="autopilot_page"
       />
     </div>
   );

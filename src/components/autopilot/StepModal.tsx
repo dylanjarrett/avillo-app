@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { Dialog, DialogPanel, DialogTitle, Transition, TransitionChild } from "@headlessui/react";
 
 export type StepType = "SMS" | "EMAIL" | "TASK" | "WAIT" | "IF";
 
@@ -369,54 +370,80 @@ function normaliseIfConfig(raw: any): IfConfig {
     type === "IF" ? normaliseIfConfig(form ?? {}) : null;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div
-        className="
-        relative w-[96%] max-w-xl md:max-w-2xl max-h-[88vh]
-        overflow-y-auto rounded-2xl border border-slate-700/70
-        bg-gradient-to-b from-slate-900/90 to-slate-950
-        px-4 py-4 md:px-6 md:py-6 shadow-[0_0_60px_rgba(15,23,42,0.95)]
-      "
+  <Transition show={!!type} as={Fragment}>
+    <Dialog onClose={onClose} className="relative z-[9999]">
+      {/* Backdrop */}
+      <TransitionChild
+        as={Fragment}
+        enter="ease-out duration-150"
+        enterFrom="opacity-0"
+        enterTo="opacity-100"
+        leave="ease-in duration-120"
+        leaveFrom="opacity-100"
+        leaveTo="opacity-0"
       >
-        {/* Glow */}
-        <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" />
+      </TransitionChild>
 
-        {/* HEADER */}
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-[13px] font-semibold tracking-[0.02em] text-slate-50">
-              {type === "SMS" && (isEditing ? "Edit SMS" : "Add SMS message")}
-              {type === "EMAIL" &&
-                (isEditing ? "Edit email" : "Add email step")}
-              {type === "TASK" &&
-                (isEditing ? "Edit task" : "Add task reminder")}
-              {type === "WAIT" &&
-                (isEditing ? "Edit delay" : "Add wait / delay")}
-              {type === "IF" &&
-                (isEditing ? "Edit branch condition" : "Add IF / branch")}
-            </h3>
-            <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-              {type === "SMS" &&
-                "Short, conversational text. Use merge tags to personalize."}
-              {type === "EMAIL" &&
-                "Subject + full body. You can paste from Intelligence and tweak it here."}
-              {type === "TASK" &&
-                "This shows up as a to-do for you – keep it clear and action-focused."}
-              {type === "WAIT" &&
-                "Tell Avillo how long to pause before the next step runs."}
-              {type === "IF" &&
-                "Define a simple rule, then choose what should happen if it’s true or false."}
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)] hover:text-slate-100"
+      {/* Panel wrapper */}
+      <div className="fixed inset-0 flex items-center justify-center px-3 py-6 md:px-4 md:py-8">
+        <TransitionChild
+          as={Fragment}
+          enter="ease-out duration-150"
+          enterFrom="opacity-0 translate-y-2 scale-[0.99]"
+          enterTo="opacity-100 translate-y-0 scale-100"
+          leave="ease-in duration-120"
+          leaveFrom="opacity-100 translate-y-0 scale-100"
+          leaveTo="opacity-0 translate-y-2 scale-[0.99]"
+        >
+          <DialogPanel
+            className="
+              relative w-[96%] max-w-xl md:max-w-2xl max-h-[88vh]
+              overflow-y-auto rounded-2xl border border-slate-700/70
+              bg-gradient-to-b from-slate-900/90 to-slate-950
+              px-4 py-4 md:px-6 md:py-6 shadow-[0_0_60px_rgba(15,23,42,0.95)]
+            "
           >
-            ✕
-          </button>
-        </div>
+            {/* Glow */}
+            <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)] opacity-40 blur-3xl" />
+
+            {/* HEADER */}
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <DialogTitle className="text-[13px] font-semibold tracking-[0.02em] text-slate-50">
+                  {type === "SMS" && (isEditing ? "Edit SMS" : "Add SMS message")}
+                  {type === "EMAIL" &&
+                    (isEditing ? "Edit email" : "Add email step")}
+                  {type === "TASK" &&
+                    (isEditing ? "Edit task" : "Add task reminder")}
+                  {type === "WAIT" &&
+                    (isEditing ? "Edit delay" : "Add wait / delay")}
+                  {type === "IF" &&
+                    (isEditing ? "Edit branch condition" : "Add IF / branch")}
+                </DialogTitle>
+
+                <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                  {type === "SMS" &&
+                    "Short, conversational text. Use merge tags to personalize."}
+                  {type === "EMAIL" &&
+                    "Subject + full body. You can paste from Intelligence and tweak it here."}
+                  {type === "TASK" &&
+                    "This shows up as a to-do for you – keep it clear and action-focused."}
+                  {type === "WAIT" &&
+                    "Tell Avillo how long to pause before the next step runs."}
+                  {type === "IF" &&
+                    "Define a simple rule, then choose what should happen if it’s true or false."}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)] hover:text-slate-100"
+              >
+                ✕
+              </button>
+            </div>
 
         {/* SMS */}
         {type === "SMS" && (
@@ -1013,35 +1040,39 @@ function normaliseIfConfig(raw: any): IfConfig {
         )}
 
         {/* FOOTER */}
-        <div className="mt-6 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={onClose}
-            className="
-              inline-flex items-center justify-center rounded-full
-              border border-slate-600/80 bg-slate-900/80
-              px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
-              text-[var(--avillo-cream-muted)] hover:text-slate-100 hover:border-slate-500
-            "
-          >
-            Cancel
-          </button>
+            <div className="mt-6 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={onClose}
+                className="
+                  inline-flex items-center justify-center rounded-full
+                  border border-slate-600/80 bg-slate-900/80
+                  px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
+                  text-[var(--avillo-cream-muted)] hover:text-slate-100 hover:border-slate-500
+                "
+              >
+                Cancel
+              </button>
 
-          <button
-            type="button"
-            onClick={handleSave}
-            className="
-              inline-flex items-center justify-center rounded-full
-              border border-amber-100/80 bg-amber-50/10
-              px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
-              text-amber-100 shadow-[0_0_20px_rgba(248,250,252,0.18)]
-              hover:bg-amber-50/20
-            "
-          >
-            {isEditing ? "Update step" : "Save step"}
-          </button>
-        </div>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="
+                  inline-flex items-center justify-center rounded-full
+                  border border-amber-100/80 bg-amber-50/10
+                  px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
+                  text-amber-100 shadow-[0_0_20px_rgba(248,250,252,0.18)]
+                  hover:bg-amber-50/20
+                "
+              >
+                {isEditing ? "Update step" : "Save step"}
+              </button>
+            </div>
+          </DialogPanel>
+        </TransitionChild>
       </div>
-    </div>
-  );
+    </Dialog>
+  </Transition>
+);
+
 }

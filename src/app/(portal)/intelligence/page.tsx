@@ -9,9 +9,8 @@ import SellerEngine from "@/components/intelligence/engines/SellerEngine";
 import BuyerEngine from "@/components/intelligence/engines/BuyerEngine";
 import NeighborhoodEngine from "@/components/intelligence/engines/NeighborhoodEngine";
 
-import OutputHistory, {
-  OutputHistoryEntry,
-} from "@/components/intelligence/OutputHistory";
+import OutputHistory, { OutputHistoryEntry } from "@/components/intelligence/OutputHistory";
+import UpgradeModal from "@/components/billing/UpgradeModal";
 
 type ActiveEngine = "listing" | "seller" | "buyer" | "neighborhood";
 type EngineWire = ActiveEngine;
@@ -357,6 +356,36 @@ function EnginePill({
 /* ------------------------------------
  * Context Strip
  * -----------------------------------*/
+type AccountMe = {
+  plan?: string | null;
+  entitlements?: Record<string, any> | null;
+  [key: string]: any;
+};
+
+function isProAccount(account: AccountMe | null): boolean {
+  if (!account) return false;
+
+  // 1) Support top-level plan (legacy / future-proof)
+  const topLevelPlan = String(account.plan ?? "").toLowerCase();
+
+  // 2) Source of truth: entitlements
+  const entPlan = String((account.entitlements as any)?.plan ?? "").toLowerCase();
+  const isPaidTier = Boolean((account.entitlements as any)?.isPaidTier);
+
+  const plan = topLevelPlan || entPlan;
+
+  if (plan === "pro" || plan === "founding_pro") return true;
+  if (isPaidTier) return true;
+
+  // 3) Fallback: capability-based gating
+  const can = ((account.entitlements as any)?.can ?? {}) as Record<string, boolean>;
+  return Boolean(
+    can.INTELLIGENCE_SAVE ||
+    can.AUTOMATIONS_RUN ||
+    can.AUTOMATIONS_PERSIST
+  );
+}
+
 function ContextStrip({
   activeEngine,
   engineLabel,
@@ -378,6 +407,46 @@ function ContextStrip({
   allowContactContext: boolean;
   optionsLoading: boolean;
 }) {
+  const [account, setAccount] = useState<AccountMe | null>(null);
+  const [accountLoading, setAccountLoading] = useState(true);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+
+  const isPro = isProAccount(account);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAccount() {
+      try {
+        setAccountLoading(true);
+        const res = await fetch("/api/account/me");
+        if (!res.ok) {
+          if (!cancelled) setAccount(null);
+          return;
+        }
+        const data = (await res.json().catch(() => null)) as AccountMe | null;
+        if (!cancelled) setAccount(data);
+      } catch {
+        if (!cancelled) setAccount(null);
+      } finally {
+        if (!cancelled) setAccountLoading(false);
+      }
+    }
+
+    void loadAccount();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Starter should never persist an attached record
+  useEffect(() => {
+    if (accountLoading) return;
+    if (!isPro && engineContext.type !== "none") {
+      setEngineContext({ type: "none", id: null, label: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPro, accountLoading]);
 
   const contextBadgeLabel =
     engineContext.type === "listing"
@@ -389,6 +458,8 @@ function ContextStrip({
   const contextBadgeDetail =
     engineContext.label && engineContext.type !== "none"
       ? engineContext.label
+      : !isPro && !accountLoading
+      ? "Upgrade to attach runs to a listing or contact."
       : allowListingContext
       ? "Choose a listing for this run."
       : allowContactContext
@@ -396,106 +467,138 @@ function ContextStrip({
       : "This engine doesn’t attach to records.";
 
   return (
-    <section className="rounded-3xl border border-slate-800/80 bg-gradient-to-r from-slate-950/95 via-slate-900/80 to-slate-950/95 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
-      <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,244,233,0.18),transparent_55%)] opacity-60 blur-3xl" />
+    <>
+      <section className="rounded-3xl border border-slate-800/80 bg-gradient-to-r from-slate-950/95 via-slate-900/80 to-slate-950/95 px-5 py-4 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
+        <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,244,233,0.18),transparent_55%)] opacity-60 blur-3xl" />
 
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        {/* Left */}
-        <div className="space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
-            Context for this run
-          </p>
-          <p className="text-[11px] text-[var(--avillo-cream-soft)] max-w-xl">
-            Anchor your{" "}
-            <span className="font-semibold text-[var(--avillo-cream)]">
-              {engineLabel}
-            </span>{" "}
-            prompt to the right record.
-          </p>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          {/* Left */}
+          <div className="space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--avillo-cream-muted)]">
+              Context for this run
+            </p>
 
-          <div className="inline-flex items-center gap-2 rounded-full border border-slate-700/80 bg-slate-950/80 px-3 py-1 text-[10px]">
-            <span className="rounded-full border border-amber-100/60 bg-amber-50/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-amber-100">
-              {contextBadgeLabel}
-            </span>
-            <span className="truncate text-[var(--avillo-cream-soft)]">
-              {contextBadgeDetail}
-            </span>
+            <p className="text-[11px] text-[var(--avillo-cream-soft)] max-w-xl">
+              Anchor your{" "}
+              <span className="font-semibold text-[var(--avillo-cream)]">
+                {engineLabel}
+              </span>{" "}
+              prompt to the right record.
+            </p>
+
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-700/80 bg-slate-950/80 px-3 py-1 text-[10px]">
+              <span className="rounded-full border border-amber-100/60 bg-amber-50/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-amber-100">
+                {contextBadgeLabel}
+              </span>
+              <span className="truncate text-[var(--avillo-cream-soft)]">
+                {contextBadgeDetail}
+              </span>
+            </div>
+
+            {!accountLoading && !isPro && (
+              <p className="text-[10px] text-[var(--avillo-cream-muted)]">
+                Starter can generate and copy outputs. Pro unlocks attaching runs to listings/contacts for better continuity.
+              </p>
+            )}
+          </div>
+
+          {/* Right */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            {accountLoading ? (
+              <div className="min-w-[240px] rounded-2xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                Checking plan…
+              </div>
+            ) : !isPro ? (
+              <button
+                type="button"
+                onClick={() => setUpgradeOpen(true)}
+                className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 hover:bg-amber-50/20"
+              >
+                Upgrade to attach context
+              </button>
+            ) : (
+              <>
+                {allowListingContext && (
+                  <div className="flex flex-col gap-1 min-w-[220px]">
+                    <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                      Attach to listing
+                    </label>
+                    <select
+                      value={
+                        engineContext.type === "listing" && engineContext.id
+                          ? engineContext.id
+                          : ""
+                      }
+                      onChange={(e) => {
+                        const id = e.target.value || null;
+                        const label =
+                          listingOptions.find((l) => l.id === id)?.label ?? null;
+
+                        setEngineContext(
+                          id
+                            ? { type: "listing", id, label }
+                            : { type: "none", id: null, label: null }
+                        );
+                      }}
+                      disabled={optionsLoading}
+                      className="rounded-2xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] text-[var(--avillo-cream-soft)] outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
+                    >
+                      <option value="">No listing selected</option>
+                      {listingOptions.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {allowContactContext && (
+                  <div className="flex flex-col gap-1 min-w-[220px]">
+                    <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                      Attach to contact
+                    </label>
+                    <select
+                      value={
+                        engineContext.type === "contact" && engineContext.id
+                          ? engineContext.id
+                          : ""
+                      }
+                      onChange={(e) => {
+                        const id = e.target.value || null;
+                        const name =
+                          contactOptions.find((c) => c.id === id)?.name ?? null;
+
+                        setEngineContext(
+                          id
+                            ? { type: "contact", id, label: name }
+                            : { type: "none", id: null, label: null }
+                        );
+                      }}
+                      disabled={optionsLoading}
+                      className="rounded-2xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] text-[var(--avillo-cream-soft)] outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
+                    >
+                      <option value="">No contact selected</option>
+                      {contactOptions.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
+      </section>
 
-        {/* Right: selectors */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          {allowListingContext && (
-            <div className="flex flex-col gap-1 min-w-[220px]">
-              <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                Attach to listing
-              </label>
-              <select
-                value={
-                  engineContext.type === "listing" && engineContext.id
-                    ? engineContext.id
-                    : ""
-                }
-                onChange={(e) => {
-                  const id = e.target.value || null;
-                  const label =
-                    listingOptions.find((l) => l.id === id)?.label ?? null;
-
-                  setEngineContext(
-                    id
-                      ? { type: "listing", id, label }
-                      : { type: "none", id: null, label: null }
-                  );
-                }}
-                disabled={optionsLoading}
-                className="rounded-2xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] text-[var(--avillo-cream-soft)] outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
-              >
-                <option value="">No listing selected</option>
-                {listingOptions.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {allowContactContext && (
-            <div className="flex flex-col gap-1 min-w-[220px]">
-              <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                Attach to contact
-              </label>
-              <select
-                value={
-                  engineContext.type === "contact" && engineContext.id
-                    ? engineContext.id
-                    : ""
-                }
-                onChange={(e) => {
-                  const id = e.target.value || null;
-                  const name =
-                    contactOptions.find((c) => c.id === id)?.name ?? null;
-
-                  setEngineContext(
-                    id
-                      ? { type: "contact", id, label: name }
-                      : { type: "none", id: null, label: null }
-                  );
-                }}
-                disabled={optionsLoading}
-                className="rounded-2xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] text-[var(--avillo-cream-soft)] outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
-              >
-                <option value="">No contact selected</option>
-                {contactOptions.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
+      <UpgradeModal
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        feature="Attach context"
+        source="intelligence_context_strip"
+      />
+    </>
   );
 }

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUser } from "@/lib/auth";
+import { requireEntitlement } from "@/lib/entitlements";
 
 export const dynamic = "force-dynamic";
 
-// GET → all automations for logged-in user
+// GET → all automations for logged-in user (Starter OK: read-only)
 export async function GET() {
   const user = await getUser();
   if (!user) return NextResponse.json([], { status: 200 });
@@ -18,10 +19,13 @@ export async function GET() {
   return NextResponse.json(automations);
 }
 
-// POST → create a new automation
+// POST → create a new automation (Pro required)
 export async function POST(req: Request) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const gate = await requireEntitlement(user.id, "AUTOMATIONS_WRITE");
+  if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
   const body = await req.json();
   const {
@@ -59,13 +63,9 @@ export async function POST(req: Request) {
   });
 
   await prisma.automationStepGroup.create({
-    data: {
-      automationId: automation.id,
-      steps,
-    },
+    data: { automationId: automation.id, steps },
   });
 
-  // Optionally re-fetch with steps included if your UI wants it:
   const full = await prisma.automation.findFirst({
     where: { id: automation.id, userId: user.id },
     include: { steps: true },

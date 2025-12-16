@@ -2,6 +2,7 @@
 "use client";
 
 import React, { ReactNode, useEffect, useMemo, useState } from "react";
+import UpgradeModal from "@/components/billing/UpgradeModal";
 import type {
   IntelligencePack,
   ListingTabId,
@@ -197,6 +198,36 @@ function CopyToolbar({
   Shell + Row components
 ---------------------------------------- */
 
+type AccountMe = {
+  plan?: string | null;
+  entitlements?: Record<string, any> | null;
+  [key: string]: any;
+};
+
+function isProAccount(account: AccountMe | null): boolean {
+  if (!account) return false;
+
+  // 1) Support top-level plan (legacy / future-proof)
+  const topLevelPlan = String(account.plan ?? "").toLowerCase();
+
+  // 2) Source of truth: entitlements
+  const entPlan = String((account.entitlements as any)?.plan ?? "").toLowerCase();
+  const isPaidTier = Boolean((account.entitlements as any)?.isPaidTier);
+
+  const plan = topLevelPlan || entPlan;
+
+  if (plan === "pro" || plan === "founding_pro") return true;
+  if (isPaidTier) return true;
+
+  // 3) Fallback: capability-based gating
+  const can = ((account.entitlements as any)?.can ?? {}) as Record<string, boolean>;
+  return Boolean(
+    can.INTELLIGENCE_SAVE ||
+    can.AUTOMATIONS_RUN ||
+    can.AUTOMATIONS_PERSIST
+  );
+}
+
 type OutputShellProps = {
   children: ReactNode;
   onSaveOutput: () => void;
@@ -204,32 +235,102 @@ type OutputShellProps = {
 };
 
 function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps) {
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
-      {/* subtle glow */}
-      <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)]" />
+  const [account, setAccount] = useState<AccountMe | null>(null);
+  const [accountLoading, setAccountLoading] = useState(true);
 
-      {/* Header */}
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
-            AI Output
-          </p>
-          <h3 className="text-sm font-semibold text-slate-50">Studio canvas</h3>
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+
+  const isPro = isProAccount(account);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAccount() {
+      try {
+        setAccountLoading(true);
+        const res = await fetch("/api/account/me");
+        if (!res.ok) {
+          if (!cancelled) setAccount(null);
+          return;
+        }
+        const data = (await res.json().catch(() => null)) as AccountMe | null;
+        if (!cancelled) setAccount(data);
+      } catch {
+        if (!cancelled) setAccount(null);
+      } finally {
+        if (!cancelled) setAccountLoading(false);
+      }
+    }
+
+    void loadAccount();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const buttonLabel = accountLoading
+    ? "Checking plan…"
+    : isPro
+    ? savingOutput
+      ? "Saving…"
+      : "Save Prompt"
+    : "Save Prompt (Pro)";
+
+  return (
+    <>
+      <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
+        <div className="pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.2),transparent_55%)]" />
+
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
+              AI Output
+            </p>
+            <h3 className="text-sm font-semibold text-slate-50">Studio canvas</h3>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (accountLoading) return;
+              if (!isPro) {
+                setUpgradeOpen(true);
+                return;
+              }
+              onSaveOutput();
+            }}
+            disabled={accountLoading || (isPro && savingOutput)}
+            className={
+            "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] transition-colors " +
+            (accountLoading
+              ? "border-slate-700/70 bg-slate-900/40 text-slate-500 cursor-not-allowed"
+              : !isPro
+              ? // Starter: quieter, no glow
+                "border-slate-600/80 bg-slate-900/60 text-[var(--avillo-cream-soft)] hover:border-amber-100/60 hover:text-amber-50"
+              : // Pro: keep glow for the real action (Save Prompt)
+                "border-amber-100/70 bg-amber-50/10 text-amber-100 shadow-[0_0_30px_rgba(244,210,106,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60")
+          }
+          >
+            {buttonLabel}
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={onSaveOutput}
-          disabled={savingOutput}
-          className="inline-flex items-center rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {savingOutput ? "Saving…" : "Save Prompt"}
-        </button>
+        {!isPro && !accountLoading && (
+          <p className="mb-3 text-[10px] text-slate-300/90">
+            Starter can generate and copy outputs. Pro unlocks saved prompts (history) for reruns and iteration.
+          </p>
+        )}
+
+        {children}
       </div>
 
-      {children}
-    </div>
+      <UpgradeModal
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        feature="Save prompts"
+        source="output_card"
+      />
+    </>
   );
 }
 

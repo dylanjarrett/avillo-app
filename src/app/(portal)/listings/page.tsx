@@ -102,6 +102,7 @@ export default function ListingsPage() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [creatingNew, setCreatingNew] = useState(false);
 
   // form for the workspace
   const [form, setForm] = useState<typeof INITIAL_FORM>(INITIAL_FORM);
@@ -707,7 +708,7 @@ export default function ListingsPage() {
   async function handleNewListingClick() {
     captureListScrollY();
 
-    setSaving(true);
+    setCreatingNew(true);
     try {
       const res = await fetch("/api/listings/save", {
         method: "POST",
@@ -821,7 +822,7 @@ export default function ListingsPage() {
     } catch (err) {
       console.error("New listing error", err);
     } finally {
-      setSaving(false);
+      setCreatingNew(false);
     }
   }
 
@@ -1238,10 +1239,10 @@ export default function ListingsPage() {
             <button
               type="button"
               onClick={handleNewListingClick}
-              disabled={saving}
+              disabled={creatingNew}
               className="inline-flex w-full items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {saving ? "Creating..." : "+ New listing"}
+              {creatingNew ? "Creating..." : "+ New listing"}
             </button>
           </div>
         </div>

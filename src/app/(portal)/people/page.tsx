@@ -567,17 +567,17 @@ export default function CrmPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: activeContact.id,
-          firstName,
-          lastName,
-          email: activeContact.email || undefined,
-          phone: activeContact.phone || undefined,
-          stage: activeContact.stage, // already lowercase
-          label: activeContact.label || undefined,
-          type: activeContact.type || undefined, // lowercase
-          priceRange: activeContact.priceRange || undefined,
-          areas: activeContact.areas || undefined,
-          timeline: activeContact.timeline || undefined,
-          source: activeContact.source || undefined, // lowercase
+          firstName: firstName ?? "",
+          lastName: lastName ?? "",
+          email: activeContact.email ?? "",
+          phone: activeContact.phone ?? "",
+          stage: activeContact.stage, 
+          label: activeContact.label ?? "",
+          type: activeContact.type ?? null,
+          priceRange: activeContact.priceRange ?? "",
+          areas: activeContact.areas ?? "",
+          timeline: activeContact.timeline ?? "",
+          source: activeContact.source ?? "",
         }),
       });
 

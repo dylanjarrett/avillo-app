@@ -98,7 +98,7 @@ export default function BillingPage() {
       <PageHeader
         eyebrow="BILLING"
         title="Choose your Avillo plan"
-        subtitle="Upgrade to unlock advanced automation, continuous intelligence, and priority performance."
+        subtitle="Starter is built for control. Pro is built for leverage — automate follow-ups and reuse AI prompts with listing/contact context."
       />
 
       {/* Current plan / status */}
@@ -117,8 +117,9 @@ export default function BillingPage() {
             </p>
 
             <p className="mt-1 text-[11px] text-slate-400/90">
-              Paid plans include a <span className="font-semibold text-slate-200">30-day trial</span>. Upgrade anytime to unlock
-              branching Autopilot, run-now testing, and continuous intelligence.
+              Paid plans include a <span className="font-semibold text-slate-200">30-day trial</span>.{" "}
+              Upgrade anytime to unlock Autopilot workflows, branching logic, and saved AI prompts with
+              listing/contact context.
             </p>
           </div>
 
@@ -178,7 +179,7 @@ export default function BillingPage() {
             >
               Yearly{" "}
               <span className="block text-[9px] uppercase tracking-wide sm:inline">
-                Save 2 months
+                ~ Save 2 months
               </span>
             </button>
           </div>
@@ -207,10 +208,10 @@ export default function BillingPage() {
           </div>
 
           <ul className="mt-5 space-y-2 text-xs text-slate-200/90">
-            <li>• CRM + Listings</li>
-            <li>• Manual tasks & reminders</li>
-            <li>• Basic linear automations</li>
-            <li>• Limited AI runs (manual)</li>
+            <li>• People (CRM) + Listings + Intelligence Engines</li>
+            <li>• Create & save manual tasks and notes</li>
+            <li>• AI runs on-demand (limited)</li>
+            <li>• Manage buyer/seller ⇆ listing relationships</li>
           </ul>
 
           <button
@@ -248,14 +249,14 @@ export default function BillingPage() {
           <p className="text-xs text-slate-300">{display.pro.caption}</p>
 
           <div className="mt-3 rounded-xl border border-amber-200/30 bg-amber-100/10 px-3 py-2 text-[11px] text-amber-50/90">
-            30-day Pro trial included. Unlock branching Autopilot + continuous intelligence.
+            30-day Pro trial included. Unlock Autopilot + saved prompts with listing/contact context.
           </div>
 
           <ul className="mt-5 space-y-2 text-xs text-amber-50">
-            <li>• Full Autopilot + advanced workflows</li>
-            <li>• IF / ELSE branching logic</li>
-            <li>• Continuous AI intelligence & next actions</li>
-            <li>• Priority processing & support</li>
+            <li>• Autopilot (SMS, email & task automation)</li>
+            <li>• Expanded AI usage + priority processing</li>
+            <li>• Save AI engine prompts for reuse and iteration</li>
+            <li>• Attach AI context to a listing or contact</li>
           </ul>
 
           <button

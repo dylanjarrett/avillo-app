@@ -291,25 +291,45 @@ export async function POST(req: NextRequest) {
       const nextStage: PipelineStage =
         normalizedStage ?? (previousStage as PipelineStage) ?? "new";
 
-      contactRecord = await prisma.contact.update({
-        where: { id: existing.id },
-        data: {
-          firstName: firstName ?? existing.firstName,
-          lastName: lastName ?? existing.lastName,
-          email: email ?? existing.email,
-          phone: phone ?? existing.phone,
-          stage: nextStage,
-          label: label ?? existing.label,
-          type: normalizedType ?? existing.type,
-          priceRange: priceRange ?? existing.priceRange,
-          areas: areas ?? existing.areas,
-          timeline: timeline ?? existing.timeline,
-          source: normalizedSource ?? existing.source,
-        },
-        include: {
-          contactNotes: true,
-        },
-      });
+
+const data: any = {};
+
+if ("firstName" in body) data.firstName = body.firstName ?? "";
+if ("lastName" in body) data.lastName = body.lastName ?? "";
+if ("label" in body) data.label = body.label ?? "";
+
+if ("email" in body) data.email = body.email ?? "";
+if ("phone" in body) data.phone = body.phone ?? "";
+
+if ("stage" in body) {
+  const maybeStage = normalizeStage(body.stage);
+  if (maybeStage) data.stage = maybeStage;
+}
+
+if ("type" in body) {
+  if (body.type === null) {
+    data.type = null;
+  } else {
+    const v = String(body.type ?? "").toLowerCase().trim();
+    data.type = v.length ? v : null;
+  }
+}
+
+if ("priceRange" in body) data.priceRange = body.priceRange ?? "";
+if ("areas" in body) data.areas = body.areas ?? "";
+if ("timeline" in body) data.timeline = body.timeline ?? "";
+if ("source" in body) {
+  const v = String(body.source ?? "").toLowerCase().trim();
+  data.source = v;
+}
+
+contactRecord = await prisma.contact.update({
+  where: { id: existing.id },
+  data,
+  include: {
+    contactNotes: true,
+  },
+});
 
       await prisma.cRMActivity.create({
         data: {

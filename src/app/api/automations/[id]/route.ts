@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUser } from "@/lib/auth";
+import { requireEntitlement } from "@/lib/entitlements";
 
-// -------------------------------
-// GET: Single automation with steps + metadata
-// -------------------------------
+// GET: Single automation with steps + metadata (Starter OK)
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -25,12 +24,13 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   return NextResponse.json(automation);
 }
 
-// -------------------------------
-// PUT: Update automation + its step group
-// -------------------------------
+// PUT: Update automation + its step group (Pro required)
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const gate = await requireEntitlement(user.id, "AUTOMATIONS_WRITE");
+  if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
   const body = await req.json();
   const {
@@ -49,14 +49,11 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     steps,
   } = body;
 
-  // Make sure this automation belongs to the user
   const existing = await prisma.automation.findFirst({
     where: { id: params.id, userId: user.id },
   });
 
-  if (!existing) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   await prisma.automation.update({
     where: { id: existing.id },
@@ -79,13 +76,12 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
   if (steps) {
     await prisma.automationStepGroup.upsert({
-      where: { automationId: existing.id }, // assumes automationId is unique
+      where: { automationId: existing.id },
       update: { steps },
       create: { automationId: existing.id, steps },
     });
   }
 
-  // Re-fetch full automation with steps + recent runs so UI stays in sync
   const updatedFull = await prisma.automation.findFirst({
     where: { id: existing.id, userId: user.id },
     include: {
@@ -101,21 +97,18 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   return NextResponse.json(updatedFull);
 }
 
-// -------------------------------
-// DELETE: Cascade delete automation + logs
-// -------------------------------
+// DELETE: Cascade delete automation + logs (Pro required)
 export async function DELETE(_: Request, { params }: { params: { id: string } }) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const gate = await requireEntitlement(user.id, "AUTOMATIONS_WRITE");
+  if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
   const result = await prisma.automation.deleteMany({
     where: { id: params.id, userId: user.id },
   });
 
-  if (result.count === 0) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  // Assuming Prisma schema has ON DELETE CASCADE on related runs / stepGroup
+  if (result.count === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ success: true });
 }

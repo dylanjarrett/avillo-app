@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { requireEntitlement } from "@/lib/entitlements";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,17 +23,20 @@ function normalizeStatus(v: any) {
 export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.email) return NextResponse.json({ items: [], tasks: [] });
+    const email = session?.user?.email;
+    if (!email) return NextResponse.json({ items: [], tasks: [] });
 
     const prisma = await getPrisma();
-    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+    const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return NextResponse.json({ items: [], tasks: [] });
+
+    const gate = await requireEntitlement(user.id, "AUTOMATIONS_READ");
+    if (!gate.ok) return NextResponse.json({ items: [], tasks: [] });
 
     const url = new URL(req.url);
     const contactId = url.searchParams.get("contactId");
     if (!contactId) return NextResponse.json({ items: [], tasks: [] });
 
-    // Recent automation runs involving this contact
     const runs = await prisma.automationRun.findMany({
       where: {
         contactId,
@@ -57,7 +61,6 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    // Optional: tasks created by autopilot for this contact
     const tasks = await prisma.task.findMany({
       where: { userId: user.id, contactId, source: "AUTOPILOT" },
       orderBy: { createdAt: "desc" },
@@ -75,13 +78,10 @@ export async function GET(req: NextRequest) {
         stepIndex: s.stepIndex,
       }));
 
-      const counts = steps.reduce(
-        (acc, s) => {
-          acc[s.status] = (acc[s.status] || 0) + 1;
-          return acc;
-        },
-        {} as Record<string, number>
-      );
+      const counts = steps.reduce((acc, s) => {
+        acc[s.status] = (acc[s.status] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
 
       return {
         runId: r.id,
