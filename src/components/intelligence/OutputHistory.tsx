@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import UpgradeModal from "@/components/billing/UpgradeModal";
 
+/* ----------------------------------------
+  Types
+---------------------------------------- */
+
 export type OutputHistoryEntry = {
   id: string;
   createdAt: string;
@@ -45,9 +49,7 @@ function isProAccount(account: AccountMe | null): boolean {
   // 3) Fallback: capability-based gating
   const can = ((account.entitlements as any)?.can ?? {}) as Record<string, boolean>;
   return Boolean(
-    can.INTELLIGENCE_SAVE ||
-    can.AUTOMATIONS_RUN ||
-    can.AUTOMATIONS_PERSIST
+    can.INTELLIGENCE_SAVE || can.AUTOMATIONS_RUN || can.AUTOMATIONS_PERSIST
   );
 }
 
@@ -67,9 +69,43 @@ const ENGINE_FILTERS: { label: string; value: EngineFilter }[] = [
   { label: "Neighborhood", value: "neighborhood" },
 ];
 
+/* ----------------------------------------
+  Account cache (prevents flicker on remount)
+---------------------------------------- */
+
+let __accountCache: AccountMe | null | undefined = undefined;
+let __accountCachePromise: Promise<AccountMe | null> | null = null;
+
+async function getCachedAccount(): Promise<AccountMe | null> {
+  if (__accountCache !== undefined) return __accountCache;
+
+  if (!__accountCachePromise) {
+    __accountCachePromise = fetch("/api/account/me")
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json().catch(() => null)) as AccountMe | null;
+      })
+      .catch(() => null)
+      .finally(() => {
+        __accountCachePromise = null;
+      });
+  }
+
+  __accountCache = await __accountCachePromise;
+  return __accountCache;
+}
+
+/* ----------------------------------------
+  Component
+---------------------------------------- */
+
 export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHistoryProps) {
-  const [account, setAccount] = useState<AccountMe | null>(null);
-  const [accountLoading, setAccountLoading] = useState(true);
+  const [account, setAccount] = useState<AccountMe | null>(
+    __accountCache !== undefined ? __accountCache : null
+  );
+  const [accountLoading, setAccountLoading] = useState<boolean>(
+    __accountCache === undefined
+  );
 
   const [entries, setEntries] = useState<OutputHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false); // only used for Pro fetch
@@ -83,25 +119,24 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
 
   const isPro = isProAccount(account);
 
-  // Load plan
+  // Load plan (cached) — no "Checking plan..." UI
   useEffect(() => {
     let cancelled = false;
 
     async function loadAccount() {
-      try {
-        setAccountLoading(true);
-        const res = await fetch("/api/account/me");
-        if (!res.ok) {
-          if (!cancelled) setAccount(null);
-          return;
-        }
-        const data = (await res.json().catch(() => null)) as AccountMe | null;
-        if (!cancelled) setAccount(data);
-      } catch {
-        if (!cancelled) setAccount(null);
-      } finally {
-        if (!cancelled) setAccountLoading(false);
+      // If cache exists, do not show loading state
+      if (__accountCache !== undefined) {
+        setAccount(__accountCache ?? null);
+        setAccountLoading(false);
+        return;
       }
+
+      setAccountLoading(true);
+      const data = await getCachedAccount();
+      if (cancelled) return;
+
+      setAccount(data);
+      setAccountLoading(false);
     }
 
     void loadAccount();
@@ -217,8 +252,9 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
               Save prompts + reload them later
             </h3>
 
-            <p className="mt-2 text-[11px] text-slate-300/90 max-w-2xl">
-              Starter can generate and copy outputs, but saved prompts (history) and reloading past runs are available on Pro.
+            <p className="mt-2 max-w-2xl text-[11px] text-slate-300/90">
+              Starter can generate and copy outputs, but saved prompts (history) and reloading
+              past runs are available on Pro.
             </p>
 
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -262,8 +298,8 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
               </h3>
 
               <p className="mt-1 text-[11px] text-slate-300/90">
-                Every time you hit “Save Prompt”, Avillo logs the engine, the original input, and any attached listing or contact.
-                History auto-clears after 60 days.
+                Every time you hit “Save Prompt”, Avillo logs the engine, the original input, and
+                any attached listing or contact. History auto-clears after 60 days.
               </p>
             </div>
 
@@ -278,7 +314,9 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                       onClick={() => setEngineFilter(f.value)}
                       className={[
                         "px-3 py-1 rounded-full whitespace-nowrap transition-colors",
-                        active ? "bg-amber-200 text-slate-900" : "text-slate-200/80 hover:bg-slate-800",
+                        active
+                          ? "bg-amber-200 text-slate-900"
+                          : "text-slate-200/80 hover:bg-slate-800",
                       ].join(" ")}
                     >
                       {f.label}
@@ -312,9 +350,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
             </div>
           </header>
 
-          {accountLoading && (
-            <p className="text-[11px] text-slate-300/90">Checking your plan…</p>
-          )}
+          {/* No "Checking your plan..." line */}
 
           {!accountLoading && loading && (
             <p className="text-[11px] text-slate-300/90">Loading your recent AI runs…</p>
@@ -342,7 +378,10 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                   : "";
 
                 const timeLabel = created
-                  ? created.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+                  ? created.toLocaleTimeString(undefined, {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })
                   : "";
 
                 const contextLabel =
@@ -352,14 +391,17 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                     ? `Contact · ${entry.contextLabel}`
                     : "No record attached";
 
-                const preview = entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
+                const preview =
+                  entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
 
                 return (
                   <li
                     key={entry.id}
                     className={[
                       "group flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
-                      idx !== filteredEntries.length - 1 ? "border-b border-slate-800/80" : "",
+                      idx !== filteredEntries.length - 1
+                        ? "border-b border-slate-800/80"
+                        : "",
                       "lg:hover:bg-slate-900/70",
                     ].join(" ")}
                   >

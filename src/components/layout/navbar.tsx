@@ -60,7 +60,7 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
     <header className="sticky top-0 z-40 w-full border-b border-[#1c2836] bg-gradient-to-r from-[#040814] via-[#050b18] to-[#040814] shadow-[0_10px_40px_rgba(0,0,0,0.7)]">
       <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-5 lg:px-10">
         {/* LEFT – BRAND */}
-        <Link href="/dashboard" className="flex items-center gap-4">
+        <Link href="/dashboard" className="flex items-center gap-4 no-underline hover:no-underline">
           <div className="relative h-16 w-16 sm:h-20 sm:w-20">
             <Image
               src="/avillo-logo-cream.png"
@@ -74,11 +74,8 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
           </div>
 
           <div className="hidden flex-col leading-tight text-left sm:flex">
-            <span className="text-[0.68rem] font-medium tracking-[0.28em] text-[#f7f0d8] uppercase">
-              AI tools for real estate
-            </span>
-            <span className="mt-1 text-[0.7rem] text-[#9ca9c3]">
-              Workflows, listings, and CRM in one command center
+            <span className="text-[0.68rem] font-medium tracking-[0.32em] text-[#f7f0d8] uppercase">
+              AI Operating System for Real Estate
             </span>
           </div>
         </Link>
@@ -225,4 +222,4 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
       </div>
     </header>
   );
-}
+} 

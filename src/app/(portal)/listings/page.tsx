@@ -1608,7 +1608,22 @@ export default function ListingsPage() {
                         </div>
 
                         {workspacePhotos.length > 0 ? (
-                          <div className="mt-3 grid grid-cols-3 gap-3 md:grid-cols-4">
+                        <div
+                          className={[
+                            "mt-3",
+                            // Force vertical scrolling instead of wrapping forever
+                            "max-h-56 sm:max-h-64 md:max-h-72",
+                            "overflow-y-auto overflow-x-hidden",
+                            // Nice scrolling on iOS + spacing for scrollbar
+                            "pr-1",
+                            "[&::-webkit-scrollbar]:w-2",
+                            "[&::-webkit-scrollbar-track]:bg-transparent",
+                            "[&::-webkit-scrollbar-thumb]:rounded-full",
+                            "[&::-webkit-scrollbar-thumb]:bg-slate-700/70",
+                            "scrollbar-thin scrollbar-thumb-slate-700/70 scrollbar-track-transparent",
+                          ].join(" ")}
+                        >
+                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                             {workspacePhotos.map((photo) => (
                               <div
                                 key={photo.url}
@@ -1633,10 +1648,7 @@ export default function ListingsPage() {
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    removePhoto(
-                                      form.id as string,
-                                      photo.url
-                                    )
+                                    removePhoto(form.id as string, photo.url)
                                   }
                                   className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-[10px] text-slate-50 hover:bg-red-600/80"
                                   title="Delete photo"
@@ -1648,10 +1660,7 @@ export default function ListingsPage() {
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    setCoverPhoto(
-                                      form.id as string,
-                                      photo.url
-                                    )
+                                    setCoverPhoto(form.id as string, photo.url)
                                   }
                                   className={
                                     "absolute inset-x-1 bottom-1 rounded-full px-2 py-1 text-[10px] font-medium transition " +
@@ -1660,19 +1669,17 @@ export default function ListingsPage() {
                                       : "bg-black/55 text-[var(--avillo-cream-soft)] hover:bg-black/75")
                                   }
                                 >
-                                  {photo.isCover
-                                    ? "Cover photo"
-                                    : "Set as cover"}
+                                  {photo.isCover ? "Cover photo" : "Set as cover"}
                                 </button>
                               </div>
                             ))}
                           </div>
-                        ) : (
-                          <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">
-                            No photos added yet. Upload at least one image to
-                            make this workspace feel alive.
-                          </p>
-                        )}
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">
+                          No photos added yet. Upload at least one image to make this workspace feel alive.
+                        </p>
+                      )}
                       </>
                     ) : (
                       <p className="mt-3 text-[11px] text-[var(--avillo-cream-muted)]">

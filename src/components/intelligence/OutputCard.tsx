@@ -204,6 +204,29 @@ type AccountMe = {
   [key: string]: any;
 };
 
+// --- Simple in-memory account cache to prevent UI flicker across remounts ---
+let __accountCache: AccountMe | null | undefined = undefined;
+let __accountCachePromise: Promise<AccountMe | null> | null = null;
+
+async function getCachedAccount(): Promise<AccountMe | null> {
+  if (__accountCache !== undefined) return __accountCache;
+
+  if (!__accountCachePromise) {
+    __accountCachePromise = fetch("/api/account/me")
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json().catch(() => null)) as AccountMe | null;
+      })
+      .catch(() => null)
+      .finally(() => {
+        __accountCachePromise = null;
+      });
+  }
+
+  __accountCache = await __accountCachePromise;
+  return __accountCache;
+}
+
 function isProAccount(account: AccountMe | null): boolean {
   if (!account) return false;
 
@@ -235,8 +258,12 @@ type OutputShellProps = {
 };
 
 function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps) {
-  const [account, setAccount] = useState<AccountMe | null>(null);
-  const [accountLoading, setAccountLoading] = useState(true);
+  const [account, setAccount] = useState<AccountMe | null>(
+    __accountCache !== undefined ? __accountCache : null
+  );
+  const [accountLoading, setAccountLoading] = useState<boolean>(
+    __accountCache === undefined
+  );
 
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
@@ -246,20 +273,19 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
     let cancelled = false;
 
     async function loadAccount() {
-      try {
-        setAccountLoading(true);
-        const res = await fetch("/api/account/me");
-        if (!res.ok) {
-          if (!cancelled) setAccount(null);
-          return;
-        }
-        const data = (await res.json().catch(() => null)) as AccountMe | null;
-        if (!cancelled) setAccount(data);
-      } catch {
-        if (!cancelled) setAccount(null);
-      } finally {
-        if (!cancelled) setAccountLoading(false);
+      // If cache exists, no loading state (prevents glow-delay on remount)
+      if (__accountCache !== undefined) {
+        setAccount(__accountCache ?? null);
+        setAccountLoading(false);
+        return;
       }
+
+      setAccountLoading(true);
+      const data = await getCachedAccount();
+      if (cancelled) return;
+
+      setAccount(data);
+      setAccountLoading(false);
     }
 
     void loadAccount();
@@ -268,12 +294,13 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
     };
   }, []);
 
-  const buttonLabel = accountLoading
-    ? "Checking plan…"
-    : isPro
+  // Keep label stable; only show (Pro) once we *know* they're not Pro
+  const buttonLabel = isPro
     ? savingOutput
       ? "Saving…"
       : "Save Prompt"
+    : accountLoading
+    ? "Save Prompt"
     : "Save Prompt (Pro)";
 
   return (
@@ -292,24 +319,26 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
           <button
             type="button"
             onClick={() => {
+              // Avoid flicker without showing "Checking plan…"
               if (accountLoading) return;
+
               if (!isPro) {
                 setUpgradeOpen(true);
                 return;
               }
+
               onSaveOutput();
             }}
-            disabled={accountLoading || (isPro && savingOutput)}
+            // NOTE: no disabled while loading so it looks steady,
+            // but we still block click above while loading.
+            disabled={isPro && savingOutput}
             className={
-            "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] transition-colors " +
-            (accountLoading
-              ? "border-slate-700/70 bg-slate-900/40 text-slate-500 cursor-not-allowed"
-              : !isPro
-              ? // Starter: quieter, no glow
-                "border-slate-600/80 bg-slate-900/60 text-[var(--avillo-cream-soft)] hover:border-amber-100/60 hover:text-amber-50"
-              : // Pro: keep glow for the real action (Save Prompt)
-                "border-amber-100/70 bg-amber-50/10 text-amber-100 shadow-[0_0_30px_rgba(244,210,106,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60")
-          }
+              "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] transition-colors " +
+              // IMPORTANT: while loading, render as Pro style to prevent “delayed glow”
+              (isPro || accountLoading
+                ? "border-amber-100/70 bg-amber-50/10 text-amber-100 shadow-[0_0_30px_rgba(244,210,106,0.22)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+                : "border-slate-600/80 bg-slate-900/60 text-[var(--avillo-cream-soft)] hover:border-amber-100/60 hover:text-amber-50")
+            }
           >
             {buttonLabel}
           </button>
