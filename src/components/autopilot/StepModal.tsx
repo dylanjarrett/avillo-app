@@ -81,6 +81,9 @@ const CONDITION_OPERATORS = [
   { value: "not_equals", label: "is not" },
 ];
 
+// ✅ Shared default for ALL wait steps (main + branch)
+const DEFAULT_WAIT = { amount: 1, unit: "days" as const, hours: 24 };
+
 // Scope helper: which fields should be visible?
 function getConditionFields(scope: ConditionScope | undefined) {
   if (scope === "contact") return CONTACT_CONDITION_FIELDS;
@@ -216,20 +219,14 @@ function normaliseIfConfig(raw: any): IfConfig {
 
     // WAIT defaults
     if (type === "WAIT") {
-      const hours = Number(
-        (initialConfig && initialConfig.hours) ??
-          (initialConfig && initialConfig.amount) ??
-          24
-      );
-      const safeHours = Number.isNaN(hours) || hours <= 0 ? 24 : hours;
-      const unit = initialConfig?.unit ?? "hours";
-      const amount = initialConfig?.amount ?? safeHours;
+      // Editing an existing WAIT -> normalize it
+      if (initialConfig) {
+        setForm(normalizeWaitConfig(initialConfig));
+        return;
+      }
 
-      setForm({
-        amount,
-        unit,
-        hours: safeHours,
-      });
+      // New WAIT -> default to 1 day
+      setForm(DEFAULT_WAIT);
       return;
     }
 
@@ -253,6 +250,42 @@ function normaliseIfConfig(raw: any): IfConfig {
     conditionFields.length,
   ]);
 
+// Wait Normalizers (Branch + Main)
+  function normalizeWaitConfig(raw: any) {
+  const unit: "hours" | "days" | "weeks" | "months" =
+    raw?.unit === "days" || raw?.unit === "weeks" || raw?.unit === "months"
+      ? raw.unit
+      : "hours";
+
+  const amountRaw = raw?.amount;
+  const amount =
+    typeof amountRaw === "number"
+      ? amountRaw
+      : Number.parseFloat(String(amountRaw ?? ""));
+
+  const safeAmount = !Number.isFinite(amount) || amount <= 0 ? 1 : amount;
+
+  const multiplier: Record<typeof unit, number> = {
+    hours: 1,
+    days: 24,
+    weeks: 24 * 7,
+    months: 24 * 30,
+  };
+
+  return {
+    amount: safeAmount,
+    unit,
+    hours: safeAmount * multiplier[unit],
+  };
+}
+
+function normalizeBranchWaitSteps(steps: BranchStep[]) {
+  return steps.map((s) => {
+    if (s.type !== "WAIT") return s;
+    return { ...s, config: normalizeWaitConfig(s.config) };
+  });
+}
+
   /* ------------------------------------
    * Save
    * -----------------------------------*/
@@ -260,25 +293,27 @@ function normaliseIfConfig(raw: any): IfConfig {
     if (!type) return;
 
     if (type === "IF") {
-      const cfg = normaliseIfConfig(form ?? {});
-      const cleaned = cfg.conditions.filter(
-        (c) => c.field && c.value && c.operator
-      );
-      if (!cleaned.length) {
-        alert("Add at least one condition for this IF step.");
-        return;
-      }
+  const cfg = normaliseIfConfig(form ?? {});
+  const cleaned = cfg.conditions.filter((c) => c.field && c.value && c.operator);
 
-      onSave(
-        {
-          join: cfg.join,
-          conditions: cleaned,
-        },
-        thenSteps,
-        elseSteps
-      );
-      return;
-    }
+  if (!cleaned.length) {
+    alert("Add at least one condition for this IF step.");
+    return;
+  }
+
+  const normalizedThen = normalizeBranchWaitSteps(thenSteps);
+  const normalizedElse = normalizeBranchWaitSteps(elseSteps);
+
+  onSave(
+    {
+      join: cfg.join,
+      conditions: cleaned,
+    },
+    normalizedThen,
+    normalizedElse
+  );
+  return;
+}
 
     if (type === "WAIT") {
       const rawAmount = form.amount;
@@ -324,12 +359,12 @@ function normaliseIfConfig(raw: any): IfConfig {
       id: crypto.randomUUID(),
       type: stepType,
       config:
-        stepType === "WAIT"
-          ? { amount: 4, unit: "hours", hours: 4 }
-          : stepType === "EMAIL"
-          ? { subject: "", body: "" }
-          : { text: "" },
-    };
+      stepType === "WAIT"
+        ? DEFAULT_WAIT
+        : stepType === "EMAIL"
+        ? { subject: "", body: "" }
+        : { text: "" },
+        };
 
     if (branch === "then") {
       setThenSteps((p) => [...p, newStep]);

@@ -1,8 +1,7 @@
-// src/lib/automations/runAutomation.ts
-
 import { prisma } from "@/lib/prisma";
 import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messaging";
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
+import { requireEntitlement } from "@/lib/entitlements";
 
 /* ------------------------------------
  * Types
@@ -25,6 +24,11 @@ type RunContext = {
   trigger: string;
   payload?: any;
 };
+
+async function canRunAutomations(userId: string) {
+  const gate = await requireEntitlement(userId, "AUTOMATIONS_RUN");
+  return gate.ok;
+}
 
 /* ------------------------------------
  * IF / Condition helpers
@@ -126,12 +130,14 @@ function parseDueAt(raw: any): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/**
- * If the TASK step explicitly includes a timestamp or "due in X" fields,
- * compute a dueAt using `base`. Otherwise return null (caller will use cursorTime).
- */
 function computeExplicitDueAtFromTaskConfig(config: any, base: Date): Date | null {
-  const direct = config?.dueAt ?? config?.taskAt ?? config?.reminderAt ?? config?.date ?? config?.datetime ?? null;
+  const direct =
+    config?.dueAt ??
+    config?.taskAt ??
+    config?.reminderAt ??
+    config?.date ??
+    config?.datetime ??
+    null;
 
   const parsed = parseDueAt(direct);
   if (parsed) return parsed;
@@ -150,12 +156,7 @@ function computeExplicitDueAtFromTaskConfig(config: any, base: Date): Date | nul
 
 type WaitUnit = "hours" | "days" | "weeks" | "months";
 
-/**
- * Normalizes WAIT config across versions.
- * Prefers new shape: { amount, unit } (or { value, unit }) and falls back to legacy { hours } / { days }.
- */
 function normalizeWait(config: any): { amount: number; unit: WaitUnit } | null {
-  // new config first
   const amountRaw = config?.amount ?? config?.value ?? null;
   const unitRaw = String(config?.unit ?? "").toLowerCase().trim();
   const amount = Number(amountRaw ?? 0);
@@ -169,7 +170,6 @@ function normalizeWait(config: any): { amount: number; unit: WaitUnit } | null {
     return { amount, unit };
   }
 
-  // legacy fallback
   const legacyHours = Number(config?.hours ?? 0);
   if (Number.isFinite(legacyHours) && legacyHours > 0) {
     return { amount: legacyHours, unit: "hours" };
@@ -201,7 +201,6 @@ function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
     return d;
   }
 
-  // months
   d.setMonth(d.getMonth() + amount);
   return d;
 }
@@ -211,6 +210,9 @@ function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
  * -----------------------------------*/
 
 export async function runAutomation(automationId: string, steps: AutomationStep[], ctx: RunContext) {
+  // ✅ Pre-flight: if user is not entitled (ex: downgraded), bail out silently.
+  if (!(await canRunAutomations(ctx.userId))) return;
+
   const [user, contact, listing] = await Promise.all([
     prisma.user.findUnique({ where: { id: ctx.userId } }),
     ctx.contactId
@@ -222,13 +224,13 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
   ]);
 
   const templateVars: Record<string, string> = {
-    firstName: contact?.firstName ?? contact?.name?.split(" ")[0] ?? "",
+    firstName: contact?.firstName ?? (contact as any)?.name?.split(" ")[0] ?? "",
     agentName: user?.name ?? "",
-    propertyAddress: listing?.address ?? listing?.fullAddress ?? listing?.streetAddress ?? "",
+    propertyAddress: (listing as any)?.address ?? (listing as any)?.fullAddress ?? (listing as any)?.streetAddress ?? "",
   };
 
-  let toEmail: string | null = contact?.email ?? contact?.primaryEmail ?? null;
-  let toPhone: string | null = contact?.phone ?? contact?.phoneNumber ?? null;
+  let toEmail: string | null = (contact as any)?.email ?? (contact as any)?.primaryEmail ?? null;
+  let toPhone: string | null = (contact as any)?.phone ?? (contact as any)?.phoneNumber ?? null;
 
   // Test mode: if no contact, send emails to the user only
   if (!contact) {
@@ -272,8 +274,17 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
     });
   };
 
-  // ✅ Virtual clock
   let cursorTime = run.executedAt ?? new Date();
+
+  const stopForDowngrade = async (stepType: StepType) => {
+    await recordStep({
+      stepType,
+      status: "skipped",
+      message: "Skipped: plan no longer allows automations.",
+    });
+    runStatus = "failed";
+    runMessage = "Automation stopped due to plan downgrade.";
+  };
 
   const executeSteps = async (stepsToRun: AutomationStep[]) => {
     for (const step of stepsToRun) {
@@ -281,6 +292,11 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
         switch (step.type) {
           case "SMS": {
             if (!toPhone) throw new Error("No phone number on contact.");
+
+            if (!(await canRunAutomations(ctx.userId))) {
+              await stopForDowngrade("SMS");
+              return;
+            }
 
             const body = renderTemplate(step.config?.text ?? "", templateVars);
             await sendAutomationSms({ to: toPhone, body });
@@ -296,6 +312,11 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
 
           case "EMAIL": {
             if (!toEmail) throw new Error("No email on contact.");
+
+            if (!(await canRunAutomations(ctx.userId))) {
+              await stopForDowngrade("EMAIL");
+              return;
+            }
 
             const subject = renderTemplate(step.config?.subject ?? "", templateVars);
             const html = renderTemplate((step.config?.body ?? "").replace(/\n/g, "<br />"), templateVars);
@@ -345,10 +366,14 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
           }
 
           case "TASK": {
-            const title = step.config?.title ?? step.config?.taskTitle ?? step.config?.name ?? step.config?.text ?? "Task";
+            const title =
+              step.config?.title ??
+              step.config?.taskTitle ??
+              step.config?.name ??
+              step.config?.text ??
+              "Task";
 
             const notes = step.config?.notes ?? step.config?.description ?? "";
-
             const explicitDueAt = computeExplicitDueAtFromTaskConfig(step.config, cursorTime);
             const dueAt = explicitDueAt ?? cursorTime;
 

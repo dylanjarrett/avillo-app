@@ -1,4 +1,3 @@
-// src/app/api/stripe/webhook/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
@@ -91,6 +90,61 @@ function getPrimaryPriceId(sub: Stripe.Subscription): string | null {
   return sub.items?.data?.[0]?.price?.id ?? null;
 }
 
+function isProPlan(plan: Plan | null | undefined) {
+  return plan === "PRO" || plan === "FOUNDING_PRO";
+}
+
+/**
+ * Pause all automations on downgrade/cancel and write an audit entry.
+ * NOTE: Your Prisma model is CRMActivity, so the client accessor is prisma.cRMActivity.
+ */
+async function pauseAllAutomationsForUser(params: {
+  userId: string;
+  reason: string;
+  fromPlan?: Plan | null;
+  toPlan?: Plan | null;
+  fromStatus?: Status | null;
+  toStatus?: Status | null;
+}) {
+  const { prisma } = await import("@/lib/prisma");
+  const { userId, reason, fromPlan, toPlan, fromStatus, toStatus } = params;
+
+  // Pause any currently-active automation (do NOT delete)
+  const paused = await prisma.automation.updateMany({
+    where: { userId, active: true },
+    data: {
+      active: false,
+      status: "paused",
+      updatedAt: new Date(),
+    },
+  });
+
+  // ✅ Idempotency: Stripe can fire multiple events. Only write audit if we actually changed something.
+  if (paused.count > 0) {
+    try {
+      await prisma.cRMActivity.create({
+        data: {
+          userId,
+          type: "automation_paused",
+          summary: "Automations paused due to plan change",
+          data: {
+            reason,
+            fromPlan,
+            toPlan,
+            fromStatus,
+            toStatus,
+            at: new Date().toISOString(),
+            pausedCount: paused.count,
+          },
+        },
+      });
+    } catch (e) {
+      // Never fail the webhook due to audit trail write.
+      console.warn("[stripe-webhook] Failed to write CRMActivity audit:", e);
+    }
+  }
+}
+
 async function updateUserByCustomerId(params: {
   stripeCustomerId: string;
   subscription: Stripe.Subscription;
@@ -101,11 +155,8 @@ async function updateUserByCustomerId(params: {
   const plan = planFromPriceId(priceId) ?? "STARTER";
   const status = statusFromStripe(subscription);
 
-  // These keys are what Stripe sends in Subscription payloads
   const trialEndUnix = getUnixField(subscription, "trial_end");
-  const currentPeriodEndUnix = 
-                getUnixField(subscription, "current_period_end");
-                getUnixField(subscription, "trial_end");
+  const currentPeriodEndUnix = getUnixField(subscription, "current_period_end");
 
   const trialEndsAt = unixToDate(trialEndUnix);
   const currentPeriodEnd = unixToDate(currentPeriodEndUnix);
@@ -114,13 +165,16 @@ async function updateUserByCustomerId(params: {
 
   const user = await prisma.user.findFirst({
     where: { stripeCustomerId },
-    select: { id: true },
+    select: { id: true, plan: true, subscriptionStatus: true },
   });
 
   if (!user) {
     console.warn("[stripe-webhook] No user found for stripeCustomerId:", stripeCustomerId);
     return;
   }
+
+  const prevPlan = (user.plan as Plan) ?? "STARTER";
+  const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
 
   await prisma.user.update({
     where: { id: user.id },
@@ -133,6 +187,28 @@ async function updateUserByCustomerId(params: {
       stripePriceId: priceId ?? undefined,
     },
   });
+
+  /**
+   * ✅ Pause rules (safe):
+   * - If user previously had Pro (PRO/FOUNDING_PRO) and now they effectively lose it:
+   *   - plan becomes STARTER, OR
+   *   - subscription status becomes PAST_DUE / CANCELED / NONE
+   */
+  const hadPro = isProPlan(prevPlan);
+  const lostProByPlan = hadPro && plan === "STARTER";
+  const lostProByStatus =
+    hadPro && (status === "PAST_DUE" || status === "CANCELED" || status === "NONE");
+
+  if (lostProByPlan || lostProByStatus) {
+    await pauseAllAutomationsForUser({
+      userId: user.id,
+      reason: lostProByPlan ? "DOWNGRADED_TO_STARTER" : "SUBSCRIPTION_NOT_ACTIVE",
+      fromPlan: prevPlan,
+      toPlan: plan,
+      fromStatus: prevStatus,
+      toStatus: status,
+    });
+  }
 }
 
 async function handleCanceled(stripeCustomerId: string) {
@@ -140,13 +216,16 @@ async function handleCanceled(stripeCustomerId: string) {
 
   const user = await prisma.user.findFirst({
     where: { stripeCustomerId },
-    select: { id: true },
+    select: { id: true, plan: true, subscriptionStatus: true },
   });
 
   if (!user) {
     console.warn("[stripe-webhook] No user found for stripeCustomerId:", stripeCustomerId);
     return;
   }
+
+  const prevPlan = (user.plan as Plan) ?? "STARTER";
+  const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
 
   // V1 behavior: cancel -> downgrade immediately to STARTER
   await prisma.user.update({
@@ -159,6 +238,16 @@ async function handleCanceled(stripeCustomerId: string) {
       stripeSubscriptionId: null,
       stripePriceId: null,
     },
+  });
+
+  // Also pause everything immediately (safety)
+  await pauseAllAutomationsForUser({
+    userId: user.id,
+    reason: "SUBSCRIPTION_CANCELED",
+    fromPlan: prevPlan,
+    toPlan: "STARTER",
+    fromStatus: prevStatus,
+    toStatus: "CANCELED",
   });
 }
 

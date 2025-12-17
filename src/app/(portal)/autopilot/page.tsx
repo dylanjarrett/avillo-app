@@ -7,7 +7,6 @@ import { FilterPill } from "@/components/ui/filter-pill";
 import { useAutopilotMobileWorkspaceScroll } from "@/hooks/useAutopilotMobileWorkspaceScroll";
 
 const UpgradeModal = require("@/components/billing/UpgradeModal").default as any;
-const entitlementLib = require("@/lib/entitlements") as any;
 
 /* ------------------------------------
  * Types
@@ -33,6 +32,8 @@ type AutomationWorkflow = {
   description: string;
   trigger: string | null;
   active: boolean;
+  effectiveActive?: boolean;
+  lockedReason?: string | null;
   steps: AutomationStep[];
   createdAt?: string;
   updatedAt?: string;
@@ -317,6 +318,29 @@ function triggerPlainSentence(trigger: string | null): string | null {
   }
 }
 
+function formatWait(config: any): string {
+  const amountRaw = config?.amount;
+  const unitRaw = config?.unit;
+
+  const amount =
+    typeof amountRaw === "number" ? amountRaw : Number.parseFloat(String(amountRaw ?? ""));
+  const unit = (unitRaw as string | undefined)?.toLowerCase();
+
+  const allowed = new Set(["hours", "days", "weeks", "months"]);
+
+  // ✅ Preferred: show exactly what the user chose
+  if (Number.isFinite(amount) && amount > 0 && unit && allowed.has(unit)) {
+    const singular = unit.endsWith("s") ? unit.slice(0, -1) : unit;
+    const label = amount === 1 ? singular : unit;
+    return `Wait ${amount} ${label}`;
+  }
+  const hoursRaw = config?.hours;
+  const hours =
+    typeof hoursRaw === "number" ? hoursRaw : Number.parseFloat(String(hoursRaw ?? ""));
+  if (Number.isFinite(hours) && hours > 0) return `Wait ${hours} hours`;
+  return "Wait ?";
+}
+
 function getConditionScopeForTrigger(
   trigger: string | null
 ): "contact" | "listing" | "both" | undefined {
@@ -337,19 +361,8 @@ function isWorkflowBlank(wf: AutomationWorkflow | null): boolean {
 
 function safeHasAutopilotEntitlement(account: AccountMe | null): boolean {
   if (!account) return false;
-
   const ent = (account.entitlements ?? {}) as any;
-
-  // Source of truth: entitlements
-  const plan = String(ent.plan ?? account.plan ?? "").toLowerCase();
-  const isPaidTier = Boolean(ent.isPaidTier);
-
-  if (plan === "pro" || plan === "founding_pro") return true;
-  if (isPaidTier) return true;
-
-  // Capability-based fallback
-  const can = (ent.can ?? {}) as Record<string, boolean>;
-  return Boolean(can.AUTOMATIONS_RUN || can.AUTOMATIONS_PERSIST);
+  return Boolean(ent.isPaidTier);
 }
 
 
@@ -358,7 +371,7 @@ function safeHasAutopilotEntitlement(account: AccountMe | null): boolean {
  * -----------------------------------*/
 
 export default function AutomationPage() {
-  const [filter, setFilter] = useState<"all" | "active" | "paused">("active");
+  const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
   const [search, setSearch] = useState("");
   const [workflows, setWorkflows] = useState<AutomationWorkflow[]>([]);
   const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
@@ -398,8 +411,12 @@ export default function AutomationPage() {
 
   // ---------- Derived counts for workflow filter pills ----------
   const totalWorkflows = workflows.length;
-  const activeWorkflowsCount = workflows.filter((w) => w.active).length;
-  const pausedWorkflowsCount = workflows.filter((w) => !w.active).length;
+
+const isEffectivelyActive = (w: AutomationWorkflow) =>
+  (w.effectiveActive ?? w.active) === true;
+
+const activeWorkflowsCount = workflows.filter(isEffectivelyActive).length;
+const pausedWorkflowsCount = workflows.filter((w) => !isEffectivelyActive(w)).length;
 
   // ---------- Builder completeness (for the mini progress rail) ----------
   const builderHasName = !!activeWorkflow?.name.trim();
@@ -596,7 +613,14 @@ export default function AutomationPage() {
             name: w.name ?? "",
             description: w.description ?? "",
             trigger: w.trigger ?? null,
+
+            // DB truth
             active: w.active ?? true,
+
+            // UI truth coming from API (forced paused when plan can't run)
+            effectiveActive: typeof w.effectiveActive === "boolean" ? w.effectiveActive : (w.active ?? true),
+            lockedReason: w.lockedReason ?? null,
+
             steps: stepArray.map((s: any) => ({
               id: s.id ?? crypto.randomUUID(),
               type: s.type as StepType,
@@ -639,8 +663,8 @@ export default function AutomationPage() {
   const filteredWorkflows = useMemo(() => {
     let list = workflows.slice();
 
-    if (filter === "active") list = list.filter((w) => w.active);
-    else if (filter === "paused") list = list.filter((w) => !w.active);
+    if (filter === "active") list = list.filter((w) => (w.effectiveActive ?? w.active) === true);
+    else if (filter === "paused") list = list.filter((w) => (w.effectiveActive ?? w.active) !== true);
 
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -754,15 +778,22 @@ export default function AutomationPage() {
       const saved = await res.json();
 
       const normalized: AutomationWorkflow = {
-        id: saved.id,
-        name: saved.name ?? wfToSave.name,
-        description: saved.description ?? wfToSave.description,
-        trigger: saved.trigger ?? wfToSave.trigger,
-        active: saved.active ?? wfToSave.active,
-        steps: wfToSave.steps,
-        createdAt: saved.createdAt,
-        updatedAt: saved.updatedAt,
-      };
+      id: saved.id,
+      name: saved.name ?? wfToSave.name,
+      description: saved.description ?? wfToSave.description,
+      trigger: saved.trigger ?? wfToSave.trigger,
+
+      active: saved.active ?? wfToSave.active,
+      effectiveActive:
+        typeof saved.effectiveActive === "boolean"
+          ? saved.effectiveActive
+          : (saved.active ?? wfToSave.active),
+      lockedReason: saved.lockedReason ?? null,
+
+      steps: wfToSave.steps,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+    };
 
       setWorkflows((prev) => {
         const idx = prev.findIndex((w) => w.id === normalized.id);
@@ -833,36 +864,131 @@ export default function AutomationPage() {
   }
 
   async function handleRunNow() {
-    if (!activeWorkflow?.id) {
-      alert("Save this workflow before running it.");
-      return;
-    }
+  // ✅ Gate: Starter should get upgrade modal (not a backend error)
+  if (!requireAutopilotOrUpgrade("run_workflow")) return;
 
-    try {
-      setRunning(true);
-      setError(null);
-
-      const res = await fetch("/api/automations/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          automationId: activeWorkflow.id,
-          contactId: null,
-          listingId: null,
-        }),
-      }).catch(() => null);
-
-      if (!res || !res.ok) {
-        const data = await res?.json().catch(() => null);
-        throw new Error(data?.error || "We couldn't run this workflow. Try again in a moment.");
-      }
-    } catch (err: any) {
-      console.error("Run workflow error", err);
-      setError(err?.message || "We couldn't run this workflow. Try again in a moment.");
-    } finally {
-      setRunning(false);
-    }
+  if (!activeWorkflow?.id) {
+    alert("Save this workflow before running it.");
+    return;
   }
+
+  try {
+    setRunning(true);
+    setError(null);
+
+    const res = await fetch("/api/automations/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        automationId: activeWorkflow.id,
+        contactId: null,
+        listingId: null,
+      }),
+    }).catch(() => null);
+
+    if (!res || !res.ok) {
+      const data = await res?.json().catch(() => null);
+      throw new Error(
+        data?.error || "We couldn't run this workflow. Try again in a moment."
+      );
+    }
+  } catch (err: any) {
+    console.error("Run workflow error", err);
+    setError(err?.message || "We couldn't run this workflow. Try again in a moment.");
+  } finally {
+    setRunning(false);
+  }
+}
+
+async function handleToggleActive() {
+  // ✅ Gate: Starter should get upgrade modal
+  if (!requireAutopilotOrUpgrade("toggle_workflow")) return;
+
+  if (!activeWorkflow) return;
+
+  if (!activeWorkflow.id) {
+    alert("Save this workflow before turning it on or off.");
+    return;
+  }
+
+  const nextActive = !activeWorkflow.active;
+
+  // Payload matches your existing save payload shape
+  const payload = {
+    name: activeWorkflow.name,
+    description: activeWorkflow.description,
+    trigger: activeWorkflow.trigger,
+    triggerConfig: {},
+    entryConditions: {},
+    exitConditions: {},
+    schedule: {},
+    active: nextActive,
+    status: "draft",
+    reEnroll: true,
+    timezone: null,
+    folder: null,
+    steps: activeWorkflow.steps,
+  };
+
+  try {
+    setSaving(true);
+    setError(null);
+
+    const res = await fetch(`/api/automations/${activeWorkflow.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => null);
+
+    if (!res || !res.ok) {
+      const data = await res?.json().catch(() => null);
+      throw new Error(
+        data?.error || "We couldn't update this workflow. Try again in a moment."
+      );
+    }
+
+    const saved = await res.json();
+
+    const normalized: AutomationWorkflow = {
+    id: saved.id,
+    name: saved.name ?? activeWorkflow.name,
+    description: saved.description ?? activeWorkflow.description,
+    trigger: saved.trigger ?? activeWorkflow.trigger,
+
+    active: saved.active ?? nextActive,
+    effectiveActive:
+      typeof saved.effectiveActive === "boolean"
+        ? saved.effectiveActive
+        : (saved.active ?? nextActive),
+    lockedReason: saved.lockedReason ?? null,
+
+    steps: activeWorkflow.steps,
+    createdAt: saved.createdAt,
+    updatedAt: saved.updatedAt,
+  };
+
+    // ✅ Update list state
+    setWorkflows((prev) => {
+      const idx = prev.findIndex((w) => w.id === normalized.id);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next[idx] = normalized;
+      return next;
+    });
+
+    // ✅ Update the right-side builder state
+    setActiveWorkflow(normalized);
+
+    // Keep selection stable
+    setSelectedId(normalized.id!);
+  } catch (err: any) {
+    console.error("Toggle workflow active error", err);
+    setError(err?.message || "We couldn't update this workflow. Try again in a moment.");
+  } finally {
+    setSaving(false);
+  }
+}
+
 
   const triggerSentence = activeWorkflow?.trigger ? triggerPlainSentence(activeWorkflow.trigger) : null;
   const conditionScopeForActive = getConditionScopeForTrigger(activeWorkflow?.trigger ?? null);
@@ -999,7 +1125,7 @@ export default function AutomationPage() {
                       key={wf.id ?? "new-workflow-row"}
                       data-workflow-id={wf.id ?? "new"}
                       type="button"
-                      onClick={() => selectWorkflow(((wf.id as string | undefined) ?? "new") as any)}
+                      onClick={() => selectWorkflow((wf.id ?? "new") as any)}
                       className={
                         "w-full rounded-xl border px-4 py-3 text-left transition-colors " +
                         (isSelected
@@ -1015,16 +1141,26 @@ export default function AutomationPage() {
                           <p className="text-[10px] text-[var(--avillo-cream-muted)]">{triggerLabel}</p>
                         </div>
 
-                        <span
-                          className={
-                            "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] " +
-                            (wf.active
-                              ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
-                              : "border-slate-500/80 bg-slate-800/60 text-slate-200")
-                          }
-                        >
-                          {wf.active ? "Active" : "Paused"}
-                        </span>
+                        {(() => {
+                            const isPausedByPlan = (wf.effectiveActive ?? wf.active) !== true;
+                            const isForcedPaused = wf.active === true && isPausedByPlan; // DB says active, plan forces paused
+
+                            return (
+                              <span
+                                className={
+                                  "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] " +
+                                  (!isPausedByPlan
+                                    ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
+                                    : isForcedPaused
+                                    ? "border-amber-200/80 bg-amber-400/10 text-amber-100"
+                                    : "border-slate-500/80 bg-slate-800/60 text-slate-200")
+                                }
+                                title={wf.lockedReason ?? undefined}
+                              >
+                                {!isPausedByPlan ? "Active" : isForcedPaused ? "Paused" : "Paused"}
+                              </span>
+                            );
+                          })()}
                       </div>
 
                       {wf.description && (
@@ -1122,7 +1258,7 @@ export default function AutomationPage() {
                     <BuilderStepPill step={1} label="Name" done={builderHasName} />
                     <BuilderStepPill step={2} label="When it runs" done={builderHasTrigger} />
                     <BuilderStepPill step={3} label="What it does" done={builderHasSteps} />
-                    <BuilderStepPill step={4} label="Turn on" done={activeWorkflow.active} />
+                    <BuilderStepPill step={4} label="Turn on" done={(activeWorkflow.effectiveActive ?? activeWorkflow.active) === true} />
                   </div>
                 </div>
 
@@ -1291,7 +1427,7 @@ export default function AutomationPage() {
                             {s.type === "SMS" && s.config?.text}
                             {s.type === "EMAIL" && s.config?.subject}
                             {s.type === "TASK" && s.config?.text}
-                            {s.type === "WAIT" && `Wait ${s.config?.hours ?? "?"} hours`}
+                            {s.type === "WAIT" && formatWait(s.config)}
                             {s.type === "IF" &&
                               (() => {
                                 const cfg = s.config || {};
@@ -1345,20 +1481,30 @@ export default function AutomationPage() {
                       </p>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveWorkflow({ ...activeWorkflow, active: !activeWorkflow.active })
-                      }
-                      className={
-                        "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
-                        (activeWorkflow.active
-                          ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
-                          : "border-slate-500/80 bg-slate-800/60 text-slate-200")
-                      }
-                    >
-                      {activeWorkflow.active ? "Active" : "Paused"}
-                    </button>
+                    {(() => {
+                          const effectiveActive = (activeWorkflow.effectiveActive ?? activeWorkflow.active) === true;
+                          const forcedPaused = activeWorkflow.active === true && !effectiveActive;
+
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleActive()}
+                              disabled={saving || accountLoading || !activeWorkflow?.id}
+                              className={
+                                "inline-flex items-center rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] " +
+                                (effectiveActive
+                                  ? "border-emerald-300/80 bg-emerald-500/10 text-emerald-100"
+                                  : forcedPaused
+                                  ? "border-amber-200/80 bg-amber-400/10 text-amber-100"
+                                  : "border-slate-500/80 bg-slate-800/60 text-slate-200") +
+                                " disabled:cursor-not-allowed disabled:opacity-60"
+                              }
+                              title={activeWorkflow.lockedReason ?? undefined}
+                            >
+                              {effectiveActive ? "Active" : "Paused"}
+                            </button>
+                          );
+                        })()}
                   </div>
 
                   {/* Desktop row (sm+) */}

@@ -2,11 +2,16 @@
 import { prisma } from "@/lib/prisma";
 import { runAutomation } from "./runAutomation";
 import type { AutomationTrigger, AutomationContext } from "./types";
+import { requireEntitlement } from "@/lib/entitlements";
 
 export async function processTriggers(
   trigger: AutomationTrigger,
   context: AutomationContext
 ) {
+  // ✅ Defense-in-depth: if something calls this lib directly, Starter can't run triggers.
+  const gate = await requireEntitlement(context.userId, "AUTOMATIONS_TRIGGER");
+  if (!gate.ok) return;
+
   const automations = await prisma.automation.findMany({
     where: {
       userId: context.userId,

@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUser } from "@/lib/auth";
-import { requireEntitlement } from "@/lib/entitlements";
+import { requireEntitlement, getEntitlementsForUserId } from "@/lib/entitlements";
 
 // GET: Single automation with steps + metadata (Starter OK)
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Compute entitlement once for this user
+  const ent = await getEntitlementsForUserId(user.id);
+  const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
 
   const automation = await prisma.automation.findFirst({
     where: { id: params.id, userId: user.id },
@@ -21,7 +25,12 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   });
 
   if (!automation) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json(automation);
+
+  return NextResponse.json({
+    ...automation,
+    effectiveActive: canRun ? automation.active : false,
+    lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+  });
 }
 
 // PUT: Update automation + its step group (Pro required)
@@ -94,7 +103,15 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     },
   });
 
-  return NextResponse.json(updatedFull);
+  // Derived fields for UI consistency
+  const ent = await getEntitlementsForUserId(user.id);
+  const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
+
+  return NextResponse.json({
+    ...updatedFull,
+    effectiveActive: canRun ? (updatedFull as any)?.active : false,
+    lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+  });
 }
 
 // DELETE: Cascade delete automation + logs (Pro required)
