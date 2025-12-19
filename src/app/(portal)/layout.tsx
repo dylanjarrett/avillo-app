@@ -1,23 +1,16 @@
-// src/app/(portal)/layout.tsx
 "use client";
 
 import React, { useState } from "react";
 import Navbar from "@/components/layout/navbar";
 import Sidebar from "@/components/layout/sidebar";
+import { TourProvider } from "@/components/tour/tour-provider";
 
-export default function PortalLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function PortalLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <>
-      <Navbar
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
-      />
+    <TourProvider>
+      <Navbar sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((prev) => !prev)} />
 
       <div
         className="
@@ -46,6 +39,6 @@ export default function PortalLayout({
           </div>
         </main>
       </div>
-    </>
+    </TourProvider>
   );
 }

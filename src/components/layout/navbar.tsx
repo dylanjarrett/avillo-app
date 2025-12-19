@@ -1,10 +1,10 @@
-// src/components/layout/navbar.tsx
 "use client";
 
 import { useState, useRef, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useSession, signOut } from "next-auth/react";
+import { useTour } from "@/components/tour/tour-provider";
 
 function getInitials(nameOrEmail?: string | null) {
   if (!nameOrEmail) return "DJ";
@@ -33,19 +33,17 @@ type NavbarProps = {
 
 export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
   const { data: session } = useSession();
+  const { startTour } = useTour();
+
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const initials = getInitials(
-    session?.user?.name || session?.user?.email || "DJ"
-  );
+  const initials = getInitials(session?.user?.name || session?.user?.email || "DJ");
   const emailLabel = session?.user?.email || "Signed in to Avillo";
 
-  // NEW: derive role / isAdmin from the session
   const role = (session?.user as any)?.role as "USER" | "ADMIN" | undefined;
   const isAdmin = role === "ADMIN";
 
-  // Close dropdown on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -55,6 +53,11 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
+
+  function handleStartTour() {
+    setOpen(false);
+    startTour("dashboard");
+  }
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-[#1c2836] bg-gradient-to-r from-[#040814] via-[#050b18] to-[#040814] shadow-[0_10px_40px_rgba(0,0,0,0.7)]">
@@ -80,9 +83,9 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
           </div>
         </Link>
 
-        {/* RIGHT – STATUS + USER */}
+        {/* RIGHT */}
         <div className="flex items-center gap-2 sm:gap-4">
-          {/* Mobile menu button – animated hamburger / X */}
+          {/* Mobile menu button */}
           <button
             type="button"
             onClick={onToggleSidebar}
@@ -99,19 +102,13 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
             <span className="sr-only">Toggle menu</span>
 
             <span className="relative block h-3.5 w-4">
-              {/* Top bar */}
               <span
                 className={`
                   absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]
                   transition-transform duration-200 ease-out
-                  ${
-                    sidebarOpen
-                      ? "top-1.5 rotate-45"
-                      : "top-0 translate-y-0"
-                  }
+                  ${sidebarOpen ? "top-1.5 rotate-45" : "top-0 translate-y-0"}
                 `}
               />
-              {/* Middle bar */}
               <span
                 className={`
                   absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]/80
@@ -119,16 +116,11 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
                   ${sidebarOpen ? "top-1.5 opacity-0" : "top-1.5 opacity-80"}
                 `}
               />
-              {/* Bottom bar */}
               <span
                 className={`
                   absolute left-0 h-0.5 w-full rounded-full bg-[#f7f0d8]
                   transition-transform duration-200 ease-out
-                  ${
-                    sidebarOpen
-                      ? "top-1.5 -rotate-45"
-                      : "bottom-0 translate-y-0"
-                  }
+                  ${sidebarOpen ? "top-1.5 -rotate-45" : "bottom-0 translate-y-0"}
                 `}
               />
             </span>
@@ -142,6 +134,16 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
             Private beta
           </button>
 
+          {/* Tour button (desktop only) */}
+          <button
+            id="tour-nav-tour"
+            type="button"
+            onClick={handleStartTour}
+            className="hidden rounded-full border border-[#273247] bg-[#0b1220] px-3 py-1 text-[0.65rem] font-medium uppercase tracking-[0.18em] text-[#f7f0d8] shadow-[0_0_20px_rgba(0,0,0,0.6)] hover:border-[#f7f0d8]/40 hover:shadow-[0_0_26px_rgba(248,244,223,0.35)] transition sm:inline-flex"
+          >
+            Tour
+          </button>
+
           {/* USER DROPDOWN */}
           <div className="relative" ref={menuRef}>
             <button
@@ -152,20 +154,13 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
             </button>
 
             <div
-              className={`absolute right-0 mt-3 w-48 origin-top-right rounded-2xl border border-[#273247] bg-[#050815]/95 py-2 shadow-[0_0_36px_rgba(0,0,0,0.85)] backdrop-blur transition-all duration-150 ease-out transform ${
-                open
-                  ? "pointer-events-auto opacity-100 scale-100 translate-y-0"
-                  : "pointer-events-none opacity-0 scale-95 -translate-y-1"
+              className={`absolute right-0 mt-3 w-52 origin-top-right rounded-2xl border border-[#273247] bg-[#050815]/95 py-2 shadow-[0_0_36px_rgba(0,0,0,0.85)] backdrop-blur transition-all duration-150 ease-out transform ${
+                open ? "pointer-events-auto opacity-100 scale-100 translate-y-0" : "pointer-events-none opacity-0 scale-95 -translate-y-1"
               }`}
             >
-              {/* Minimal header */}
               <div className="px-4 pb-1 pt-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#6f7a93]">
-                  Workspace
-                </p>
-                <p className="mt-0.5 truncate text-[11px] text-[#cfd7ea]">
-                  {emailLabel}
-                </p>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#6f7a93]">Workspace</p>
+                <p className="mt-0.5 truncate text-[11px] text-[#cfd7ea]">{emailLabel}</p>
               </div>
 
               <div className="my-2 h-px bg-[rgba(148,163,184,0.22)]" />
@@ -194,7 +189,6 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
                 Help &amp; support
               </a>
 
-              {/* Admin link – admins only */}
               {isAdmin && (
                 <Link
                   href="/admin"
@@ -222,4 +216,4 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
       </div>
     </header>
   );
-} 
+}

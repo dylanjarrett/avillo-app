@@ -8,7 +8,7 @@ const TOOL_ITEMS = [
   { href: "/intelligence", label: "Intelligence" },
   { href: "/people", label: "People" },
   { href: "/listings", label: "Listings" },
-  { href: "/autopilot", label: "Autopilot" },  
+  { href: "/autopilot", label: "Autopilot" },
 ];
 
 const ACCOUNT_ITEMS = [
@@ -21,6 +21,23 @@ type SidebarProps = {
   onClose?: () => void;
 };
 
+function tourIdForHref(href: string) {
+  switch (href) {
+    case "/dashboard":
+      return "tour-nav-dashboard";
+    case "/intelligence":
+      return "tour-nav-intelligence";
+    case "/people":
+      return "tour-nav-people";
+    case "/listings":
+      return "tour-nav-listings";
+    case "/autopilot":
+      return "tour-nav-autopilot";
+    default:
+      return undefined;
+  }
+}
+
 export default function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
 
@@ -30,10 +47,13 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
         ? pathname === "/dashboard" || pathname === "/"
         : pathname.startsWith(item.href);
 
+    const tourId = tourIdForHref(item.href);
+
     return (
       <Link
         key={item.href}
         href={item.href}
+        id={tourId}
         className={`
           group relative flex items-center rounded-xl px-3 py-2.5 text-sm transition-all duration-200
           ${
@@ -63,26 +83,20 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   function SidebarInner() {
     return (
       <div className="flex h-full flex-col bg-[#050b16]/80 backdrop-blur-xl pb-6">
-        {/* TOOLS SECTION */}
         <div className="px-6 pt-4 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
           TOOLS
         </div>
-        <nav className="flex flex-col gap-1 px-3 pb-4">
-          {TOOL_ITEMS.map(renderNavItem)}
-        </nav>
 
-        {/* Divider */}
+        <nav className="flex flex-col gap-1 px-3 pb-4">{TOOL_ITEMS.map(renderNavItem)}</nav>
+
         <div className="mx-6 my-2 h-px bg-[#1a2435]/60" />
 
-        {/* ACCOUNT SECTION */}
         <div className="px-6 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
           ADMIN
         </div>
-        <nav className="flex flex-col gap-1 px-3 pb-4">
-          {ACCOUNT_ITEMS.map(renderNavItem)}
-        </nav>
 
-        {/* FOOTER */}
+        <nav className="flex flex-col gap-1 px-3 pb-4">{ACCOUNT_ITEMS.map(renderNavItem)}</nav>
+
         <div className="mt-auto px-6 text-[0.7rem] text-[#8f9bb8]/70">
           Private beta · <span className="text-[#f7f2e9]">Single-seat preview</span>
         </div>
@@ -93,14 +107,14 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className="hidden lg:block w-64 border-r border-[#1d2940]/70">
+      <aside className="hidden w-64 border-r border-[#1d2940]/70 lg:block">
         <div
           className="
             fixed
             left-0
             top-20
-            w-64
             h-[calc(100vh-5rem)]
+            w-64
             bg-[#050b16]/80
             backdrop-blur-xl
           "
@@ -119,7 +133,6 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
           bg-[#050b16]/95 backdrop-blur-xl
         `}
       >
-        {/* Top bar inside drawer */}
         <div className="flex items-center justify-between border-b border-[#1d2940]/70 px-4 py-3">
           <span className="text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-[#a3b0d0]/80">
             Menu
@@ -128,7 +141,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-[#273247] bg-[#0f1729] px-2 py-1 text-[0.7rem] text-[#f7f2e9] hover:bg-[#162037] transition"
+            className="rounded-full border border-[#273247] bg-[#0f1729] px-2 py-1 text-[0.7rem] text-[#f7f2e9] transition hover:bg-[#162037]"
           >
             Close
           </button>

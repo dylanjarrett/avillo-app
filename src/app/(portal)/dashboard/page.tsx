@@ -582,12 +582,12 @@ export default function DashboardPage() {
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)]">
         {/* Welcome */}
         <div className="relative overflow-hidden rounded-3xl border border-slate-700/80 bg-gradient-to-tr from-slate-950 via-slate-900/95 to-slate-900 px-5 py-4 shadow-[0_0_70px_rgba(15,23,42,0.98)]">
-          <div className="pointer-events-none absolute -top-12 -left-12 h-56 w-56 rounded-full bg-[radial-gradient(circle,_rgba(248,250,252,0.16),transparent_60%)] blur-2xl" />
-          <div className="pointer-events-none absolute -bottom-16 right-0 h-56 w-56 rounded-full bg-[radial-gradient(circle,_rgba(250,220,130,0.22),transparent_60%)] blur-2xl" />
+          <div className="pointer-events-none absolute -top-12 -left-12 h-56 w-56 rounded-full bg-[radial-gradient(circle,_rgba(248,244,233,0.16),transparent_60%)] blur-2xl" />
+          <div className="pointer-events-none absolute -bottom-16 right-0 h-56 w-56 rounded-full bg-[radial-gradient(circle,_rgba(248,244,233,0.14),transparent_60%)] blur-2xl" />
 
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">{greeting}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">{greeting}</p>
               <h2 className="mt-1 text-lg font-semibold text-[var(--avillo-cream-strong)]">Welcome back, {firstName}.</h2>
               <p className="mt-1 max-w-md text-[11px] text-[var(--avillo-cream-soft)]">
                 Your business is moving in a dozen directions — this is the one screen that keeps it all calm, clear, and in motion.
@@ -595,7 +595,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="shrink-0">
-              <div className="relative flex h-11 w-11 items-center justify-center rounded-full border border-amber-100/50 bg-gradient-to-br from-slate-950 to-slate-900 text-sm font-semibold text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.25)]">
+              <div className="relative flex h-11 w-11 items-center justify-center rounded-full border border-[rgba(242,235,221,0.45)] bg-gradient-to-br from-slate-950 to-slate-900 text-sm font-semibold text-[var(--avillo-cream)] shadow-[0_0_30px_rgba(248,250,252,0.18)]">
                 <span>{avatarInitials}</span>
               </div>
             </div>
@@ -615,7 +615,7 @@ export default function DashboardPage() {
         {/* Suggestions / Improvements */}
         <div className="relative overflow-hidden rounded-3xl border border-slate-700/80 bg-slate-950/90 px-5 py-4 shadow-[0_0_60px_rgba(15,23,42,0.98)]">
           <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.16),transparent_55%)] opacity-60 blur-3xl" />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Suggestions / improvements</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">Suggestions / improvements</p>
           <p className="mt-2 text-[11px] text-[var(--avillo-cream-soft)]">Tell us what would make Avillo feel 10x better. One sentence is enough.</p>
 
           <div className="mt-3 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-3">
@@ -624,7 +624,7 @@ export default function DashboardPage() {
               onChange={(e) => setFeedbackText(e.target.value)}
               rows={5}
               placeholder='Example: “On People, I want a quick way to see who I haven’t touched in 14 days.”'
-              className="w-full resize-none rounded-xl border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-amber-100/70"
+              className="w-full resize-none rounded-xl border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-sky-400/70"
             />
 
             <div className="mt-2 flex items-center justify-between gap-3">
@@ -633,7 +633,7 @@ export default function DashboardPage() {
               <button
                 onClick={openFeedbackEmail}
                 disabled={!feedbackText.trim()}
-                className="rounded-xl border border-amber-100/45 bg-amber-500/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-100 transition hover:border-amber-100/70 hover:bg-amber-500/15 disabled:opacity-40"
+                className="rounded-xl border border-[rgba(242,235,221,0.45)] bg-[rgba(242,235,221,0.08)] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream)] transition hover:border-[rgba(242,235,221,0.7)] hover:bg-[rgba(242,235,221,0.12)] disabled:opacity-40"
               >
                 Send
               </button>
@@ -659,7 +659,7 @@ export default function DashboardPage() {
             value={(listingSummary?.activeCount ?? 0) + (listingSummary?.pendingCount ?? 0)}
             hint={`Active ${(listingSummary?.activeCount ?? 0)} • Pending ${listingSummary?.pendingCount ?? 0}`}
             loading={loading && !listingSummary}
-            ctaLabel="View listings →"
+            ctaLabel="Open Listings →"
             ctaHref="/listings"
           />
           <StatCard
@@ -697,7 +697,7 @@ export default function DashboardPage() {
 
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Today’s focus</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">Today’s focus</p>
               <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
                 {taskTab === "open" ? "Your open tasks — ordered by what’s due next." : "Recently completed tasks — newest first."}
               </p>
@@ -707,7 +707,7 @@ export default function DashboardPage() {
                   onClick={() => setTaskTab("open")}
                   className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
                     taskTab === "open"
-                      ? "border border-amber-100/40 bg-amber-500/10 text-amber-100"
+                      ? "border border-[rgba(242,235,221,0.45)] bg-[rgba(242,235,221,0.08)] text-[var(--avillo-cream)]"
                       : "text-[var(--avillo-cream-muted)] hover:text-[var(--avillo-cream-strong)]"
                   }`}
                 >
@@ -718,7 +718,7 @@ export default function DashboardPage() {
                   onClick={() => setTaskTab("completed")}
                   className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
                     taskTab === "completed"
-                      ? "border border-amber-100/40 bg-amber-500/10 text-amber-100"
+                      ? "border border-[rgba(242,235,221,0.45)] bg-[rgba(242,235,221,0.08)] text-[var(--avillo-cream)]"
                       : "text-[var(--avillo-cream-muted)] hover:text-[var(--avillo-cream-strong)]"
                   }`}
                 >
@@ -726,13 +726,6 @@ export default function DashboardPage() {
                 </button>
               </div>
             </div>
-
-            <a
-              href="http:///people"
-              className="mt-1 rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60"
-             target="_blank" rel="noopener">
-              Open People
-            </a>
           </div>
 
           {loading && visibleTasks.length === 0 && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your tasks…</p>}
@@ -853,23 +846,15 @@ export default function DashboardPage() {
 
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Pipeline health</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">Pipeline health</p>
                 <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">A clean snapshot of where relationships sit right now.</p>
               </div>
-              <a
-                href="http:///people"
-                className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60"
-               target="_blank" rel="noopener">
-                View pipeline
-              </a>
             </div>
 
             {loading && !stageCounts && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your pipeline…</p>}
 
             {!loading && !stageCounts && (
-              <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-                No CRM activity yet. Add your first contact to start building a pipeline.
-              </p>
+              <p className="text-[11px] text-[var(--avillo-cream-muted)]">No CRM activity yet. Add your first contact to start building a pipeline.</p>
             )}
 
             {stageCounts && (
@@ -889,7 +874,7 @@ export default function DashboardPage() {
           {/* Create Momentum */}
           <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.24),transparent_60%)] opacity-40 blur-3xl" />
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Create momentum</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">Create momentum</p>
             <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">Quick actions that keep your day moving.</p>
 
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -912,14 +897,12 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3 rounded-2xl border border-slate-700/80 bg-slate-950/95 px-4 py-3 shadow-[0_0_40px_rgba(15,23,42,0.92)]">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold text-slate-50">Task deleted</p>
-              <p className="mt-0.5 truncate text-[10px] text-[var(--avillo-cream-muted)]">
-                {lastDeleted.task.title || "Task"}
-              </p>
+              <p className="mt-0.5 truncate text-[10px] text-[var(--avillo-cream-muted)]">{lastDeleted.task.title || "Task"}</p>
             </div>
 
             <button
               onClick={undoDelete}
-              className="shrink-0 rounded-xl border border-amber-100/45 bg-amber-500/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-100 transition hover:border-amber-100/70 hover:bg-amber-500/15"
+              className="shrink-0 rounded-xl border border-[rgba(242,235,221,0.45)] bg-[rgba(242,235,221,0.08)] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream)] transition hover:border-[rgba(242,235,221,0.7)] hover:bg-[rgba(242,235,221,0.12)]"
             >
               Undo
             </button>
@@ -977,7 +960,7 @@ function StatCard({
       {ctaLabel && ctaHref && (
         <a
           href={ctaHref}
-          className="mt-3 inline-flex items-center rounded-full border border-amber-100/40 bg-amber-500/10 px-3 py-1.5 text-[10px] font-semibold text-amber-100 hover:border-amber-100/70"
+          className="mt-3 inline-flex items-center rounded-full border border-[rgba(242,235,221,0.45)] bg-[rgba(242,235,221,0.08)] px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream)] hover:border-[rgba(242,235,221,0.7)] hover:bg-[rgba(242,235,221,0.12)]"
         >
           {ctaLabel}
         </a>
@@ -1004,7 +987,7 @@ function PipelineStage({ label, count, description }: { label: string; count: nu
     <div className="rounded-xl border border-slate-700/80 bg-slate-900/75 px-4 py-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] font-semibold text-slate-50">{label}</p>
-        <p className="text-lg font-semibold text-amber-100">{count}</p>
+        <p className="text-lg font-semibold text-[var(--avillo-cream)]">{count}</p>
       </div>
       <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">{description}</p>
     </div>
@@ -1015,10 +998,10 @@ function QuickLaunchButton({ label, description, href }: { label: string; descri
   return (
     <a
       href={href}
-      className="block rounded-2xl border border-slate-700/80 bg-slate-900/75 px-4 py-3 text-left no-underline transition-colors hover:border-amber-100/80 hover:bg-slate-900/95 hover:no-underline focus:no-underline"
+      className="block rounded-2xl border border-slate-700/80 bg-slate-900/75 px-4 py-3 text-left no-underline transition-colors hover:border-[rgba(242,235,221,0.55)] hover:bg-slate-900/95 hover:no-underline focus:no-underline"
       style={{ textDecoration: "none" }}
     >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/90 no-underline">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream)] no-underline">{label}</p>
       <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)] no-underline">{description}</p>
     </a>
   );

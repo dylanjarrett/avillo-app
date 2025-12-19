@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import UpgradeModal from "@/components/billing/UpgradeModal";
 
 /* ----------------------------------------
-  Types
+ Types
 ---------------------------------------- */
 
 export type OutputHistoryEntry = {
@@ -48,18 +48,10 @@ function isProAccount(account: AccountMe | null): boolean {
 
   // 3) Fallback: capability-based gating
   const can = ((account.entitlements as any)?.can ?? {}) as Record<string, boolean>;
-  return Boolean(
-    can.INTELLIGENCE_SAVE || can.AUTOMATIONS_RUN || can.AUTOMATIONS_PERSIST
-  );
+  return Boolean(can.INTELLIGENCE_SAVE || can.AUTOMATIONS_RUN || can.AUTOMATIONS_PERSIST);
 }
 
-type EngineFilter =
-  | "all"
-  | "listing"
-  | "seller"
-  | "buyer"
-  | "neighborhood"
-  | "unknown";
+type EngineFilter = "all" | "listing" | "seller" | "buyer" | "neighborhood" | "unknown";
 
 const ENGINE_FILTERS: { label: string; value: EngineFilter }[] = [
   { label: "All engines", value: "all" },
@@ -70,7 +62,7 @@ const ENGINE_FILTERS: { label: string; value: EngineFilter }[] = [
 ];
 
 /* ----------------------------------------
-  Account cache (prevents flicker on remount)
+ Account cache (prevents flicker on remount)
 ---------------------------------------- */
 
 let __accountCache: AccountMe | null | undefined = undefined;
@@ -96,16 +88,14 @@ async function getCachedAccount(): Promise<AccountMe | null> {
 }
 
 /* ----------------------------------------
-  Component
+ Component
 ---------------------------------------- */
 
 export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHistoryProps) {
   const [account, setAccount] = useState<AccountMe | null>(
     __accountCache !== undefined ? __accountCache : null
   );
-  const [accountLoading, setAccountLoading] = useState<boolean>(
-    __accountCache === undefined
-  );
+  const [accountLoading, setAccountLoading] = useState<boolean>(__accountCache === undefined);
 
   const [entries, setEntries] = useState<OutputHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false); // only used for Pro fetch
@@ -244,7 +234,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
       <>
         <section className="mt-10">
           <div className="relative overflow-hidden rounded-2xl border border-slate-800/70 bg-slate-950/75 px-6 py-5 shadow-[0_18px_40px_rgba(0,0,0,0.7)]">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
               Recent AI activity (Pro)
             </p>
 
@@ -253,15 +243,15 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
             </h3>
 
             <p className="mt-2 max-w-2xl text-[11px] text-slate-300/90">
-              Starter can generate and copy outputs, but saved prompts (history) and reloading
-              past runs are available on Pro.
+              Starter can generate and copy outputs, but saved prompts (history) and reloading past
+              runs are available on Pro.
             </p>
 
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
               <button
                 type="button"
                 onClick={() => setUpgradeOpen(true)}
-                className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-5 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 hover:bg-amber-50/20"
+                className="inline-flex items-center justify-center rounded-full border border-[rgba(242,235,221,0.7)] bg-[rgba(242,235,221,0.10)] px-5 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream)] hover:bg-[rgba(242,235,221,0.14)]"
               >
                 Upgrade to Pro
               </button>
@@ -290,7 +280,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
         <div className="relative overflow-hidden rounded-2xl border border-slate-800/70 bg-slate-950/75 px-6 py-5 shadow-[0_18px_40px_rgba(0,0,0,0.7)]">
           <header className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
                 Recent AI Activity
               </p>
               <h3 className="mt-1 text-sm font-semibold text-slate-50">
@@ -304,6 +294,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
             </div>
 
             <div className="flex flex-col gap-2 md:items-end">
+              {/* Engine pills */}
               <div className="inline-flex rounded-full border border-slate-700/80 bg-slate-900/70 p-1 text-[11px]">
                 {ENGINE_FILTERS.map((f) => {
                   const active = engineFilter === f.value;
@@ -313,9 +304,9 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                       type="button"
                       onClick={() => setEngineFilter(f.value)}
                       className={[
-                        "px-3 py-1 rounded-full whitespace-nowrap transition-colors",
+                        "px-3 py-1 rounded-full whitespace-nowrap transition-all duration-150",
                         active
-                          ? "bg-amber-200 text-slate-900"
+                          ? "border border-[rgba(242,235,221,0.85)] bg-[rgba(242,235,221,0.12)] text-[var(--avillo-cream)] shadow-[0_0_0_1px_rgba(242,235,221,0.25),0_0_16px_rgba(242,235,221,0.20)]"
                           : "text-slate-200/80 hover:bg-slate-800",
                       ].join(" ")}
                     >
@@ -329,7 +320,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                 <select
                   value={sortOrder}
                   onChange={(e) => setSortOrder(e.target.value as "newest" | "oldest")}
-                  className="h-8 rounded-full border border-slate-700/80 bg-slate-900/80 px-3 text-[11px] text-slate-100 outline-none focus:border-amber-200"
+                  className="h-8 rounded-full border border-slate-700/80 bg-slate-900/80 px-3 text-[11px] text-slate-100 outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/50"
                 >
                   <option value="newest">Newest first</option>
                   <option value="oldest">Oldest first</option>
@@ -340,7 +331,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search input, listing, or contact…"
-                    className="h-8 w-full rounded-full border border-slate-700/80 bg-slate-900/80 px-3 pl-7 text-[11px] text-slate-100 placeholder:text-slate-400 outline-none focus:border-amber-200"
+                    className="h-8 w-full rounded-full border border-slate-700/80 bg-slate-900/80 px-3 pl-7 text-[11px] text-slate-100 placeholder:text-slate-400 outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/50"
                   />
                   <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-500">
                     🔍
@@ -349,8 +340,6 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
               </div>
             </div>
           </header>
-
-          {/* No "Checking your plan..." line */}
 
           {!accountLoading && loading && (
             <p className="text-[11px] text-slate-300/90">Loading your recent AI runs…</p>
@@ -391,17 +380,14 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                     ? `Contact · ${entry.contextLabel}`
                     : "No record attached";
 
-                const preview =
-                  entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
+                const preview = entry.snippet?.trim() || entry.prompt?.trim().split("\n")[0] || "";
 
                 return (
                   <li
                     key={entry.id}
                     className={[
                       "group flex items-start justify-between gap-3 rounded-2xl px-3 py-2 transition-colors",
-                      idx !== filteredEntries.length - 1
-                        ? "border-b border-slate-800/80"
-                        : "",
+                      idx !== filteredEntries.length - 1 ? "border-b border-slate-800/80" : "",
                       "lg:hover:bg-slate-900/70",
                     ].join(" ")}
                   >
@@ -411,11 +397,11 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                       className="min-w-0 flex-1 text-left touch-manipulation"
                     >
                       <div className="mb-1 flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center rounded-full bg-slate-800/90 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100/90">
+                        <span className="inline-flex items-center rounded-full border border-slate-700/80 bg-slate-900/70 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream)]">
                           {entry.engine}
                         </span>
 
-                        <span className="inline-flex items-center rounded-full bg-slate-900 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
+                        <span className="inline-flex items-center rounded-full border border-slate-800/70 bg-slate-950/50 px-2 py-[2px] text-[9px] font-medium text-slate-200/90">
                           {contextLabel}
                         </span>
                       </div>
@@ -438,8 +424,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                           e.stopPropagation();
                           handleDeleteEntry(entry.id);
                         }}
-                        className="rounded-full p-1 text-slate-400 hover:text-red-400 transition-opacity
-                                   opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
+                        className="rounded-full p-1 text-slate-400 hover:text-red-400 transition-opacity opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
                       >
                         🗑️
                       </button>
