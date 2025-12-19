@@ -51,9 +51,12 @@ export async function GET(req: NextRequest) {
     } // all => no dueAt filter
 
 
+    const includeDeleted = url.searchParams.get("includeDeleted") === "1";
+
     const where: any = {
       userId: user.id,
       status,
+      ...(includeDeleted ? {} : { deletedAt: null }),
       ...(contactId ? { contactId } : {}),
       ...(listingId ? { listingId } : {}),
       ...(scope === "all" ? {} : dueFilter),

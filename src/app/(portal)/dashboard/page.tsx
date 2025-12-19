@@ -1,10 +1,11 @@
 // src/app/(portal)/dashboard/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
 
 type Stage = "new" | "warm" | "hot" | "past";
+type TaskTab = "open" | "completed";
 
 type ProfileResponse =
   | {
@@ -66,20 +67,21 @@ type IntelligenceRecentResponse =
     }
   | { error?: string };
 
-type TasksResponse = {
-  tasks: Array<{
-    id: string;
-    title: string;
-    notes: string;
-    dueAt: string | null;
-    status: "OPEN" | "DONE" | string;
-    source?: "PEOPLE_NOTE" | "AUTOPILOT" | "MANUAL" | string;
-    contact: { id: string; name: string } | null;
-    listing: { id: string; address: string } | null;
-    createdAt: string;
-    completedAt: string | null;
-  }>;
+type TaskRow = {
+  id: string;
+  title: string;
+  notes: string;
+  dueAt: string | null;
+  status: "OPEN" | "DONE" | string;
+  source?: "PEOPLE_NOTE" | "AUTOPILOT" | "MANUAL" | string;
+  contact: { id: string; name: string } | null;
+  listing: { id: string; address: string } | null;
+  createdAt: string;
+  updatedAt?: string;
+  completedAt: string | null;
 };
+
+type TasksResponse = { tasks: TaskRow[] };
 
 type StageCounts = { new: number; warm: number; hot: number; past: number };
 type ListingSummary = { activeCount: number; pendingCount: number; closed30dCount: number };
@@ -191,7 +193,9 @@ export default function DashboardPage() {
   const [listingSummary, setListingSummary] = useState<ListingSummary | null>(null);
   const [buyerSummary, setBuyerSummary] = useState<BuyerSummary | null>(null);
 
-  const [openTasks, setOpenTasks] = useState<TasksResponse["tasks"]>([]);
+  const [taskTab, setTaskTab] = useState<TaskTab>("open");
+  const [openTasks, setOpenTasks] = useState<TaskRow[]>([]);
+  const [completedTasks, setCompletedTasks] = useState<TaskRow[]>([]);
   const [taskBusyId, setTaskBusyId] = useState<string | null>(null);
 
   const [aiRecent, setAiRecent] = useState<any[]>([]);
@@ -199,47 +203,93 @@ export default function DashboardPage() {
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackSent, setFeedbackSent] = useState(false);
 
-  async function fetchTasks() {
-    const res = await fetch("/api/tasks?status=OPEN&scope=all").catch(() => null);
+  // Undo delete
+  const [lastDeleted, setLastDeleted] = useState<{ task: TaskRow; from: TaskTab } | null>(null);
+  const [undoVisible, setUndoVisible] = useState(false);
+  const undoTimerRef = useRef<number | null>(null);
+
+  function showUndo(task: TaskRow, from: TaskTab) {
+    setLastDeleted({ task, from });
+    setUndoVisible(true);
+
+    if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = window.setTimeout(() => {
+      setUndoVisible(false);
+      undoTimerRef.current = null;
+    }, 6500);
+  }
+
+  function hideUndo() {
+    setUndoVisible(false);
+    if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = null;
+  }
+
+  async function fetchTasks(status: "OPEN" | "DONE") {
+    const res = await fetch(`/api/tasks?status=${status}&scope=all`).catch(() => null);
     if (!res || !res.ok) return [];
 
     const data: TasksResponse = await res.json().catch(() => ({ tasks: [] } as TasksResponse));
     const rows = Array.isArray(data.tasks) ? data.tasks : [];
 
-    const start = startOfDay(new Date()).getTime();
-    const end7 = start + 1000 * 60 * 60 * 24 * 7;
+    if (status === "OPEN") {
+      const start = startOfDay(new Date()).getTime();
+      const end7 = start + 1000 * 60 * 60 * 24 * 7;
 
-    const withDue = rows.filter((t) => !!t.dueAt);
-    const noDue = rows.filter((t) => !t.dueAt);
+      const withDue = rows.filter((t) => !!t.dueAt);
+      const noDue = rows.filter((t) => !t.dueAt);
 
-    const overdue = withDue.filter((t) => {
-      const ts = new Date(t.dueAt as string).getTime();
-      return !Number.isNaN(ts) && ts < start;
-    });
+      const overdue = withDue.filter((t) => {
+        const ts = new Date(t.dueAt as string).getTime();
+        return !Number.isNaN(ts) && ts < start;
+      });
 
-    const today = withDue.filter((t) => isDueToday(t.dueAt));
+      const today = withDue.filter((t) => isDueToday(t.dueAt));
 
-    const week = withDue.filter((t) => {
-      const ts = new Date(t.dueAt as string).getTime();
-      if (Number.isNaN(ts)) return false;
-      return ts >= start && ts < end7 && !isDueToday(t.dueAt);
-    });
+      const week = withDue.filter((t) => {
+        const ts = new Date(t.dueAt as string).getTime();
+        if (Number.isNaN(ts)) return false;
+        return ts >= start && ts < end7 && !isDueToday(t.dueAt);
+      });
 
-    const later = withDue.filter((t) => {
-      const ts = new Date(t.dueAt as string).getTime();
-      if (Number.isNaN(ts)) return false;
-      return ts >= end7;
-    });
+      const later = withDue.filter((t) => {
+        const ts = new Date(t.dueAt as string).getTime();
+        if (Number.isNaN(ts)) return false;
+        return ts >= end7;
+      });
 
-    return [...overdue, ...today, ...week, ...later, ...noDue].slice(0, 200);
+      return [...overdue, ...today, ...week, ...later, ...noDue].slice(0, 200);
+    }
+
+    return rows
+      .slice()
+      .sort((a, b) => {
+        const at = new Date(a.completedAt || a.updatedAt || a.createdAt).getTime();
+        const bt = new Date(b.completedAt || b.updatedAt || b.createdAt).getTime();
+        return bt - at;
+      })
+      .slice(0, 200);
+  }
+
+  async function refreshTasks() {
+    const [open, done] = await Promise.all([fetchTasks("OPEN"), fetchTasks("DONE")]);
+    setOpenTasks(open);
+    setCompletedTasks(done);
   }
 
   async function markTaskDone(taskId: string) {
     if (!taskId) return;
     setTaskBusyId(taskId);
 
-    const prev = openTasks;
+    const prevOpen = openTasks;
+    const prevDone = completedTasks;
+
+    const moved = prevOpen.find((t) => t.id === taskId) || null;
+
     setOpenTasks((p) => p.filter((t) => t.id !== taskId));
+    if (moved) {
+      setCompletedTasks((p) => [{ ...moved, status: "DONE", completedAt: new Date().toISOString() }, ...p]);
+    }
 
     try {
       const res = await fetch(`/api/tasks/${taskId}`, {
@@ -249,12 +299,84 @@ export default function DashboardPage() {
       });
 
       if (!res.ok) {
-        setOpenTasks(prev);
+        setOpenTasks(prevOpen);
+        setCompletedTasks(prevDone);
       }
     } catch {
-      setOpenTasks(prev);
+      setOpenTasks(prevOpen);
+      setCompletedTasks(prevDone);
     } finally {
       setTaskBusyId(null);
+    }
+  }
+
+  async function reopenTask(taskId: string) {
+    if (!taskId) return;
+    setTaskBusyId(taskId);
+
+    const prevOpen = openTasks;
+    const prevDone = completedTasks;
+
+    const moved = prevDone.find((t) => t.id === taskId) || null;
+
+    setCompletedTasks((p) => p.filter((t) => t.id !== taskId));
+    if (moved) {
+      setOpenTasks((p) => [{ ...moved, status: "OPEN", completedAt: null }, ...p]);
+    }
+
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "OPEN" }),
+      });
+
+      if (!res.ok) {
+        setOpenTasks(prevOpen);
+        setCompletedTasks(prevDone);
+      }
+    } catch {
+      setOpenTasks(prevOpen);
+      setCompletedTasks(prevDone);
+    } finally {
+      setTaskBusyId(null);
+    }
+  }
+
+  async function undoDelete() {
+    if (!lastDeleted) return;
+
+    const { task, from } = lastDeleted;
+    hideUndo();
+
+    // Optimistic reinsert
+    if (from === "open") {
+      setOpenTasks((p) => {
+        if (p.some((t) => t.id === task.id)) return p;
+        return [task, ...p];
+      });
+    } else {
+      setCompletedTasks((p) => {
+        if (p.some((t) => t.id === task.id)) return p;
+        return [task, ...p];
+      });
+    }
+
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ restore: true }),
+      });
+
+      if (!res.ok) {
+        // fallback: re-sync lists
+        await refreshTasks();
+      }
+    } catch {
+      await refreshTasks();
+    } finally {
+      setLastDeleted(null);
     }
   }
 
@@ -262,14 +384,32 @@ export default function DashboardPage() {
     if (!taskId) return;
     setTaskBusyId(taskId);
 
-    const prev = openTasks;
+    const prevOpen = openTasks;
+    const prevDone = completedTasks;
+
+    const inOpen = prevOpen.find((t) => t.id === taskId) || null;
+    const inDone = prevDone.find((t) => t.id === taskId) || null;
+    const deletedTask = inOpen || inDone;
+    const from: TaskTab = inOpen ? "open" : "completed";
+
     setOpenTasks((p) => p.filter((t) => t.id !== taskId));
+    setCompletedTasks((p) => p.filter((t) => t.id !== taskId));
+
+    if (deletedTask) showUndo(deletedTask, from);
 
     try {
       const res = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
-      if (!res.ok) setOpenTasks(prev);
+      if (!res.ok) {
+        setOpenTasks(prevOpen);
+        setCompletedTasks(prevDone);
+        hideUndo();
+        setLastDeleted(null);
+      }
     } catch {
-      setOpenTasks(prev);
+      setOpenTasks(prevOpen);
+      setCompletedTasks(prevDone);
+      hideUndo();
+      setLastDeleted(null);
     } finally {
       setTaskBusyId(null);
     }
@@ -346,7 +486,6 @@ export default function DashboardPage() {
           }
         }
 
-        // still used for AI runs stat
         if (intelligenceRes && intelligenceRes.ok) {
           const data: IntelligenceRecentResponse = await intelligenceRes.json();
           if ("entries" in data && Array.isArray(data.entries)) {
@@ -354,8 +493,11 @@ export default function DashboardPage() {
           }
         }
 
-        const tasks = await fetchTasks();
-        if (!cancelled) setOpenTasks(tasks);
+        const [open, done] = await Promise.all([fetchTasks("OPEN"), fetchTasks("DONE")]);
+        if (!cancelled) {
+          setOpenTasks(open);
+          setCompletedTasks(done);
+        }
       } catch (err: any) {
         console.error("Dashboard load error", err);
         if (!cancelled) setError(err?.message || "We couldn’t load your dashboard. Try refreshing in a moment.");
@@ -367,6 +509,7 @@ export default function DashboardPage() {
     load();
     return () => {
       cancelled = true;
+      if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -395,6 +538,8 @@ export default function DashboardPage() {
 
     return { overdue, today, openTotal: openTasks.length };
   }, [openTasks]);
+
+  const visibleTasks = useMemo(() => (taskTab === "open" ? openTasks : completedTasks), [taskTab, openTasks, completedTasks]);
 
   function openFeedbackEmail() {
     const subject = encodeURIComponent("Avillo beta feedback");
@@ -544,33 +689,73 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* MAIN WORK ROW (fills the awkward gaps) */}
+      {/* MAIN WORK ROW */}
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] items-stretch">
-        {/* Today’s focus (left, tall) */}
+        {/* Today’s focus */}
         <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/85 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
           <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.18),transparent_55%)] opacity-45 blur-3xl" />
-          <div className="mb-3 flex items-center justify-between gap-3">
+
+          <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Today’s focus</p>
-              <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">Your open tasks — ordered by what’s due next.</p>
+              <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
+                {taskTab === "open" ? "Your open tasks — ordered by what’s due next." : "Recently completed tasks — newest first."}
+              </p>
+
+              <div className="mt-2 inline-flex rounded-full border border-slate-700/80 bg-slate-900/60 p-1">
+                <button
+                  onClick={() => setTaskTab("open")}
+                  className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
+                    taskTab === "open"
+                      ? "border border-amber-100/40 bg-amber-500/10 text-amber-100"
+                      : "text-[var(--avillo-cream-muted)] hover:text-[var(--avillo-cream-strong)]"
+                  }`}
+                >
+                  Open ({openTasks.length})
+                </button>
+
+                <button
+                  onClick={() => setTaskTab("completed")}
+                  className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
+                    taskTab === "completed"
+                      ? "border border-amber-100/40 bg-amber-500/10 text-amber-100"
+                      : "text-[var(--avillo-cream-muted)] hover:text-[var(--avillo-cream-strong)]"
+                  }`}
+                >
+                  Completed ({completedTasks.length})
+                </button>
+              </div>
             </div>
+
             <a
-              href="/people"
-              className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60">
+              href="http:///people"
+              className="mt-1 rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60"
+             target="_blank" rel="noopener">
               Open People
             </a>
           </div>
 
-          {loading && openTasks.length === 0 && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your tasks…</p>}
+          {loading && visibleTasks.length === 0 && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your tasks…</p>}
 
-          {!loading && openTasks.length === 0 ? (
+          {!loading && visibleTasks.length === 0 ? (
             <div className="space-y-2">
-              <EmptyPill title="Nothing open right now (nice)." body="Tasks created from People notes and Autopilot will show here automatically." />
-              <EmptyPill title="Pro move" body="Set 2 follow-ups for tomorrow so you start the day already ahead." />
+              <EmptyPill
+                title={taskTab === "open" ? "Nothing open right now (nice)." : "No completed tasks yet."}
+                body={
+                  taskTab === "open"
+                    ? "Tasks created from People notes and Autopilot will show here automatically."
+                    : "Mark tasks Done and they’ll show up here so you can reference what you finished."
+                }
+              />
+              {taskTab === "open" ? (
+                <EmptyPill title="Pro move" body="Set 2 follow-ups for tomorrow so you start the day already ahead." />
+              ) : (
+                <EmptyPill title="Keep momentum" body="Aim to clear 3 open tasks a day — this tab should fill up fast." />
+              )}
             </div>
           ) : (
             <div className="mt-2 max-h-[440px] space-y-2 overflow-y-auto pr-1">
-              {openTasks.slice(0, 60).map((t) => (
+              {visibleTasks.slice(0, 60).map((t) => (
                 <div key={t.id} className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
@@ -593,19 +778,39 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="shrink-0 text-right">
-                      <p className={`text-[10px] ${isOverdue(t.dueAt) ? "text-rose-200" : "text-[var(--avillo-cream-muted)]"}`}>
-                        {formatDueLabel(t.dueAt)}
+                      <p
+                        className={`text-[10px] ${
+                          taskTab === "open" && isOverdue(t.dueAt) ? "text-rose-200" : "text-[var(--avillo-cream-muted)]"
+                        }`}
+                      >
+                        {taskTab === "open"
+                          ? formatDueLabel(t.dueAt)
+                          : t.completedAt
+                          ? `Completed · ${new Date(t.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
+                          : "Completed"}
                       </p>
 
                       <div className="mt-1 flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => markTaskDone(t.id)}
-                          className="flex h-7 w-7 items-center justify-center rounded-md text-emerald-400/70 transition hover:bg-emerald-400/10 hover:text-emerald-400 disabled:opacity-40"
-                          aria-label="Mark done"
-                          disabled={taskBusyId === t.id}
-                        >
-                          ✓
-                        </button>
+                        {taskTab === "open" ? (
+                          <button
+                            onClick={() => markTaskDone(t.id)}
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-emerald-400/70 transition hover:bg-emerald-400/10 hover:text-emerald-400 disabled:opacity-40"
+                            aria-label="Mark done"
+                            disabled={taskBusyId === t.id}
+                          >
+                            ✓
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => reopenTask(t.id)}
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-sky-200/70 transition hover:bg-sky-400/10 hover:text-sky-200 disabled:opacity-40"
+                            aria-label="Reopen task"
+                            disabled={taskBusyId === t.id}
+                            title="Reopen"
+                          >
+                            ↺
+                          </button>
+                        )}
 
                         <button
                           onClick={() => deleteTask(t.id)}
@@ -626,12 +831,21 @@ export default function DashboardPage() {
           )}
 
           <div className="mt-3 rounded-xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] text-[var(--avillo-cream-muted)]">
-            Autopilot tasks will appear here automatically as soon as they’re created. Mark a task{" "}
-            <span className="text-[var(--avillo-cream-strong)]">Done</span> to remove it from your open list.
+            {taskTab === "open" ? (
+              <>
+                Autopilot tasks will appear here automatically as soon as they’re created. Mark a task{" "}
+                <span className="text-[var(--avillo-cream-strong)]">Done</span> to remove it from your open list.
+              </>
+            ) : (
+              <>
+                Completed tasks stay here so you can reference what you finished. Use{" "}
+                <span className="text-[var(--avillo-cream-strong)]">Reopen</span> if you need to bring something back.
+              </>
+            )}
           </div>
         </div>
 
-        {/* Right column (stacked to eliminate dead space) */}
+        {/* Right column */}
         <div className="space-y-4">
           {/* Pipeline snapshot */}
           <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
@@ -643,8 +857,9 @@ export default function DashboardPage() {
                 <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">A clean snapshot of where relationships sit right now.</p>
               </div>
               <a
-                href="/people"
-                className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60">
+                href="http:///people"
+                className="rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-[10px] font-semibold text-[var(--avillo-cream-strong)] hover:border-amber-100/60"
+               target="_blank" rel="noopener">
                 View pipeline
               </a>
             </div>
@@ -652,7 +867,9 @@ export default function DashboardPage() {
             {loading && !stageCounts && <p className="text-[11px] text-[var(--avillo-cream-muted)]">Loading your pipeline…</p>}
 
             {!loading && !stageCounts && (
-              <p className="text-[11px] text-[var(--avillo-cream-muted)]">No CRM activity yet. Add your first contact to start building a pipeline.</p>
+              <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+                No CRM activity yet. Add your first contact to start building a pipeline.
+              </p>
             )}
 
             {stageCounts && (
@@ -669,7 +886,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Create Momentum (now “fills” the space under Pipeline Health) */}
+          {/* Create Momentum */}
           <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/80 to-slate-950 px-5 py-4 shadow-[0_0_44px_rgba(15,23,42,0.92)]">
             <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(248,250,252,0.24),transparent_60%)] opacity-40 blur-3xl" />
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">Create momentum</p>
@@ -688,6 +905,38 @@ export default function DashboardPage() {
           </div>
         </div>
       </section>
+
+      {/* Undo toast */}
+      {undoVisible && lastDeleted?.task && (
+        <div className="fixed bottom-5 left-5 z-[9999] max-w-[92vw]">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-700/80 bg-slate-950/95 px-4 py-3 shadow-[0_0_40px_rgba(15,23,42,0.92)]">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-slate-50">Task deleted</p>
+              <p className="mt-0.5 truncate text-[10px] text-[var(--avillo-cream-muted)]">
+                {lastDeleted.task.title || "Task"}
+              </p>
+            </div>
+
+            <button
+              onClick={undoDelete}
+              className="shrink-0 rounded-xl border border-amber-100/45 bg-amber-500/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-100 transition hover:border-amber-100/70 hover:bg-amber-500/15"
+            >
+              Undo
+            </button>
+
+            <button
+              onClick={() => {
+                hideUndo();
+                setLastDeleted(null);
+              }}
+              className="shrink-0 rounded-xl border border-slate-700/80 bg-slate-900/60 px-3 py-2 text-[10px] font-semibold text-[var(--avillo-cream-soft)] hover:border-slate-600/80"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -717,7 +966,11 @@ function StatCard({
 
       <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">{label}</p>
 
-      {loading ? <div className="mt-2 h-6 w-12 animate-pulse rounded-md bg-slate-700/60" /> : <p className="mt-2 text-2xl font-semibold text-slate-50">{value}</p>}
+      {loading ? (
+        <div className="mt-2 h-6 w-12 animate-pulse rounded-md bg-slate-700/60" />
+      ) : (
+        <p className="mt-2 text-2xl font-semibold text-slate-50">{value}</p>
+      )}
 
       {hint && <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">{hint}</p>}
 
@@ -737,7 +990,11 @@ function MiniMetric({ label, value, loading }: { label: string; value: number; l
   return (
     <div className="rounded-2xl border border-slate-700/80 bg-slate-950/80 px-3 py-2.5">
       <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--avillo-cream-muted)]">{label}</p>
-      {loading ? <div className="mt-1.5 h-4 w-10 animate-pulse rounded-md bg-slate-700/60" /> : <p className="mt-1 text-sm font-semibold text-[var(--avillo-cream-strong)]">{value}</p>}
+      {loading ? (
+        <div className="mt-1.5 h-4 w-10 animate-pulse rounded-md bg-slate-700/60" />
+      ) : (
+        <p className="mt-1 text-sm font-semibold text-[var(--avillo-cream-strong)]">{value}</p>
+      )}
     </div>
   );
 }
@@ -759,7 +1016,7 @@ function QuickLaunchButton({ label, description, href }: { label: string; descri
     <a
       href={href}
       className="block rounded-2xl border border-slate-700/80 bg-slate-900/75 px-4 py-3 text-left no-underline transition-colors hover:border-amber-100/80 hover:bg-slate-900/95 hover:no-underline focus:no-underline"
-      style={{ textDecoration: "none" }} // hard override for any global a:hover underline
+      style={{ textDecoration: "none" }}
     >
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/90 no-underline">{label}</p>
       <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)] no-underline">{description}</p>
@@ -774,39 +1031,4 @@ function EmptyPill({ title, body }: { title: string; body: string }) {
       <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">{body}</p>
     </div>
   );
-}
-
-/* -----------------------------
- * Helpers for AI badges
- * (kept so this file stays drop-in compatible if you reintroduce AI tiles later)
- * ----------------------------*/
-
-function engineLabel(slug: "listing" | "buyer" | "seller" | "neighborhood" | "unknown") {
-  switch (slug) {
-    case "listing":
-      return "Listing Engine";
-    case "buyer":
-      return "Buyer Studio";
-    case "seller":
-      return "Seller Studio";
-    case "neighborhood":
-      return "Neighborhood Engine";
-    default:
-      return "Engine";
-  }
-}
-
-function engineBadgeClass(slug: "listing" | "buyer" | "seller" | "neighborhood" | "unknown") {
-  switch (slug) {
-    case "listing":
-      return "inline-flex items-center rounded-full border border-sky-200/80 bg-sky-500/15 px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-sky-50";
-    case "buyer":
-      return "inline-flex items-center rounded-full border border-emerald-200/80 bg-emerald-500/15 px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-emerald-50";
-    case "seller":
-      return "inline-flex items-center rounded-full border border-amber-200/80 bg-amber-500/15 px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-50";
-    case "neighborhood":
-      return "inline-flex items-center rounded-full border border-fuchsia-200/80 bg-fuchsia-500/15 px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-fuchsia-50";
-    default:
-      return "inline-flex items-center rounded-full border border-slate-500/80 bg-slate-800/60 px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-100";
-  }
 }
