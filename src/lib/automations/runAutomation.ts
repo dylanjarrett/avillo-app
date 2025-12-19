@@ -1,3 +1,4 @@
+//lib/automations/runAutomation.ts
 import { prisma } from "@/lib/prisma";
 import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messaging";
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
@@ -299,7 +300,12 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
             }
 
             const body = renderTemplate(step.config?.text ?? "", templateVars);
-            await sendAutomationSms({ to: toPhone, body });
+            await sendAutomationSms({
+              userId: ctx.userId,
+              to: toPhone,
+              body,
+              contactId: ctx.contactId ?? null,
+            });
 
             await recordStep({
               stepId: step.id,

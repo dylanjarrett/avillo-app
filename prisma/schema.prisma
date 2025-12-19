@@ -111,6 +111,11 @@ model Contact {
   email     String?
   phone     String?
 
+  smsConsentedAt   DateTime?
+  smsConsentSource String?
+  smsConsentText   String?
+  smsOptedOutAt    DateTime?
+
   stage     String  @default("new") // new → warm → hot → past
   tags      String[] @default([])
 
@@ -497,4 +502,38 @@ model AutomationRunStep {
   @@index([runId])
   @@index([stepType])
   @@index([status])
+}
+
+enum SmsDirection {
+  OUTBOUND
+  INBOUND
+}
+
+model SmsSuppression {
+  id        String   @id @default(cuid())
+  userId    String
+  phone     String   // E.164
+  reason    String   @default("STOP")
+  createdAt DateTime @default(now())
+
+  @@unique([userId, phone])
+  @@index([userId, phone])
+}
+
+model SmsMessage {
+  id          String       @id @default(cuid())
+  userId      String
+  contactId   String?
+  direction   SmsDirection
+  fromNumber  String
+  toNumber    String
+  body        String
+  twilioSid   String?
+  status      String?
+  error       String?
+  createdAt   DateTime     @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, toNumber])
+  @@index([contactId])
 }
