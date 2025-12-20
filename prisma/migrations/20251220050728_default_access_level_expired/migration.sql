@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "User" ALTER COLUMN "accessLevel" SET DEFAULT 'EXPIRED';

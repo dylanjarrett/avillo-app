@@ -1,8 +1,9 @@
+// src/app/api/admin/users/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { UserRole, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
+import { UserRole, SubscriptionPlan, SubscriptionStatus, AccessLevel } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,8 +42,10 @@ function buildUserPayload(u: any) {
     email: u.email,
     brokerage: u.brokerage ?? "",
     role: u.role as UserRole,
-    plan: u.plan as SubscriptionPlan,
 
+    accessLevel: (u.accessLevel ?? "PAID") as AccessLevel,
+
+    plan: u.plan as SubscriptionPlan,
     subscriptionStatus: (u.subscriptionStatus ?? null) as SubscriptionStatus | null,
     trialEndsAt: toIso(u.trialEndsAt ?? null),
     currentPeriodEnd: toIso(u.currentPeriodEnd ?? null),
@@ -74,14 +77,14 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// PATCH update role/plan OR run actions
+// PATCH update role/plan/status/accessLevel OR run actions
 export async function PATCH(req: NextRequest) {
   const authCheck = await requireAdmin();
   if ("errorResponse" in authCheck) return authCheck.errorResponse;
 
   try {
     const body = await req.json().catch(() => ({}));
-    const { userId, role, plan, subscriptionStatus, action } = body ?? {};
+    const { userId, role, plan, subscriptionStatus, accessLevel, action } = body ?? {};
 
     if (!userId) {
       return NextResponse.json({ error: "Missing userId" }, { status: 400 });
@@ -92,6 +95,7 @@ export async function PATCH(req: NextRequest) {
       const updated = await prisma.user.update({
         where: { id: userId },
         data: {
+          accessLevel: "PAID" as any,
           plan: "FOUNDING_PRO" as any,
           subscriptionStatus: "ACTIVE" as any,
 
@@ -106,6 +110,33 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ user: buildUserPayload(updated) });
     }
 
+    // One-click action: grant Beta access (no Stripe)
+    if (action === "GRANT_BETA") {
+      const updated = await prisma.user.update({
+        where: { id: userId },
+        data: {
+          accessLevel: "BETA" as any,
+          // keep billing fields as-is; beta is an override
+          // (optionally you can force NONE to avoid confusion)
+          subscriptionStatus: "NONE" as any,
+        } as any,
+      });
+
+      return NextResponse.json({ user: buildUserPayload(updated) });
+    }
+
+    // One-click action: expire access (forces upgrade modal gating)
+    if (action === "EXPIRE_ACCESS") {
+      const updated = await prisma.user.update({
+        where: { id: userId },
+        data: {
+          accessLevel: "EXPIRED" as any,
+        } as any,
+      });
+
+      return NextResponse.json({ user: buildUserPayload(updated) });
+    }
+
     const data: any = {};
 
     if (role) {
@@ -113,6 +144,13 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: "Invalid role" }, { status: 400 });
       }
       data.role = role;
+    }
+
+    if (accessLevel) {
+      if (!Object.values(AccessLevel).includes(accessLevel)) {
+        return NextResponse.json({ error: "Invalid accessLevel" }, { status: 400 });
+      }
+      data.accessLevel = accessLevel;
     }
 
     if (plan) {

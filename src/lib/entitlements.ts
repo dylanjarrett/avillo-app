@@ -12,6 +12,8 @@ export type StatusWire =
   | null
   | undefined;
 
+export type AccessWire = "BETA" | "PAID" | "EXPIRED" | string | null | undefined;
+
 export type EntitlementKey =
   | "INTELLIGENCE_GENERATE"
   | "INTELLIGENCE_SAVE"
@@ -19,14 +21,22 @@ export type EntitlementKey =
   | "AUTOMATIONS_WRITE"
   | "AUTOMATIONS_RUN"
   | "AUTOMATIONS_TRIGGER"
-  | "AUTOMATIONS_PERSIST"; 
+  | "AUTOMATIONS_PERSIST";
 
 export type Entitlements = {
+  accessLevel: "BETA" | "PAID" | "EXPIRED";
   plan: "STARTER" | "PRO" | "FOUNDING_PRO";
   subscriptionStatus: "NONE" | "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED";
   isPaidTier: boolean;
   can: Record<EntitlementKey, boolean>;
 };
+
+function normalizeAccess(access: AccessWire): Entitlements["accessLevel"] {
+  const a = String(access || "").toUpperCase();
+  if (a === "BETA") return "BETA";
+  if (a === "EXPIRED") return "EXPIRED";
+  return "PAID";
+}
 
 function normalizePlan(plan: PlanWire): Entitlements["plan"] {
   const p = String(plan || "").toUpperCase();
@@ -51,7 +61,7 @@ function normalizeStatus(status: StatusWire): Entitlements["subscriptionStatus"]
  * - (Optional) allow PAST_DUE if you want grace
  */
 function hasPaidAccess(plan: Entitlements["plan"], status: Entitlements["subscriptionStatus"]) {
-  const paidPlan = plan === "PRO" || plan === "FOUNDING_PRO";
+  const paidPlan = plan === "STARTER" || plan === "PRO" || plan === "FOUNDING_PRO";
   if (!paidPlan) return false;
 
   if (status === "ACTIVE" || status === "TRIALING") return true;
@@ -65,19 +75,32 @@ export async function getEntitlementsForUserId(userId: string): Promise<Entitlem
   const u = await prisma.user.findUnique({
     where: { id: userId },
     select: {
+      accessLevel: true as any,
       plan: true as any,
       subscriptionStatus: true as any,
     },
   });
 
+  const accessLevel = normalizeAccess((u as any)?.accessLevel);
   const plan = normalizePlan((u as any)?.plan);
   const subscriptionStatus = normalizeStatus((u as any)?.subscriptionStatus);
-  const isPaidTier = hasPaidAccess(plan, subscriptionStatus);
+
+  // Access overrides:
+  // - BETA => treat as paid/unlocked (no Stripe required)
+  // - EXPIRED => always blocked
+  // - PAID => normal Stripe-based access
+  const isPaidTier =
+    accessLevel === "BETA"
+      ? true
+      : accessLevel === "EXPIRED"
+      ? false
+      : hasPaidAccess(plan, subscriptionStatus);
 
   /**
    * Your current product decision:
    * - Starter: can view + design (UI), but cannot save/update/delete or run
    * - Pro/Founding Pro: full access
+   * - Beta: full access via accessLevel override
    */
   const can: Entitlements["can"] = {
     // Intelligence
@@ -85,14 +108,14 @@ export async function getEntitlementsForUserId(userId: string): Promise<Entitlem
     INTELLIGENCE_SAVE: isPaidTier,
 
     // Autopilot / Automations
-    AUTOMATIONS_READ: true,          // Starter can view the page + list
-    AUTOMATIONS_WRITE: true,         // Starter can edit locally (UI) but not persist
-    AUTOMATIONS_PERSIST: isPaidTier, // ✅ gate POST/PUT/DELETE
-    AUTOMATIONS_RUN: isPaidTier,     // ✅ gate /run
-    AUTOMATIONS_TRIGGER: isPaidTier, // ✅ gate background triggers if/when enabled
+    AUTOMATIONS_READ: true, // Starter can view the page + list
+    AUTOMATIONS_WRITE: true, // Starter can edit locally (UI) but not persist
+    AUTOMATIONS_PERSIST: isPaidTier, // gate POST/PUT/DELETE
+    AUTOMATIONS_RUN: isPaidTier, // gate /run
+    AUTOMATIONS_TRIGGER: isPaidTier, // gate background triggers if/when enabled
   };
 
-  return { plan, subscriptionStatus, isPaidTier, can };
+  return { accessLevel, plan, subscriptionStatus, isPaidTier, can };
 }
 
 export async function requireEntitlement(userId: string, key: EntitlementKey) {
@@ -106,6 +129,7 @@ export async function requireEntitlement(userId: string, key: EntitlementKey) {
       code: "PLAN_REQUIRED",
       entitlement: key,
       requiredPlan: "PRO",
+      accessLevel: ent.accessLevel,
       plan: ent.plan,
       subscriptionStatus: ent.subscriptionStatus,
       message: "This feature requires Avillo Pro.",

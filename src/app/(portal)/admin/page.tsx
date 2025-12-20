@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
-import type { UserRole, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
+import type {
+  UserRole,
+  SubscriptionPlan,
+  SubscriptionStatus,
+  AccessLevel,
+} from "@prisma/client";
 
 type AdminUser = {
   id: string;
@@ -10,8 +15,10 @@ type AdminUser = {
   email: string;
   brokerage: string;
   role: UserRole;
-  plan: SubscriptionPlan;
 
+  accessLevel: AccessLevel;
+
+  plan: SubscriptionPlan;
   subscriptionStatus: SubscriptionStatus | null;
   trialEndsAt: string | null;
   currentPeriodEnd: string | null;
@@ -50,12 +57,23 @@ function formatDateOnly(x: string | null) {
 }
 
 function stripeSyncBadge(u: AdminUser) {
-  if (u.plan === "FOUNDING_PRO") return { label: "Manual / OK", tone: "good" as const };
+  // Manual grants can be “OK” even without Stripe ids
+  if (u.plan === "FOUNDING_PRO" && u.subscriptionStatus === "ACTIVE") {
+    return { label: "Manual / OK", tone: "good" as const };
+  }
+
   if (!u.stripeCustomerId) return { label: "Missing customer", tone: "bad" as const };
   if (!u.subscriptionStatus) return { label: "Missing status", tone: "warn" as const };
   if (!u.stripeSubscriptionId) return { label: "Missing sub", tone: "warn" as const };
   if (!u.stripePriceId) return { label: "Missing price", tone: "warn" as const };
+
   return { label: "Synced", tone: "good" as const };
+}
+
+function accessBadge(accessLevel: AccessLevel) {
+  if (accessLevel === "BETA") return { label: "BETA", tone: "warn" as const };
+  if (accessLevel === "EXPIRED") return { label: "EXPIRED", tone: "bad" as const };
+  return { label: "PAID", tone: "good" as const };
 }
 
 export default function AdminPage() {
@@ -69,6 +87,8 @@ export default function AdminPage() {
 
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [syncingUserId, setSyncingUserId] = useState<string | null>(null);
+
+  const [closingBeta, setClosingBeta] = useState(false);
 
   const [query, setQuery] = useState("");
 
@@ -118,6 +138,7 @@ export default function AdminPage() {
         (u.name || "").toLowerCase().includes(q) ||
         u.email.toLowerCase().includes(q) ||
         (u.brokerage || "").toLowerCase().includes(q) ||
+        (u.accessLevel || "").toLowerCase().includes(q) ||
         (u.plan || "").toLowerCase().includes(q) ||
         (u.subscriptionStatus || "").toLowerCase().includes(q) ||
         (u.stripeCustomerId || "").toLowerCase().includes(q)
@@ -125,8 +146,14 @@ export default function AdminPage() {
     });
   }, [users, query]);
 
-  const admins = useMemo(() => filteredUsers.filter((u) => u.role === "ADMIN"), [filteredUsers]);
-  const nonAdmins = useMemo(() => filteredUsers.filter((u) => u.role !== "ADMIN"), [filteredUsers]);
+  const admins = useMemo(
+    () => filteredUsers.filter((u) => u.role === "ADMIN"),
+    [filteredUsers]
+  );
+  const nonAdmins = useMemo(
+    () => filteredUsers.filter((u) => u.role !== "ADMIN"),
+    [filteredUsers]
+  );
 
   async function patchUser(userId: string, payload: any) {
     setSavingUserId(userId);
@@ -139,9 +166,9 @@ export default function AdminPage() {
         body: JSON.stringify({ userId, ...payload }),
       });
 
-      if (!res.ok) throw new Error("Failed to update user");
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Failed to update user");
 
-      const data = await res.json();
       setUsers((prev) => prev.map((u) => (u.id === userId ? data.user : u)));
       void loadMetrics();
     } catch (err: any) {
@@ -163,7 +190,7 @@ export default function AdminPage() {
         body: JSON.stringify({ userId }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "Failed to sync from Stripe");
 
       setUsers((prev) => prev.map((u) => (u.id === userId ? data.user : u)));
@@ -187,7 +214,7 @@ export default function AdminPage() {
         body: JSON.stringify({ stripeCustomerId }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "Failed to open billing portal");
 
       if (data?.url) window.open(data.url, "_blank", "noopener,noreferrer");
@@ -197,12 +224,40 @@ export default function AdminPage() {
     }
   }
 
+  async function closeBetaGlobally() {
+    const ok = window.confirm(
+      "Close beta globally?\n\nThis will move ALL users with accessLevel=BETA to accessLevel=EXPIRED and force the upgrade modal everywhere."
+    );
+    if (!ok) return;
+
+    setClosingBeta(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/admin/beta/close", { method: "POST" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Failed to close beta");
+
+      // Refresh users + metrics so the table reflects EXPIRED
+      await loadUsers();
+      await loadMetrics();
+
+      // Small, visible confirmation
+      alert(data?.message || "Beta closed.");
+    } catch (err: any) {
+      console.error("Close beta error", err);
+      setError(err.message || "Failed to close beta.");
+    } finally {
+      setClosingBeta(false);
+    }
+  }
+
   return (
     <div className="space-y-8">
       <PageHeader
         eyebrow="Admin"
         title="Avillo control panel"
-        subtitle="Manage users, plans, live Stripe sync, and revenue snapshots."
+        subtitle="Manage users, access levels, live Stripe sync, and revenue snapshots."
       />
 
       {/* Metrics */}
@@ -241,10 +296,10 @@ export default function AdminPage() {
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-              Users &amp; billing
+              Users &amp; access
             </p>
             <p className="mt-1 text-[11px] text-slate-300/80">
-              Search by name/email/brokerage/plan/status/customer id.
+              Search by name/email/brokerage/access/plan/status/customer id.
             </p>
           </div>
 
@@ -255,6 +310,22 @@ export default function AdminPage() {
               placeholder="Search users…"
               className="avillo-input w-full sm:w-80"
             />
+
+            <button
+              type="button"
+              onClick={closeBetaGlobally}
+              disabled={closingBeta}
+              className={
+                "rounded-full border px-4 py-2 text-[11px] font-semibold " +
+                (closingBeta
+                  ? "border-slate-700 bg-slate-900/60 text-slate-400 cursor-not-allowed"
+                  : "border-rose-300/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20")
+              }
+              title="Move all BETA users to EXPIRED"
+            >
+              {closingBeta ? "Closing beta…" : "Close beta globally"}
+            </button>
+
             {loading && <span className="text-[11px] text-slate-400 text-right">Loading…</span>}
           </div>
         </div>
@@ -281,7 +352,10 @@ export default function AdminPage() {
                   savingUserId={savingUserId}
                   syncingUserId={syncingUserId}
                   onChangeRole={(id, role) => patchUser(id, { role })}
+                  onChangeAccess={(id, accessLevel) => patchUser(id, { accessLevel })}
                   onChangePlan={(id, plan) => patchUser(id, { plan })}
+                  onGrantBeta={(id) => patchUser(id, { action: "GRANT_BETA" })}
+                  onExpireAccess={(id) => patchUser(id, { action: "EXPIRE_ACCESS" })}
                   onGrantFoundingPro={(id) => patchUser(id, { action: "GRANT_FOUNDING_PRO" })}
                   onOpenStripe={openStripePortal}
                   onSyncStripe={syncFromStripe}
@@ -301,7 +375,10 @@ export default function AdminPage() {
                   savingUserId={savingUserId}
                   syncingUserId={syncingUserId}
                   onChangeRole={(id, role) => patchUser(id, { role })}
+                  onChangeAccess={(id, accessLevel) => patchUser(id, { accessLevel })}
                   onChangePlan={(id, plan) => patchUser(id, { plan })}
+                  onGrantBeta={(id) => patchUser(id, { action: "GRANT_BETA" })}
+                  onExpireAccess={(id) => patchUser(id, { action: "EXPIRE_ACCESS" })}
                   onGrantFoundingPro={(id) => patchUser(id, { action: "GRANT_FOUNDING_PRO" })}
                   onOpenStripe={openStripePortal}
                   onSyncStripe={syncFromStripe}
@@ -320,7 +397,10 @@ function UserTable({
   savingUserId,
   syncingUserId,
   onChangeRole,
+  onChangeAccess,
   onChangePlan,
+  onGrantBeta,
+  onExpireAccess,
   onGrantFoundingPro,
   onOpenStripe,
   onSyncStripe,
@@ -329,20 +409,24 @@ function UserTable({
   savingUserId: string | null;
   syncingUserId: string | null;
   onChangeRole: (userId: string, role: UserRole) => void;
+  onChangeAccess: (userId: string, accessLevel: AccessLevel) => void;
   onChangePlan: (userId: string, plan: SubscriptionPlan) => void;
+  onGrantBeta: (userId: string) => void;
+  onExpireAccess: (userId: string) => void;
   onGrantFoundingPro: (userId: string) => void;
   onOpenStripe: (stripeCustomerId: string | null) => void;
   onSyncStripe: (userId: string) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/60">
-      <table className="min-w-[1500px] w-full text-left text-sm text-slate-200">
+      <table className="min-w-[1650px] w-full text-left text-sm text-slate-200">
         <thead>
           <tr className="text-[11px] uppercase text-slate-400 border-b border-slate-800/80 bg-slate-950/80">
             <th className="px-4 py-2">User</th>
             <th className="px-4 py-2">Email</th>
             <th className="px-4 py-2">Brokerage</th>
             <th className="px-4 py-2">Role</th>
+            <th className="px-4 py-2">Access</th>
             <th className="px-4 py-2">Plan</th>
             <th className="px-4 py-2">Status</th>
             <th className="px-4 py-2">Trial ends</th>
@@ -358,12 +442,19 @@ function UserTable({
 
         <tbody>
           {users.map((u, idx) => {
-            const badge = stripeSyncBadge(u);
-
-            const badgeClass =
-              badge.tone === "good"
+            const stripeBadge = stripeSyncBadge(u);
+            const stripeBadgeClass =
+              stripeBadge.tone === "good"
                 ? "bg-emerald-500/10 text-emerald-200 border-emerald-400/30"
-                : badge.tone === "warn"
+                : stripeBadge.tone === "warn"
+                ? "bg-amber-500/10 text-amber-200 border-amber-400/30"
+                : "bg-red-500/10 text-red-200 border-red-400/30";
+
+            const a = accessBadge(u.accessLevel);
+            const accessClass =
+              a.tone === "good"
+                ? "bg-emerald-500/10 text-emerald-200 border-emerald-400/30"
+                : a.tone === "warn"
                 ? "bg-amber-500/10 text-amber-200 border-amber-400/30"
                 : "bg-red-500/10 text-red-200 border-red-400/30";
 
@@ -392,6 +483,28 @@ function UserTable({
                 </td>
 
                 <td className="px-4 py-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold ${accessClass}`}
+                      title="Access override"
+                    >
+                      {a.label}
+                    </span>
+
+                    <select
+                      disabled={savingUserId === u.id}
+                      value={u.accessLevel}
+                      onChange={(e) => onChangeAccess(u.id, e.target.value as AccessLevel)}
+                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px]"
+                    >
+                      <option value="PAID">PAID</option>
+                      <option value="BETA">BETA</option>
+                      <option value="EXPIRED">EXPIRED</option>
+                    </select>
+                  </div>
+                </td>
+
+                <td className="px-4 py-2">
                   <select
                     disabled={savingUserId === u.id}
                     value={u.plan}
@@ -409,8 +522,10 @@ function UserTable({
                 <td className="px-4 py-2">{formatDateTime(u.currentPeriodEnd)}</td>
 
                 <td className="px-4 py-2">
-                  <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${badgeClass}`}>
-                    {badge.label}
+                  <span
+                    className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${stripeBadgeClass}`}
+                  >
+                    {stripeBadge.label}
                   </span>
                 </td>
 
@@ -449,18 +564,48 @@ function UserTable({
                 </td>
 
                 <td className="px-4 py-2">
-                  <button
-                    onClick={() => onGrantFoundingPro(u.id)}
-                    disabled={savingUserId === u.id}
-                    className={
-                      "rounded px-2 py-1 text-[11px] font-semibold border " +
-                      (savingUserId === u.id
-                        ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
-                        : "bg-amber-500/10 text-amber-200 border-amber-400/30 hover:bg-amber-500/20")
-                    }
-                  >
-                    Grant Founding Pro
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => onGrantBeta(u.id)}
+                      disabled={savingUserId === u.id}
+                      className={
+                        "rounded px-2 py-1 text-[11px] font-semibold border " +
+                        (savingUserId === u.id
+                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
+                          : "bg-sky-500/10 text-sky-200 border-sky-400/30 hover:bg-sky-500/20")
+                      }
+                      title="Set accessLevel=BETA (no Stripe required)"
+                    >
+                      Grant Beta
+                    </button>
+
+                    <button
+                      onClick={() => onExpireAccess(u.id)}
+                      disabled={savingUserId === u.id}
+                      className={
+                        "rounded px-2 py-1 text-[11px] font-semibold border " +
+                        (savingUserId === u.id
+                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
+                          : "bg-rose-500/10 text-rose-200 border-rose-400/30 hover:bg-rose-500/20")
+                      }
+                      title="Set accessLevel=EXPIRED (forces upgrade modal gating)"
+                    >
+                      Expire
+                    </button>
+
+                    <button
+                      onClick={() => onGrantFoundingPro(u.id)}
+                      disabled={savingUserId === u.id}
+                      className={
+                        "rounded px-2 py-1 text-[11px] font-semibold border " +
+                        (savingUserId === u.id
+                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
+                          : "bg-amber-500/10 text-amber-200 border-amber-400/30 hover:bg-amber-500/20")
+                      }
+                    >
+                      Grant Founding Pro
+                    </button>
+                  </div>
                 </td>
 
                 <td className="px-4 py-2">{u.openAITokensUsed}</td>

@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
     // ------- Check for existing account -------
     const existing = await prisma.user.findUnique({
       where: { email },
+      select: { id: true },
     });
 
     if (existing) {
@@ -62,8 +63,23 @@ export async function POST(req: NextRequest) {
         name: name || null,
         passwordHash,
         brokerage: brokerage || null,
+
         // For now we treat email as verified on signup.
         emailVerified: new Date(),
+
+        // ✅ Monetization defaults
+        // New users are paywalled until they start a Stripe trial/plan.
+        accessLevel: "EXPIRED" as any,
+        plan: "STARTER" as any,
+        subscriptionStatus: "NONE" as any,
+        trialEndsAt: null,
+        currentPeriodEnd: null,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        brokerage: true,
       },
     });
 
@@ -73,15 +89,14 @@ export async function POST(req: NextRequest) {
         userId: user.id,
         type: "system",
         summary: "Avillo workspace created.",
-        data: {},
+        data: { accessLevel: "EXPIRED" },
       },
     });
 
     // ------- Fire-and-forget welcome email (non-blocking) -------
     const appUrl = process.env.NEXTAUTH_URL || "https://app.avillo.io";
     const logoUrl =
-      process.env.AVILLO_LOGO_URL ||
-      "https://app.avillo.io/avillo-logo-cream.png";
+      process.env.AVILLO_LOGO_URL || "https://app.avillo.io/avillo-logo-cream.png";
 
     (async () => {
       try {

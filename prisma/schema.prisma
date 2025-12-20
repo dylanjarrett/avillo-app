@@ -33,6 +33,12 @@ enum SubscriptionStatus {
   CANCELED
 }
 
+enum AccessLevel {
+  BETA
+  PAID
+  EXPIRED
+}
+
 enum IntelligenceEngine {
   LISTING
   SELLER
@@ -70,6 +76,7 @@ model User {
   openAITokensUsed  Int      @default(0)
 
   // Billing / subscription state (NEW)
+  accessLevel         AccessLevel        @default(EXPIRED)
   plan                 SubscriptionPlan   @default(STARTER)
   subscriptionStatus   SubscriptionStatus @default(NONE)
   trialEndsAt          DateTime?

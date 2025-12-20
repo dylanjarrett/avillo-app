@@ -1,15 +1,26 @@
+// src/app/(portal)/billing/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import PageHeader from "@/components/layout/page-header";
 
 type BillingPeriod = "monthly" | "annual";
 type CheckoutPlan = "starter" | "pro" | "founding_pro";
 
 export default function BillingPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { update: refreshSession } = useSession();
+
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
   const [checkoutLoading, setCheckoutLoading] = useState<CheckoutPlan | null>(null);
   const [portalLoading, setPortalLoading] = useState(false);
+
+  // Post-checkout verifier state
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   const isAnnual = billingPeriod === "annual";
 
@@ -34,8 +45,63 @@ export default function BillingPage() {
     };
   }, [isAnnual]);
 
+  /**
+   * ✅ After Stripe redirects back to:
+   * /billing?status=success&session_id=cs_...
+   * we must POST that sessionId to:
+   * /api/stripe/checkout/verify
+   */
+  useEffect(() => {
+    const status = searchParams.get("status");
+    if (status !== "success") return;
+    if (verifying) return;
+
+    const sessionId = (searchParams.get("session_id") || "").trim();
+
+    (async () => {
+      try {
+        setVerifying(true);
+        setVerifyError(null);
+
+        if (!sessionId) {
+          throw new Error("Missing session_id from Stripe return URL.");
+        }
+
+        const res = await fetch("/api/stripe/checkout/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(data?.error || "Unable to verify subscription.");
+        }
+
+        // Refresh NextAuth session/JWT so middleware reads new accessLevel/plan/status
+        await refreshSession?.();
+
+        // Give the browser one microtask to flush the updated cookie
+        await new Promise((r) => setTimeout(r, 50));
+
+        // 🚀 Redirect into the app
+        router.replace("/dashboard");
+
+        // Optional: if you want to auto-enter the app:
+        // router.push("/dashboard");
+      } catch (e: any) {
+        console.error("[billing] verify error:", e);
+        setVerifyError(e?.message || "Verification failed.");
+      } finally {
+        setVerifying(false);
+      }
+    })();
+    // Intentionally depends on the searchParams object; it updates when URL changes.
+  }, [searchParams, router, refreshSession, verifying]);
+
   async function startCheckout(plan: CheckoutPlan) {
-    if (checkoutLoading) return;
+    if (checkoutLoading || verifying) return;
 
     try {
       setCheckoutLoading(plan);
@@ -46,7 +112,7 @@ export default function BillingPage() {
         body: JSON.stringify({ plan, period: billingPeriod }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok && data?.url) {
         window.location.href = data.url;
@@ -63,13 +129,13 @@ export default function BillingPage() {
   }
 
   async function openBillingPortal() {
-    if (portalLoading) return;
+    if (portalLoading || verifying) return;
 
     try {
       setPortalLoading(true);
 
       const res = await fetch("/api/stripe/portal", { method: "POST" });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok && data?.url) {
         window.location.href = data.url;
@@ -87,8 +153,8 @@ export default function BillingPage() {
 
   /**
    * NOTE:
-   * Replace these with real subscription data when you wire webhooks.
-   * For now, keep copy neutral so we don't lie to users.
+   * When you want to show real current plan/status, read it from your /api/account/me.
+   * For now we keep the UI static.
    */
   const currentPlanLabel = "Early Access";
   const currentPlanStatus = "Active";
@@ -100,6 +166,19 @@ export default function BillingPage() {
         title="Choose your Avillo plan"
         subtitle="Starter is built for control. Pro is built for leverage — automate follow-ups and reuse AI prompts with listing/contact context."
       />
+
+      {/* ✅ Post-checkout verification banner */}
+      {verifying && (
+        <div className="rounded-2xl border border-amber-200/30 bg-amber-100/10 px-5 py-3 text-xs text-amber-100 shadow-[0_0_24px_rgba(251,191,36,0.18)]">
+          Finalizing your subscription… hang tight.
+        </div>
+      )}
+
+      {verifyError && (
+        <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-5 py-3 text-xs text-red-200 shadow-[0_0_24px_rgba(248,113,113,0.18)]">
+          {verifyError}
+        </div>
+      )}
 
       {/* Current plan / status */}
       <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 text-xs text-slate-200/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
@@ -137,7 +216,7 @@ export default function BillingPage() {
             <button
               type="button"
               onClick={openBillingPortal}
-              disabled={portalLoading}
+              disabled={portalLoading || verifying}
               className="inline-flex items-center rounded-full border border-slate-600 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200 transition hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-70"
             >
               {portalLoading ? "Opening billing portal…" : "Manage billing"}
@@ -148,15 +227,14 @@ export default function BillingPage() {
 
       {/* Billing period toggle */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs text-slate-300/90">
-          Toggle between monthly and yearly. Yearly plans save 2 months.
-        </p>
+        <p className="text-xs text-slate-300/90">Toggle between monthly and yearly. Yearly plans save 2 months.</p>
 
         <div className="w-full sm:w-auto">
           <div className="flex w-full rounded-full border border-slate-700 bg-slate-950/80 p-1 text-[11px] font-semibold text-slate-300 shadow-[0_0_24px_rgba(15,23,42,0.85)]">
             <button
               type="button"
               onClick={() => setBillingPeriod("monthly")}
+              disabled={verifying}
               className={
                 "flex-1 rounded-full px-3 py-1.5 transition " +
                 (billingPeriod === "monthly"
@@ -170,6 +248,7 @@ export default function BillingPage() {
             <button
               type="button"
               onClick={() => setBillingPeriod("annual")}
+              disabled={verifying}
               className={
                 "flex-1 rounded-full px-3 py-1.5 text-center transition " +
                 (billingPeriod === "annual"
@@ -192,9 +271,7 @@ export default function BillingPage() {
         <div className="relative overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/80 px-6 py-6 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
           <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_left,rgba(248,250,252,0.10),transparent_55%)]" />
 
-          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-200">
-            Starter
-          </p>
+          <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-200">Starter</p>
 
           <p className="mt-3 text-3xl font-semibold text-slate-50">
             ${display.starter.amount}
@@ -216,7 +293,7 @@ export default function BillingPage() {
 
           <button
             onClick={() => startCheckout("starter")}
-            disabled={checkoutLoading !== null}
+            disabled={checkoutLoading !== null || verifying}
             className="mt-6 w-full rounded-full border border-slate-600 bg-slate-900/60 py-2 text-xs font-semibold text-slate-200 transition hover:border-amber-100/70 hover:bg-amber-50/10 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {checkoutLoading === "starter"
@@ -232,9 +309,7 @@ export default function BillingPage() {
           <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.25),transparent_60%)]" />
 
           <div className="flex items-center justify-between">
-            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-200">
-              Avillo Pro
-            </p>
+            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-200">Avillo Pro</p>
 
             <span className="inline-flex items-center rounded-full border border-amber-200/50 bg-amber-100/10 px-2 py-0.5 text-[10px] font-semibold text-amber-100">
               Recommended
@@ -261,7 +336,7 @@ export default function BillingPage() {
 
           <button
             onClick={() => startCheckout("pro")}
-            disabled={checkoutLoading !== null}
+            disabled={checkoutLoading !== null || verifying}
             className="mt-6 w-full rounded-full border border-amber-200/70 bg-amber-50/10 py-2 text-xs font-semibold text-amber-100 transition hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {checkoutLoading === "pro"
@@ -281,9 +356,7 @@ export default function BillingPage() {
           <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_left,rgba(253,230,138,0.18),transparent_55%)]" />
 
           <div className="flex items-center justify-between">
-            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-100/90">
-              Founding Pro
-            </p>
+            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-amber-100/90">Founding Pro</p>
 
             <span className="inline-flex items-center rounded-full border border-emerald-300/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
               Locked for life
@@ -310,7 +383,7 @@ export default function BillingPage() {
 
           <button
             onClick={() => startCheckout("founding_pro")}
-            disabled={checkoutLoading !== null}
+            disabled={checkoutLoading !== null || verifying}
             className="mt-6 w-full rounded-full border border-amber-100/40 bg-slate-900/60 py-2 text-xs font-semibold text-amber-100 transition hover:border-amber-100/70 hover:bg-amber-50/10 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {checkoutLoading === "founding_pro"
@@ -332,9 +405,7 @@ export default function BillingPage() {
 
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-300">
-              Enterprise
-            </p>
+            <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-slate-300">Enterprise</p>
             <p className="mt-2 text-lg font-semibold text-slate-50">Custom pricing</p>
             <p className="mt-1 text-slate-400/90">
               Built for brokerages and larger teams: permissions, reporting, lead routing, and custom workflows.
@@ -358,9 +429,7 @@ export default function BillingPage() {
 
       {/* FAQ */}
       <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-6 text-xs text-slate-200/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
-          Billing FAQ
-        </p>
+        <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">Billing FAQ</p>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div>

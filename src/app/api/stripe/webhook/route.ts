@@ -1,3 +1,4 @@
+// src/app/api/stripe/webhook/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
@@ -20,15 +21,28 @@ function unixToDate(x: unknown): Date | null {
   return new Date(x * 1000);
 }
 
-/**
- * Stripe TS types can vary by version.
- * Stripe ALWAYS sends these on Subscription objects as unix seconds, but TS may not know them.
- * So we read them safely without fighting types.
- */
 function getUnixField(obj: unknown, key: string): number | null {
   if (!obj || typeof obj !== "object") return null;
   const val = (obj as Record<string, unknown>)[key];
   return typeof val === "number" ? val : null;
+}
+
+function getCustomerId(
+  x: string | Stripe.Customer | Stripe.DeletedCustomer | null | undefined
+) {
+  if (!x) return null;
+  if (typeof x === "string") return x;
+  return x.id ?? null;
+}
+
+function getSubscriptionId(x: string | Stripe.Subscription | null | undefined) {
+  if (!x) return null;
+  if (typeof x === "string") return x;
+  return x.id ?? null;
+}
+
+function getPrimaryPriceId(sub: Stripe.Subscription): string | null {
+  return sub.items?.data?.[0]?.price?.id ?? null;
 }
 
 function planFromPriceId(priceId?: string | null): Plan | null {
@@ -72,32 +86,10 @@ function statusFromStripe(sub: Stripe.Subscription): Status {
   }
 }
 
-function getCustomerId(
-  x: string | Stripe.Customer | Stripe.DeletedCustomer | null | undefined
-) {
-  if (!x) return null;
-  if (typeof x === "string") return x;
-  return x.id ?? null;
-}
-
-function getSubscriptionId(x: string | Stripe.Subscription | null | undefined) {
-  if (!x) return null;
-  if (typeof x === "string") return x;
-  return x.id ?? null;
-}
-
-function getPrimaryPriceId(sub: Stripe.Subscription): string | null {
-  return sub.items?.data?.[0]?.price?.id ?? null;
-}
-
 function isProPlan(plan: Plan | null | undefined) {
   return plan === "PRO" || plan === "FOUNDING_PRO";
 }
 
-/**
- * Pause all automations on downgrade/cancel and write an audit entry.
- * NOTE: Your Prisma model is CRMActivity, so the client accessor is prisma.cRMActivity.
- */
 async function pauseAllAutomationsForUser(params: {
   userId: string;
   reason: string;
@@ -109,7 +101,6 @@ async function pauseAllAutomationsForUser(params: {
   const { prisma } = await import("@/lib/prisma");
   const { userId, reason, fromPlan, toPlan, fromStatus, toStatus } = params;
 
-  // Pause any currently-active automation (do NOT delete)
   const paused = await prisma.automation.updateMany({
     where: { userId, active: true },
     data: {
@@ -119,7 +110,6 @@ async function pauseAllAutomationsForUser(params: {
     },
   });
 
-  // ✅ Idempotency: Stripe can fire multiple events. Only write audit if we actually changed something.
   if (paused.count > 0) {
     try {
       await prisma.cRMActivity.create({
@@ -139,61 +129,72 @@ async function pauseAllAutomationsForUser(params: {
         },
       });
     } catch (e) {
-      // Never fail the webhook due to audit trail write.
       console.warn("[stripe-webhook] Failed to write CRMActivity audit:", e);
     }
   }
 }
 
-async function updateUserByCustomerId(params: {
-  stripeCustomerId: string;
+async function updateUserBilling(params: {
+  userId?: string | null;
+  stripeCustomerId?: string | null;
   subscription: Stripe.Subscription;
 }) {
-  const { stripeCustomerId, subscription } = params;
+  const { prisma } = await import("@/lib/prisma");
+  const { userId, stripeCustomerId, subscription } = params;
 
   const priceId = getPrimaryPriceId(subscription);
   const plan = planFromPriceId(priceId) ?? "STARTER";
   const status = statusFromStripe(subscription);
 
-  const trialEndUnix = getUnixField(subscription, "trial_end");
-  const currentPeriodEndUnix = getUnixField(subscription, "current_period_end");
+  const trialEndsAt = unixToDate(getUnixField(subscription, "trial_end"));
+  const currentPeriodEnd = unixToDate(getUnixField(subscription, "current_period_end"));
 
-  const trialEndsAt = unixToDate(trialEndUnix);
-  const currentPeriodEnd = unixToDate(currentPeriodEndUnix);
-
-  const { prisma } = await import("@/lib/prisma");
-
-  const user = await prisma.user.findFirst({
-    where: { stripeCustomerId },
-    select: { id: true, plan: true, subscriptionStatus: true },
-  });
+  // Find the user: prefer userId (metadata), fallback to stripeCustomerId
+  const user =
+    (userId
+      ? await prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true, plan: true, subscriptionStatus: true },
+        })
+      : null) ??
+    (stripeCustomerId
+      ? await prisma.user.findFirst({
+          where: { stripeCustomerId },
+          select: { id: true, plan: true, subscriptionStatus: true },
+        })
+      : null);
 
   if (!user) {
-    console.warn("[stripe-webhook] No user found for stripeCustomerId:", stripeCustomerId);
+    console.warn("[stripe-webhook] No user match for updateUserBilling", {
+      userId,
+      stripeCustomerId,
+      subscriptionId: subscription.id,
+    });
     return;
   }
 
   const prevPlan = (user.plan as Plan) ?? "STARTER";
   const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
 
+  // ✅ Any paid checkout / subscription means the workspace is "PAID" access (not EXPIRED).
   await prisma.user.update({
     where: { id: user.id },
     data: {
+      accessLevel: "PAID" as any,
+
       plan: plan as any,
       subscriptionStatus: status as any,
       trialEndsAt: trialEndsAt ?? undefined,
       currentPeriodEnd: currentPeriodEnd ?? undefined,
+
+      // Ensure ids are always saved
+      stripeCustomerId: stripeCustomerId ?? undefined,
       stripeSubscriptionId: subscription.id,
       stripePriceId: priceId ?? undefined,
-    },
+    } as any,
   });
 
-  /**
-   * ✅ Pause rules (safe):
-   * - If user previously had Pro (PRO/FOUNDING_PRO) and now they effectively lose it:
-   *   - plan becomes STARTER, OR
-   *   - subscription status becomes PAST_DUE / CANCELED / NONE
-   */
+  // Pause automations if they lost Pro
   const hadPro = isProPlan(prevPlan);
   const lostProByPlan = hadPro && plan === "STARTER";
   const lostProByStatus =
@@ -211,36 +212,46 @@ async function updateUserByCustomerId(params: {
   }
 }
 
-async function handleCanceled(stripeCustomerId: string) {
+async function handleCanceled(params: { userId?: string | null; stripeCustomerId?: string | null }) {
   const { prisma } = await import("@/lib/prisma");
+  const { userId, stripeCustomerId } = params;
 
-  const user = await prisma.user.findFirst({
-    where: { stripeCustomerId },
-    select: { id: true, plan: true, subscriptionStatus: true },
-  });
+  const user =
+    (userId
+      ? await prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true, plan: true, subscriptionStatus: true },
+        })
+      : null) ??
+    (stripeCustomerId
+      ? await prisma.user.findFirst({
+          where: { stripeCustomerId },
+          select: { id: true, plan: true, subscriptionStatus: true },
+        })
+      : null);
 
   if (!user) {
-    console.warn("[stripe-webhook] No user found for stripeCustomerId:", stripeCustomerId);
+    console.warn("[stripe-webhook] No user found for cancel", { userId, stripeCustomerId });
     return;
   }
 
   const prevPlan = (user.plan as Plan) ?? "STARTER";
   const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
 
-  // V1 behavior: cancel -> downgrade immediately to STARTER
   await prisma.user.update({
     where: { id: user.id },
     data: {
+      accessLevel: "PAID" as any, // keep PAID; plan/status control features
+
       plan: "STARTER" as any,
       subscriptionStatus: "CANCELED" as any,
       trialEndsAt: null,
       currentPeriodEnd: null,
       stripeSubscriptionId: null,
       stripePriceId: null,
-    },
+    } as any,
   });
 
-  // Also pause everything immediately (safety)
   await pauseAllAutomationsForUser({
     userId: user.id,
     reason: "SUBSCRIPTION_CANCELED",
@@ -273,10 +284,22 @@ export async function POST(req: NextRequest) {
         const stripeCustomerId = getCustomerId(session.customer as any);
         const subscriptionId = getSubscriptionId(session.subscription as any);
 
-        if (!stripeCustomerId || !subscriptionId) break;
+        // ✅ Prefer linking by userId
+        const userId =
+          (session.client_reference_id as string | null | undefined) ??
+          ((session.metadata as any)?.userId as string | null | undefined) ??
+          null;
+
+        if (!subscriptionId) break;
 
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-        await updateUserByCustomerId({ stripeCustomerId, subscription });
+
+        await updateUserBilling({
+          userId,
+          stripeCustomerId,
+          subscription,
+        });
+
         break;
       }
 
@@ -284,18 +307,27 @@ export async function POST(req: NextRequest) {
       case "customer.subscription.updated": {
         const subscription = event.data.object as Stripe.Subscription;
         const stripeCustomerId = getCustomerId(subscription.customer as any);
-        if (!stripeCustomerId) break;
 
-        await updateUserByCustomerId({ stripeCustomerId, subscription });
+        // ✅ Also support userId on subscription metadata (if set)
+        const userId = ((subscription.metadata as any)?.userId as string | null | undefined) ?? null;
+
+        if (!stripeCustomerId && !userId) break;
+
+        await updateUserBilling({
+          userId,
+          stripeCustomerId,
+          subscription,
+        });
+
         break;
       }
 
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
         const stripeCustomerId = getCustomerId(subscription.customer as any);
-        if (!stripeCustomerId) break;
+        const userId = ((subscription.metadata as any)?.userId as string | null | undefined) ?? null;
 
-        await handleCanceled(stripeCustomerId);
+        await handleCanceled({ userId, stripeCustomerId });
         break;
       }
 

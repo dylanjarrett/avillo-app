@@ -33,6 +33,8 @@ export async function GET() {
         name: true,
         email: true,
         role: true as any,
+
+        accessLevel: true as any,
         plan: true as any,
         subscriptionStatus: true as any,
       },
@@ -52,6 +54,8 @@ export async function GET() {
           name: user.name ?? "",
           email: user.email,
           role: user.role,
+
+          accessLevel: user.accessLevel,
           plan: user.plan,
           subscriptionStatus: user.subscriptionStatus,
         },
