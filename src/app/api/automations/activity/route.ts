@@ -1,3 +1,4 @@
+// src/app/api/automations/activity/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
@@ -11,13 +12,26 @@ async function getPrisma() {
   return prisma;
 }
 
-function normalizeStatus(v: any) {
+/**
+ * Normalize automation run + step statuses into a small set for UI.
+ */
+function normalizeRunStatus(v: any) {
   const s = String(v || "").toLowerCase();
-  if (s.includes("success")) return "success";
-  if (s.includes("fail")) return "failed";
+  if (s.includes("success") || s.includes("completed") || s === "ok") return "success";
+  if (s.includes("fail") || s.includes("error")) return "failed";
   if (s.includes("skip")) return "skipped";
-  if (s.includes("running")) return "running";
+  if (s.includes("running") || s.includes("in_progress")) return "running";
   return s || "unknown";
+}
+
+/**
+ * Normalize task statuses (Prisma enum OPEN/DONE) into "open"/"done" for UI consistency.
+ * Your UI already lowercases on display, but this keeps the API consistent.
+ */
+function normalizeTaskStatus(v: any) {
+  const s = String(v || "").toUpperCase();
+  if (s === "DONE" || s === "COMPLETED") return "done";
+  return "open";
 }
 
 export async function GET(req: NextRequest) {
@@ -37,6 +51,7 @@ export async function GET(req: NextRequest) {
     const contactId = url.searchParams.get("contactId");
     if (!contactId) return NextResponse.json({ items: [], tasks: [] });
 
+    // --- Runs + steps ---
     const runs = await prisma.automationRun.findMany({
       where: {
         contactId,
@@ -61,18 +76,32 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    // --- Tasks created by Autopilot ---
+    // ✅ Critical: exclude soft-deleted tasks so People reflects Dashboard deletes.
     const tasks = await prisma.task.findMany({
-      where: { userId: user.id, contactId, source: "AUTOPILOT" },
-      orderBy: { createdAt: "desc" },
+      where: {
+        userId: user.id,
+        contactId,
+        source: "AUTOPILOT",
+        deletedAt: null, // ✅ recommendation 1: keep People in sync with deletions
+      },
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }], // open tasks first, then newest
       take: 25,
-      select: { id: true, title: true, dueAt: true, status: true, createdAt: true },
+      select: {
+        id: true,
+        title: true,
+        dueAt: true,
+        status: true,
+        createdAt: true,
+        completedAt: true,
+      },
     });
 
     const items = runs.map((r) => {
       const steps = (r.steps ?? []).map((s) => ({
         id: s.id,
         stepType: s.stepType || "STEP",
-        status: normalizeStatus(s.status),
+        status: normalizeRunStatus(s.status),
         message: s.message ?? "",
         executedAt: s.executedAt.toISOString(),
         stepIndex: s.stepIndex,
@@ -87,7 +116,7 @@ export async function GET(req: NextRequest) {
         runId: r.id,
         automationId: r.automationId,
         automationName: r.automation?.name ?? "Automation",
-        status: normalizeStatus(r.status),
+        status: normalizeRunStatus(r.status),
         message: r.message ?? "",
         executedAt: r.executedAt.toISOString(),
         steps,
@@ -101,12 +130,14 @@ export async function GET(req: NextRequest) {
         id: t.id,
         title: t.title,
         dueAt: t.dueAt ? t.dueAt.toISOString() : null,
-        status: t.status,
+        // ✅ recommendation 2: normalized status for UI consistency
+        status: normalizeTaskStatus(t.status),
         createdAt: t.createdAt.toISOString(),
+        completedAt: t.completedAt ? t.completedAt.toISOString() : null,
       })),
     });
   } catch (err) {
-    console.error("/api/autopilot/activity GET error:", err);
+    console.error("/api/automations/activity GET error:", err);
     return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
   }
 }

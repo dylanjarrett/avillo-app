@@ -1509,7 +1509,7 @@ export default function CrmPage() {
       ) : (
         <>
           {/* Existing notes */}
-          <div className="mt-2 max-h-44 space-y-2 overflow-y-auto">
+          <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
             {(activeContact.notes ?? []).length === 0 && (
               <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
                 No notes yet. Log your first touchpoint below.
@@ -1791,8 +1791,8 @@ function AutopilotActivityCard({
       )}
 
       {!loading && hasRuns && (
-        <div className="mt-3 space-y-2">
-          {(items ?? []).slice(0, 10).map((run: any) => {
+  <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+    {(items ?? []).slice(0, 50).map((run: any) => {
             const runId = String(
               run?.id ?? run?.runId ?? `${run?.automationName ?? "run"}-${run?.executedAt ?? ""}`
             );
@@ -1923,7 +1923,7 @@ function AutopilotActivityCard({
             Tasks created by Autopilot
           </p>
 
-          <div className="mt-2 space-y-1">
+          <div className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">
             {(tasks ?? []).slice(0, 3).map((t: any) => (
               <div
                 key={String(t?.id ?? Math.random())}
