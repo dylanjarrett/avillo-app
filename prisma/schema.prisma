@@ -68,6 +68,8 @@ model User {
   passwordHash     String?  @map("password_hash")
   image            String?
   brokerage        String?
+  phone            String?
+  phoneVerified    DateTime?
 
   // Auth / app metadata
   role             UserRole @default(USER)

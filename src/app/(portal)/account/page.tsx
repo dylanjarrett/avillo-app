@@ -1,6 +1,7 @@
+// src/app/(portal)/account/page.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
 import { signOut } from "next-auth/react";
 
@@ -9,11 +10,29 @@ type Profile = {
   name: string | null;
   email: string;
   brokerage: string | null;
+  phone: string | null;
+  createdAt?: string;
 };
 
 type ProfileResponse =
   | { success: true; user: Profile }
   | { success?: false; error: string };
+
+function normalizePhoneInput(raw: string) {
+  return raw.replace(/[^\d+]/g, "").trim();
+}
+
+function formatPhonePretty(value: string) {
+  // If it's already E.164 (+1...), leave it.
+  if (value.startsWith("+")) return value;
+
+  // Basic US prettifier if 10 digits
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return value;
+}
 
 export default function AccountPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -31,6 +50,12 @@ export default function AccountPage() {
     null
   );
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
+
+  // Phone change state (one-way: saved via /api/account/change-phone)
+  const [phoneInput, setPhoneInput] = useState("");
+  const [phoneSaving, setPhoneSaving] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [phoneSuccess, setPhoneSuccess] = useState<string | null>(null);
 
   // Change email state
   const [newEmail, setNewEmail] = useState("");
@@ -56,11 +81,10 @@ export default function AccountPage() {
       setProfileError(null);
 
       try {
-        const res = await fetch("/api/account/profile");
+        const res = await fetch("/api/account/profile", { cache: "no-store" });
         const data: ProfileResponse = await res.json().catch(() => ({} as any));
 
         if (res.status === 401) {
-          // Session expired → sign out hard and send to login
           await signOut({ callbackUrl: "/login" });
           return;
         }
@@ -79,6 +103,7 @@ export default function AccountPage() {
           setSavedProfile(data.user);
           setNameInput(data.user.name ?? "");
           setBrokerageInput(data.user.brokerage ?? "");
+          setPhoneInput(data.user.phone ?? "");
         }
       } catch (err) {
         console.error("Failed to load profile", err);
@@ -102,6 +127,31 @@ export default function AccountPage() {
     !!savedProfile &&
     (nameInput.trim() !== (savedProfile.name ?? "") ||
       brokerageInput.trim() !== (savedProfile.brokerage ?? ""));
+
+  const phoneDirty = useMemo(() => {
+    if (!savedProfile) return false;
+    const a = normalizePhoneInput(phoneInput || "");
+    const b = normalizePhoneInput(savedProfile.phone || "");
+    return a !== b;
+  }, [phoneInput, savedProfile]);
+
+  const phoneValid = useMemo(() => {
+    // Allow empty (meaning clear/remove)
+    const cleaned = normalizePhoneInput(phoneInput);
+    if (!cleaned) return true;
+
+    // Accept E.164-ish: + and digits, 10-15 digits total
+    const digitsOnly = cleaned.startsWith("+")
+      ? cleaned.slice(1).replace(/\D/g, "")
+      : cleaned.replace(/\D/g, "");
+
+    if (digitsOnly.length < 10 || digitsOnly.length > 15) return false;
+
+    // If includes +, ensure it's only at the front
+    if (cleaned.includes("+") && !cleaned.startsWith("+")) return false;
+
+    return true;
+  }, [phoneInput]);
 
   const changeEmailValid =
     !!profile &&
@@ -157,6 +207,59 @@ export default function AccountPage() {
       setProfileSaveError("Something went wrong updating your profile.");
     } finally {
       setProfileSaving(false);
+    }
+  }
+
+  async function handlePhoneSave() {
+    if (!profile) return;
+    if (!phoneDirty) return;
+
+    setPhoneSaving(true);
+    setPhoneError(null);
+    setPhoneSuccess(null);
+
+    try {
+      const cleaned = normalizePhoneInput(phoneInput);
+
+      const res = await fetch("/api/account/change-phone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: cleaned.length ? cleaned : null,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({} as any));
+
+      if (res.status === 401) {
+        await signOut({ callbackUrl: "/login" });
+        return;
+      }
+
+      if (!res.ok) {
+        setPhoneError(
+          data?.error ?? "Something went wrong while updating your phone."
+        );
+        return;
+      }
+
+      // Expecting { success: true, phone: string | null } or { success: true, user: {...} }
+      const nextPhone =
+        typeof data?.phone !== "undefined"
+          ? (data.phone as string | null)
+          : (data?.user?.phone as string | null);
+
+      setProfile((prev) => (prev ? { ...prev, phone: nextPhone ?? null } : prev));
+      setSavedProfile((prev) =>
+        prev ? { ...prev, phone: nextPhone ?? null } : prev
+      );
+      setPhoneInput(nextPhone ?? "");
+      setPhoneSuccess("Phone updated.");
+    } catch (err) {
+      console.error("change-phone error", err);
+      setPhoneError("Something went wrong while updating your phone.");
+    } finally {
+      setPhoneSaving(false);
     }
   }
 
@@ -283,8 +386,8 @@ export default function AccountPage() {
             Profile
           </p>
           <p className="mt-2 text-xs text-slate-200/90">
-            These details help personalize your outputs and future team features
-            inside Avillo.
+            These details help personalize your outputs and enable SMS “Run now”
+            testing. Outbound SMS is still sent from a shared Avillo number.
           </p>
 
           {loadingProfile ? (
@@ -320,6 +423,72 @@ export default function AccountPage() {
                     placeholder="Your brokerage name"
                     className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
                   />
+                </div>
+
+                {/* Phone (for Run Now testing) */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-200/90">
+                    Phone (for “Run now” SMS tests)
+                  </label>
+                  <input
+                    type="tel"
+                    value={phoneInput}
+                    onChange={(e) => {
+                      setPhoneInput(e.target.value);
+                      setPhoneError(null);
+                      setPhoneSuccess(null);
+                    }}
+                    className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
+                    placeholder="+1 555 555 5555"
+                    inputMode="tel"
+                    autoComplete="tel"
+                  />
+                  <div className="mt-1 flex items-center justify-between gap-3 text-[11px]">
+                    <p className="text-slate-400/90">
+                      Recommended:{" "}
+                      <span className="font-mono text-amber-100">+1</span> format.
+                      If you enter 10 digits, Avillo will still store what you submit.
+                    </p>
+                    <span className="text-slate-400/80">
+                      {phoneInput.trim()
+                        ? `Preview: ${formatPhonePretty(phoneInput.trim())}`
+                        : "—"}
+                    </span>
+                  </div>
+
+                  {!phoneValid && (
+                    <p className="mt-1 text-[11px] text-rose-300">
+                      Enter a valid phone number (10–15 digits). You can include a leading +.
+                    </p>
+                  )}
+
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div className="space-y-1 text-[11px]">
+                      {phoneSuccess && (
+                        <p className="text-emerald-300">{phoneSuccess}</p>
+                      )}
+                      {phoneError && <p className="text-rose-300">{phoneError}</p>}
+                      {!phoneSuccess && !phoneError && (
+                        <p className="text-slate-400/90">
+                          This updates immediately and is used only for test sends.
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handlePhoneSave}
+                      disabled={!phoneDirty || !phoneValid || phoneSaving}
+                      className={[
+                        "inline-flex items-center rounded-full px-4 py-1.5 text-xs font-semibold transition",
+                        phoneDirty && phoneValid && !phoneSaving
+                          ? "border border-amber-100/70 bg-amber-50/10 text-amber-100 shadow-[0_0_30px_rgba(248,250,252,0.22)] hover:bg-amber-50/20"
+                          : "border border-slate-600 bg-slate-900/60 text-slate-500 cursor-default",
+                      ].join(" ")}
+                    >
+                      {phoneSaving ? "Saving..." : "Save phone"}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Login email (read-only here, changed via separate form) */}

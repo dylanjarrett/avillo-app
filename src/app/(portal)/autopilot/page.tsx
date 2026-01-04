@@ -87,12 +87,12 @@ const RECOMMENDED_TEMPLATES: {
   trigger: string;
   build: () => AutomationWorkflow;
 }[] = [
-  // 🟢 NEW_CONTACT – speed-to-lead + same-day follow-up
+  // 🟢 NEW_CONTACT – speed-to-lead + same-day follow-up (one-way)
   {
     id: "new-contact-speed-to-lead",
     label: "New online lead follow-up (same day)",
     description:
-      "Instant SMS, same-day email, then a reminder to call so no new lead slips through.",
+      "Instant SMS, same-day email, then a reminder to call — built for one-way outbound messaging.",
     trigger: "NEW_CONTACT",
     build: () => ({
       name: "New online lead follow-up (same day)",
@@ -106,7 +106,7 @@ const RECOMMENDED_TEMPLATES: {
           type: "SMS",
           config: {
             text:
-              "Hey {{firstName}}, thanks for reaching out! I’d love to learn more about your plans — when are you free for a quick call?",
+              "Hey {{firstName}} — thanks for reaching out. I can help with next steps.\n\nBest way to connect: call/text {{agentPhone}} or email {{agentEmail}}.",
           },
         },
         {
@@ -118,9 +118,9 @@ const RECOMMENDED_TEMPLATES: {
           id: crypto.randomUUID(),
           type: "EMAIL",
           config: {
-            subject: "Thanks for reaching out — a few quick next steps",
+            subject: "Thanks for reaching out — quick next steps",
             body:
-              "Hi {{firstName}},\n\nThanks again for reaching out. I pulled a few options that could fit what you’re looking for. When is a good time for a quick call so we can narrow things down together?\n\nBest,\n{{agentName}}",
+              "Hi {{firstName}},\n\nThanks again for reaching out. I’d love to learn what you’re looking for and help you map out next steps.\n\nThe best way to connect is by phone — call or text me at {{agentPhone}}. If email is easier, you can reach me at {{agentEmail}}.\n\nBest,\n{{agentName}}",
           },
         },
         {
@@ -140,12 +140,12 @@ const RECOMMENDED_TEMPLATES: {
     }),
   },
 
-  // 🟠 LEAD_STAGE_CHANGE – only fire when contact is a HOT BUYER
+  // 🟠 LEAD_STAGE_CHANGE – only fire when contact is a HOT BUYER (one-way)
   {
     id: "hot-buyer-stage-change",
     label: "Buyer follow-up when stage changes to HOT",
     description:
-      "When a buyer's contact becomes HOT, send a focused email and reminder to set showings.",
+      "When a buyer becomes HOT, send a focused email and reminder to set showings — one-way outbound.",
     trigger: "LEAD_STAGE_CHANGE",
     build: () => ({
       name: "Buyer follow-up (stage = HOT)",
@@ -177,9 +177,9 @@ const RECOMMENDED_TEMPLATES: {
               id: crypto.randomUUID(),
               type: "EMAIL",
               config: {
-                subject: "Let’s line up some showings",
+                subject: "Next step: lining up showings",
                 body:
-                  "Hi {{firstName}},\n\nSince you’re actively looking, I’d love to line up a few showings that really match what you want. Are there specific neighborhoods or price points you want to focus on first?\n\nReply with a couple times that work for you and I’ll take it from there.\n\nBest,\n{{agentName}}",
+                  "Hi {{firstName}},\n\nSince you’re actively looking, I want to line up a few showings that really match what you want.\n\nCall or text me directly at {{agentPhone}} and I’ll coordinate options and set everything up. If email is easier: {{agentEmail}}.\n\nBest,\n{{agentName}}",
               },
             },
             {
@@ -191,7 +191,8 @@ const RECOMMENDED_TEMPLATES: {
               id: crypto.randomUUID(),
               type: "TASK",
               config: {
-                text: "Text or call {{firstName}} to confirm showings for this week.",
+                text:
+                  "Text or call {{firstName}} directly to confirm showings for this week.",
               },
             },
           ],
@@ -201,12 +202,12 @@ const RECOMMENDED_TEMPLATES: {
     }),
   },
 
-  // 🏡 LISTING_CREATED – welcome seller + set expectations
+  // 🏡 LISTING_CREATED – welcome seller + set expectations (one-way)
   {
     id: "new-listing-seller-welcome",
     label: "New listing — welcome the seller",
     description:
-      "When you create a new listing with a seller attached, send a welcome email and set expectations.",
+      "When you create a new listing with a seller attached, send a welcome email and set expectations — one-way outbound.",
     trigger: "LISTING_CREATED",
     build: () => ({
       name: "New listing — seller welcome + expectations",
@@ -221,7 +222,7 @@ const RECOMMENDED_TEMPLATES: {
           config: {
             subject: "Excited to list your home at {{propertyAddress}}",
             body:
-              "Hi {{firstName}},\n\nI’m excited to officially get your home at {{propertyAddress}} on the market. I’ll keep you updated on showings, feedback, and any important activity.\n\nOver the next few days, we’ll be focused on marketing, online exposure, and getting as many qualified eyes on your home as possible.\n\nIf you have any questions at any point, you can call, text, or email me directly.\n\nBest,\n{{agentName}}",
+              "Hi {{firstName}},\n\nI’m excited to officially get your home at {{propertyAddress}} on the market.\n\nOver the next few days, we’ll be focused on marketing, online exposure, and getting qualified eyes on your home. I’ll keep you updated on important activity as we go.\n\nIf anything comes up, call/text me at {{agentPhone}}. You can also reach me at {{agentEmail}}.\n\nBest,\n{{agentName}}",
           },
         },
         {
@@ -241,12 +242,12 @@ const RECOMMENDED_TEMPLATES: {
     }),
   },
 
-  // 🔁 LISTING_STAGE_CHANGE – notify seller when status moves to PENDING
+  // 🔁 LISTING_STAGE_CHANGE – notify seller when status moves to PENDING (one-way)
   {
     id: "listing-pending-seller-update",
     label: "Listing goes pending — seller update",
     description:
-      "When a listing status moves to PENDING, update the seller and remind yourself to manage next steps.",
+      "When a listing status moves to PENDING, update the seller and remind yourself to manage next steps — one-way outbound.",
     trigger: "LISTING_STAGE_CHANGE",
     build: () => ({
       name: "Listing pending — seller update + next steps",
@@ -275,7 +276,7 @@ const RECOMMENDED_TEMPLATES: {
               config: {
                 subject: "Great news — your home is now pending",
                 body:
-                  "Hi {{firstName}},\n\nGreat news: your home at {{propertyAddress}} is now under contract (pending)!\n\nFrom here, we’ll be focused on inspections, appraisal, and any remaining contingencies. I’ll keep you posted on each step and anything we need from you.\n\nIf any questions come up at all, I’m just a text or call away.\n\nBest,\n{{agentName}}",
+                  "Hi {{firstName}},\n\nGreat news: your home at {{propertyAddress}} is now under contract (pending)!\n\nFrom here, we’ll be focused on inspections, appraisal, and any remaining contingencies. I’ll keep you posted on key updates and anything we need from you.\n\nIf you have questions at any point, call/text me at {{agentPhone}}. You can also reach me at {{agentEmail}}.\n\nBest,\n{{agentName}}",
               },
             },
             {
@@ -1000,6 +1001,29 @@ async function handleToggleActive() {
         title="Automate your busy work."
         subtitle="Let Avillo monitor your leads, clients, and listings — then deliver the right text, email, or task at the perfect moment. No missed opportunities. No manual busywork."
       />
+
+      {/* Private beta messaging notice */}
+    <div className="rounded-2xl border border-amber-100/40 bg-amber-50/10 px-5 py-4 shadow-[0_0_26px_rgba(248,250,252,0.14)]">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-100/90">
+        Private beta messaging notice
+      </p>
+
+      <p className="mt-1 text-[11px] text-amber-100/85">
+        <span className="font-semibold">One-way messaging only (for now).</span>{" "}
+        Autopilot can send outbound SMS and email, but replies are not yet captured inside Avillo.
+      </p>
+
+      <p className="mt-1 text-[11px] text-amber-100/85">
+        <span className="font-semibold">SMS</span> is sent from an Avillo phone number.
+        <span className="mx-2 text-amber-100/40">•</span>
+        <span className="font-semibold">Email</span> is sent from{" "}
+        <span className="font-semibold">noreply@avillo.io</span>.
+      </p>
+
+      <p className="mt-1 text-[10px] text-amber-100/75">
+        Two-way messaging, reply tracking, and deeper delivery controls are actively being built during beta.
+      </p>
+    </div>
 
       <section className="space-y-5">
         {/* Top bar: label + actions */}

@@ -1,4 +1,4 @@
-//lib/automations/runAutomation.ts
+// /lib/automations/runAutomation.ts
 import { prisma } from "@/lib/prisma";
 import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messaging";
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
@@ -224,19 +224,54 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
       : Promise.resolve(null),
   ]);
 
-  const templateVars: Record<string, string> = {
-    firstName: contact?.firstName ?? (contact as any)?.name?.split(" ")[0] ?? "",
-    agentName: user?.name ?? "",
-    propertyAddress: (listing as any)?.address ?? (listing as any)?.fullAddress ?? (listing as any)?.streetAddress ?? "",
-  };
+  const contactFullName =
+  contact?.firstName && contact?.lastName
+    ? `${contact.firstName} ${contact.lastName}`
+    : (contact as any)?.name ?? "";
+
+const contactFirstName =
+  contact?.firstName ??
+  (contactFullName ? String(contactFullName).split(" ")[0] : "") ??
+  "";
+
+const agentPhone =
+  (user as any)?.phone ??
+  (user as any)?.phoneNumber ??
+  (user as any)?.mobile ??
+  "";
+
+const agentEmail = user?.email ?? "";
+
+const propertyAddress =
+  (listing as any)?.address ??
+  (listing as any)?.fullAddress ??
+  (listing as any)?.streetAddress ??
+  "";
+
+const templateVars: Record<string, string> = {
+  // Contact
+  firstName: contactFirstName,
+  fullName: contactFullName ? String(contactFullName) : "",
+  lastName: (contact as any)?.lastName ?? "",
+
+  // Agent
+  agentName: user?.name ?? "",
+  agentEmail,
+  agentPhone,
+
+  // Listing
+  propertyAddress,
+};
+
 
   let toEmail: string | null = (contact as any)?.email ?? (contact as any)?.primaryEmail ?? null;
   let toPhone: string | null = (contact as any)?.phone ?? (contact as any)?.phoneNumber ?? null;
 
-  // Test mode: if no contact, send emails to the user only
+  // ✅ Test mode: if no contact, send to the user (email + phone)
+  // NOTE: real outbound is still sent from the shared Avillo number in sendAutomationSms
   if (!contact) {
     toEmail = user?.email ?? null;
-    toPhone = null;
+    toPhone = (user as any)?.phone ?? null;
   }
 
   let runStatus: "success" | "failed" = "success";
@@ -292,7 +327,7 @@ export async function runAutomation(automationId: string, steps: AutomationStep[
       try {
         switch (step.type) {
           case "SMS": {
-            if (!toPhone) throw new Error("No phone number on contact.");
+            if (!toPhone) throw new Error("No phone number available for SMS.");
 
             if (!(await canRunAutomations(ctx.userId))) {
               await stopForDowngrade("SMS");

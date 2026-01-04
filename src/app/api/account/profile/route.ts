@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,7 @@ export async function GET(_req: NextRequest) {
         name: true,
         email: true,
         brokerage: true,
+        phone: true,
         createdAt: true,
       },
     });
@@ -37,16 +39,24 @@ export async function GET(_req: NextRequest) {
       return jsonError("User not found.", 404);
     }
 
-    return NextResponse.json({
-      success: true,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        brokerage: user.brokerage,
-        createdAt: user.createdAt,
+    return NextResponse.json(
+      {
+        success: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          brokerage: user.brokerage,
+          phone: user.phone,
+          createdAt: user.createdAt,
+        },
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (err) {
     console.error("PROFILE GET ERROR →", err);
     return jsonError("Failed to load profile.", 500);
@@ -56,6 +66,7 @@ export async function GET(_req: NextRequest) {
 /**
  * POST /api/account/profile
  * Updates name / brokerage and returns { success, user }
+ * NOTE: phone is intentionally NOT updated here (handled by /api/account/change-phone)
  */
 export async function POST(req: NextRequest) {
   try {
@@ -72,31 +83,48 @@ export async function POST(req: NextRequest) {
       return jsonError("Invalid request body.", 400);
     }
 
-    const name = body.name?.trim() || null;
-    const brokerage = body.brokerage?.trim() || null;
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const brokerage =
+      typeof body.brokerage === "string" ? body.brokerage.trim() : "";
+
+    // Normalize empty -> null
+    const nameValue = name.length ? name : null;
+    const brokerageValue = brokerage.length ? brokerage : null;
 
     const updated = await prisma.user.update({
       where: { email: session.user.email },
-      data: { name, brokerage },
+      data: {
+        name: nameValue,
+        brokerage: brokerageValue,
+      },
       select: {
         id: true,
         name: true,
         email: true,
         brokerage: true,
+        phone: true,
         createdAt: true,
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      user: {
-        id: updated.id,
-        name: updated.name,
-        email: updated.email,
-        brokerage: updated.brokerage,
-        createdAt: updated.createdAt,
+    return NextResponse.json(
+      {
+        success: true,
+        user: {
+          id: updated.id,
+          name: updated.name,
+          email: updated.email,
+          brokerage: updated.brokerage,
+          phone: updated.phone,
+          createdAt: updated.createdAt,
+        },
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (err) {
     console.error("PROFILE POST ERROR →", err);
     return jsonError("Failed to update profile.", 500);
