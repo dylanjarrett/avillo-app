@@ -20,6 +20,11 @@ export const metadata: Metadata = {
   },
   manifest: "/site.webmanifest",
   themeColor: "#050814",
+  
+  robots: {
+    index: false,
+    follow: false,
+  },
 };
 
 export default async function RootLayout({
@@ -32,9 +37,7 @@ export default async function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-[#040814] text-slate-50 antialiased">
-        <Providers session={session}>
-          {children}
-        </Providers>
+        <Providers session={session}>{children}</Providers>
         <SpeedInsights />
       </body>
     </html>
