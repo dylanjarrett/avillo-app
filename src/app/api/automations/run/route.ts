@@ -14,14 +14,37 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   const { automationId, contactId, listingId } = body ?? {};
 
-  if (!automationId) return NextResponse.json({ error: "Missing automationId" }, { status: 400 });
+  if (!automationId) {
+    return NextResponse.json({ error: "Missing automationId" }, { status: 400 });
+  }
+
+  // ✅ Guardrail: automations should only run on CLIENT contacts
+  if (contactId) {
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, userId: user.id },
+      select: { id: true, relationshipType: true },
+    });
+
+    if (!contact) {
+      return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+    }
+
+    if (String(contact.relationshipType) === "PARTNER") {
+      return NextResponse.json(
+        { error: "Automations can only run on Client contacts." },
+        { status: 400 }
+      );
+    }
+  }
 
   const automation = await prisma.automation.findFirst({
     where: { id: automationId, userId: user.id },
     include: { steps: true },
   });
 
-  if (!automation) return NextResponse.json({ error: "Automation not found" }, { status: 404 });
+  if (!automation) {
+    return NextResponse.json({ error: "Automation not found" }, { status: 404 });
+  }
 
   const steps = automation.steps?.steps ? (automation.steps.steps as any[]) : [];
 

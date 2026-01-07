@@ -1,10 +1,11 @@
 // src/app/signup/page.tsx
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 function AuthLogo() {
   return (
@@ -21,17 +22,65 @@ function AuthLogo() {
   );
 }
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(message)), ms);
+    promise
+      .then((v) => {
+        clearTimeout(t);
+        resolve(v);
+      })
+      .catch((e) => {
+        clearTimeout(t);
+        reject(e);
+      });
+  });
+}
+
+/**
+ * After signIn, NextAuth sometimes needs a moment before the session cookie
+ * is readable by middleware / server routes. This polls /api/auth/session.
+ */
+async function waitForSession(maxAttempts = 6) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await fetch("/api/auth/session", { cache: "no-store" });
+      if (res.ok) {
+        const s = await res.json().catch(() => null);
+        if (s?.user) return true;
+      }
+    } catch {
+      // ignore
+    }
+    await sleep(200 + i * 150); // backoff
+  }
+  return false;
+}
+
 export default function SignupPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [name, setName] = useState("");
   const [brokerage, setBrokerage] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function normalizeEmail(value: string) {
-    return value.trim().toLowerCase();
-  }
+  const callbackUrl = useMemo(() => {
+    const cb = searchParams?.get("callbackUrl");
+    return cb && cb.startsWith("/") ? cb : "/dashboard";
+  }, [searchParams]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -40,34 +89,64 @@ export default function SignupPage() {
 
     const normalizedEmail = normalizeEmail(email);
 
+    // ✅ Your rule: new users are EXPIRED and must go to Billing.
+    const billingUrl =
+      `/billing?reason=upgrade_required&callbackUrl=${encodeURIComponent(callbackUrl)}`;
+
     try {
-      const res = await fetch("/api/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          brokerage: brokerage || undefined,
-          email: normalizedEmail,
-          password,
+      // 1) Create the user
+      const res = await withTimeout(
+        fetch("/api/auth/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            brokerage: brokerage || undefined,
+            email: normalizedEmail,
+            password,
+          }),
         }),
-      });
+        15000,
+        "Signup request timed out. Please try again."
+      );
 
       const data = await res.json().catch(() => ({}));
-
       if (!res.ok) {
         throw new Error(data?.error || "Something went wrong creating your account.");
       }
 
-      // Auto sign-in with credentials after successful signup
-      await signIn("credentials", {
-        redirect: true,
-        email: normalizedEmail,
-        password,
-        callbackUrl: "/dashboard",
-      });
+      // 2) Sign in WITHOUT redirect (avoid NextAuth redirect race)
+      const signInResult = await withTimeout(
+        signIn("credentials", {
+          redirect: false,
+          email: normalizedEmail,
+          password,
+        }),
+        15000,
+        "Sign-in timed out. Please try again."
+      );
+
+      if (signInResult?.error) {
+        // fallback: send to login, but still force billing after
+        router.replace(`/login?callbackUrl=${encodeURIComponent(billingUrl)}`);
+        router.refresh();
+        return;
+      }
+
+      // 3) ✅ Session settle (prevents “stuck” / middleware reading no-cookie)
+      const ok = await waitForSession(6);
+      if (!ok) {
+        // still don’t hang — just go to login with billing callback
+        router.replace(`/login?callbackUrl=${encodeURIComponent(billingUrl)}`);
+        router.refresh();
+        return;
+      }
+
+      // 4) Go to billing
+      router.replace(billingUrl);
+      router.refresh();
     } catch (err: any) {
       setError(err?.message || "Something went wrong.");
-    } finally {
       setSubmitting(false);
     }
   }
@@ -161,10 +240,7 @@ export default function SignupPage() {
 
           <p className="mt-4 text-center text-[11px] text-[var(--avillo-cream-muted)]">
             Already have an account?{" "}
-            <Link
-              href="/login"
-              className="font-medium text-[var(--avillo-cream)] hover:underline"
-            >
+            <Link href="/login" className="font-medium text-[var(--avillo-cream)] hover:underline">
               Sign in
             </Link>
           </p>

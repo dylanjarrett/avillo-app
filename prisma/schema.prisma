@@ -5,8 +5,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------
@@ -67,28 +68,28 @@ enum RelationshipType {
 // USER
 // ---------------------------
 model User {
-  id               String   @id @default(cuid())
-  name             String?
-  email            String   @unique
-  emailVerified    DateTime?
-  passwordHash     String?  @map("password_hash")
-  image            String?
-  brokerage        String?
-  phone            String?
-  phoneVerified    DateTime?
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?   @map("password_hash")
+  image         String?
+  brokerage     String?
+  phone         String?
+  phoneVerified DateTime?
 
   // Auth / app metadata
-  role             UserRole @default(USER)
-  currentSessionKey String? @db.VarChar(255)
+  role              UserRole  @default(USER)
+  currentSessionKey String?   @db.VarChar(255)
   lastLoginAt       DateTime?
-  openAITokensUsed  Int      @default(0)
+  openAITokensUsed  Int       @default(0)
 
   // Billing / subscription state (NEW)
-  accessLevel         AccessLevel        @default(EXPIRED)
-  plan                 SubscriptionPlan   @default(STARTER)
-  subscriptionStatus   SubscriptionStatus @default(NONE)
-  trialEndsAt          DateTime?
-  currentPeriodEnd     DateTime?
+  accessLevel        AccessLevel        @default(EXPIRED)
+  plan               SubscriptionPlan   @default(STARTER)
+  subscriptionStatus SubscriptionStatus @default(NONE)
+  trialEndsAt        DateTime?
+  currentPeriodEnd   DateTime?
 
   stripeCustomerId     String? @db.VarChar(255)
   stripeSubscriptionId String? @db.VarChar(255)
@@ -99,15 +100,15 @@ model User {
   sessions Session[]
 
   // App relations
-  contacts                 Contact[]
-  listings                 Listing[]
-  activities               Activity[]
-  CRMRecord                CRMRecord[]
-  crmActivity              CRMActivity[]
-  passwordResetTokens      PasswordResetToken[]
-  emailVerificationTokens  EmailVerificationToken[]
-  tasks                    Task[]
-  intelligenceOutputs      IntelligenceOutput[] // <-- NEW
+  contacts                Contact[]
+  listings                Listing[]
+  activities              Activity[]
+  CRMRecord               CRMRecord[]
+  crmActivity             CRMActivity[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  tasks                   Task[]
+  intelligenceOutputs     IntelligenceOutput[] // <-- NEW
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -117,9 +118,9 @@ model User {
 // CONTACTS
 // ---------------------------
 model Contact {
-  id        String @id @default(cuid())
-  user      User   @relation(fields: [userId], references: [id])
-  userId    String
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
 
   firstName String?
   lastName  String?
@@ -133,31 +134,50 @@ model Contact {
 
   relationshipType RelationshipType @default(CLIENT)
 
-  stage      String   @default("new") // new → warm → hot → past
-  tags       String[] @default([])
+  stage String   @default("new") // new → warm → hot → past
+  tags  String[] @default([])
 
   // Legacy free-form notes field (kept for backwards compatibility)
-  notes     String?
-  source    String? // Zillow, Open House, Referral, Social, etc.
+  notes  String?
+  source String? // Zillow, Open House, Referral, Social, etc.
 
   // Avillo CRM — pipeline + profile fields
-  label     String? // e.g. "potential buy"
-  type      String? // "Buyer" | "Seller" | "Past / sphere"
-  priceRange String?
-  areas     String?
-  timeline  String?
+  label          String? // e.g. "potential buy"
+  type           String? // "Buyer" | "Seller" | "Past / sphere"
+  priceRange     String?
+  areas          String?
+  timeline       String?
+  partnerProfile PartnerProfile?
 
   // Structured note entries per contact
   contactNotes ContactNote[]
   tasks        Task[]
 
   // Relationships to listings
-  listingsAsSeller Listing[]       @relation("SellerListings")
+  listingsAsSeller Listing[]          @relation("SellerListings")
   buyerListings    ListingBuyerLink[]
   activities       Activity[]
   crmActivity      CRMActivity[]
 
   intelligenceOutputs IntelligenceOutput[] // <-- NEW
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PartnerProfile {
+  id String @id @default(cuid())
+
+  contactId String  @unique
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  businessName    String?
+  partnerType     String?
+  coverageMarkets String?
+  feeComp         String?
+
+  website String?
+  link    String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -178,7 +198,7 @@ model Listing {
   address     String
   mlsId       String?
   price       Int?
-  status      String @default("draft")
+  status      String  @default("draft")
   description String?
   aiCopy      String?
   aiNotes     String?
@@ -187,9 +207,9 @@ model Listing {
   buyers ListingBuyerLink[]
 
   // Listing photos (1-many)
-  photos             ListingPhoto[]
-  activities         Activity[]
-  tasks              Task[]
+  photos              ListingPhoto[]
+  activities          Activity[]
+  tasks               Task[]
   intelligenceOutputs IntelligenceOutput[] // <-- NEW
 
   createdAt DateTime @default(now())
@@ -222,7 +242,7 @@ model ListingBuyerLink {
   contact   Contact @relation(fields: [contactId], references: [id])
   contactId String
 
-  role      String? // "primary", "backup", "interested", etc.
+  role String? // "primary", "backup", "interested", etc.
 
   createdAt DateTime @default(now())
 
@@ -233,9 +253,9 @@ model ListingBuyerLink {
 // ACTIVITIES (SYSTEM EVENTS)
 // ---------------------------
 model Activity {
-  id        String  @id @default(cuid())
-  user      User    @relation(fields: [userId], references: [id])
-  userId    String
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
 
   contact   Contact? @relation(fields: [contactId], references: [id])
   contactId String?
@@ -243,8 +263,8 @@ model Activity {
   listing   Listing? @relation(fields: [listingId], references: [id])
   listingId String?
 
-  type      String // "call", "email", "note", "showing", "task"
-  details   String?
+  type    String // "call", "email", "note", "showing", "task"
+  details String?
 
   createdAt DateTime @default(now())
 }
@@ -258,13 +278,13 @@ model CRMActivity {
   userId    String
   contactId String?
 
-  type      String // "created", "updated", "stage_change", "note", "call", "ai_generated"
-  summary   String
-  data      Json?
+  type    String // "created", "updated", "stage_change", "note", "call", "ai_generated"
+  summary String
+  data    Json?
 
   createdAt DateTime @default(now())
 
-  user    User    @relation(fields: [userId], references: [id])
+  user    User     @relation(fields: [userId], references: [id])
   contact Contact? @relation(fields: [contactId], references: [id])
 }
 
@@ -291,7 +311,7 @@ model IntelligenceOutput {
   // request + response blobs
   engineInput  Json?
   inputSummary String? // short line of what the user typed / selected
-  payload      Json?   // full pack
+  payload      Json? // full pack
   preview      String? // short preview of output
 
   createdAt DateTime @default(now())
@@ -309,7 +329,7 @@ model ContactNote {
   contact   Contact @relation(fields: [contactId], references: [id])
   contactId String
 
-  text      String
+  text       String
   reminderAt DateTime?
 
   createdAt DateTime @default(now())
@@ -319,7 +339,7 @@ model ContactNote {
 // TASKS
 // ---------------------------
 model Task {
-  id        String @id @default(cuid())
+  id String @id @default(cuid())
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -330,14 +350,14 @@ model Task {
   listingId String?
   listing   Listing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
-  title     String
-  notes     String?
-  dueAt     DateTime?
-  status    TaskStatus @default(OPEN)
-  source    TaskSource @default(MANUAL)
+  title  String
+  notes  String?
+  dueAt  DateTime?
+  status TaskStatus @default(OPEN)
+  source TaskSource @default(MANUAL)
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   completedAt DateTime?
   deletedAt   DateTime?
 
@@ -351,20 +371,20 @@ model Task {
 // NEXTAUTH
 // ---------------------------
 model Account {
-  id                String @id @default(cuid())
-  userId            String
+  id     String @id @default(cuid())
+  userId String
 
   type              String
   provider          String
   providerAccountId String
 
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
+  refresh_token String?
+  access_token  String?
+  expires_at    Int?
+  token_type    String?
+  scope         String?
+  id_token      String?
+  session_state String?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -382,7 +402,7 @@ model Session {
 
 model VerificationToken {
   identifier String
-  token      String @unique
+  token      String   @unique
   expires    DateTime
 
   @@unique([identifier, token])
@@ -392,9 +412,9 @@ model VerificationToken {
 // EMAIL VERIFICATION TOKENS
 // ---------------------------
 model EmailVerificationToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  token     String   @unique
+  token     String    @unique
   expiresAt DateTime
   usedAt    DateTime?
 
@@ -407,9 +427,9 @@ model EmailVerificationToken {
 // PASSWORD RESET TOKENS
 // ---------------------------
 model PasswordResetToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  token     String   @unique
+  token     String    @unique
   expiresAt DateTime
   usedAt    DateTime?
 
@@ -422,7 +442,7 @@ model PasswordResetToken {
 // CRM RAW RECORDS
 // ---------------------------
 model CRMRecord {
-  id        String @id @default(cuid())
+  id        String   @id @default(cuid())
   userId    String
   raw       String
   processed String
@@ -436,17 +456,17 @@ model CRMRecord {
 // AUTOMATION (workflow definition)
 // ---------------------------
 model Automation {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   userId      String
   name        String
   description String?
-  status      String @default("draft") // draft | active | paused | archived
+  status      String  @default("draft") // draft | active | paused | archived
 
-  trigger          String
-  triggerConfig    Json?
-  entryConditions  Json?
-  exitConditions   Json?
-  schedule         Json?
+  trigger         String
+  triggerConfig   Json?
+  entryConditions Json?
+  exitConditions  Json?
+  schedule        Json?
 
   folder String?
 
@@ -486,8 +506,8 @@ model AutomationRun {
   trigger        String?
   triggerPayload Json?
 
-  status     String
-  message    String?
+  status  String
+  message String?
 
   executedAt DateTime @default(now())
   lockId     String?
@@ -503,14 +523,14 @@ model AutomationRun {
 }
 
 model AutomationRunStep {
-  id        String @id @default(cuid())
-  runId     String
+  id    String @id @default(cuid())
+  runId String
 
-  stepId    String?
-  stepIndex Int
-  stepType  String
-  status    String
-  message   String?
+  stepId     String?
+  stepIndex  Int
+  stepType   String
+  status     String
+  message    String?
   executedAt DateTime @default(now())
   payload    Json?
 
@@ -529,7 +549,7 @@ enum SmsDirection {
 model SmsSuppression {
   id        String   @id @default(cuid())
   userId    String
-  phone     String   // E.164
+  phone     String // E.164
   reason    String   @default("STOP")
   createdAt DateTime @default(now())
 

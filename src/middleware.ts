@@ -16,7 +16,9 @@ const PROTECTED_PATHS = [
 ];
 
 function isProtectedPath(pathname: string) {
-  return PROTECTED_PATHS.some((base) => pathname === base || pathname.startsWith(`${base}/`));
+  return PROTECTED_PATHS.some(
+    (base) => pathname === base || pathname.startsWith(`${base}/`)
+  );
 }
 
 function isPublicPath(pathname: string) {
@@ -28,7 +30,9 @@ function isPublicPath(pathname: string) {
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/static") ||
-    pathname === "/favicon.ico"
+    pathname === "/favicon.ico" ||
+    pathname === "/site.webmanifest" ||
+    pathname === "/robots.txt"
   );
 }
 
@@ -42,6 +46,12 @@ function normalizeAccessLevel(x: unknown) {
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // ✅ HARD RULE: never gate API routes with middleware.
+  // (App Router API routes should be auth-checked inside the route handler.)
+  if (pathname.startsWith("/api")) {
+    return NextResponse.next();
+  }
 
   // ---- Public / always-allowed paths ----
   if (isPublicPath(pathname)) {
@@ -71,7 +81,7 @@ export async function middleware(req: NextRequest) {
   if (accessLevel === "UNKNOWN") {
     try {
       const meUrl = new URL("/api/account/me", req.url);
-      const meRes = await fetch(meUrl, {
+      const meRes = await fetch(meUrl.toString(), {
         headers: { cookie: req.headers.get("cookie") || "" },
         cache: "no-store",
       });
@@ -81,8 +91,7 @@ export async function middleware(req: NextRequest) {
         accessLevel = normalizeAccessLevel(data?.user?.accessLevel);
       }
     } catch {
-      // If the lookup fails, we don’t hard-block. We just proceed.
-      // (This avoids accidental lockouts if me endpoint has an issue.)
+      // If the lookup fails, don’t hard-block. Avoid accidental lockouts.
     }
   }
 
@@ -98,8 +107,8 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
-// Apply middleware to everything except Next.js internals; we manually
-// exempt auth pages & api/auth above.
+// ✅ Apply middleware ONLY to non-API routes.
+// This prevents /api/* from ever being intercepted.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };

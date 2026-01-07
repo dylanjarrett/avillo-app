@@ -12,6 +12,19 @@ export async function processTriggers(
   const gate = await requireEntitlement(context.userId, "AUTOMATIONS_TRIGGER");
   if (!gate.ok) return;
 
+  // ✅ HARD RULE: Partner contacts do not run automations.
+  if (context.contactId) {
+    const contact = await prisma.contact.findFirst({
+      where: { id: context.contactId, userId: context.userId },
+      select: { relationshipType: true },
+    });
+
+    // If contact doesn't exist or isn't owned by user, bail silently.
+    if (!contact) return;
+
+    if (String(contact.relationshipType) === "PARTNER") return;
+  }
+
   const automations = await prisma.automation.findMany({
     where: {
       userId: context.userId,

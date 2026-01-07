@@ -56,29 +56,53 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
   });
 }
 
-function getConditionFieldValue(field: string, contact: any | null, listing: any | null): string | null {
+// ✅ Normalize for comparisons (UI uses lowercase values; DB may store Title Case / mixed case)
+function norm(v: any): string {
+  return String(v ?? "").trim().toLowerCase();
+}
+
+function getConditionFieldValue(
+  field: string,
+  contact: any | null,
+  listing: any | null
+): string | null {
   switch (field) {
     case "contact.stage":
-      return contact?.stage ?? null;
+      return contact?.stage != null ? norm(contact.stage) : null;
+
     case "contact.type":
-      return contact?.type ?? null;
+      // DB might store "Buyer"/"Seller" while UI stores "buyer"/"seller"
+      return contact?.type != null ? norm(contact.type) : null;
+
     case "contact.source":
-      return contact?.source ?? null;
+      return contact?.source != null ? norm(contact.source) : null;
+
+    // ✅ Client vs Partner conditions (Prisma enum returns CLIENT/PARTNER)
+    case "contact.relationshipType":
+      return contact?.relationshipType != null ? norm(contact.relationshipType) : null;
+
     case "listing.status":
-      return listing?.status ?? null;
+      return listing?.status != null ? norm(listing.status) : null;
+
     default:
       return null;
   }
 }
 
-function evaluateSingleCondition(config: ConditionConfig, contact: any | null, listing: any | null): boolean {
+function evaluateSingleCondition(
+  config: ConditionConfig,
+  contact: any | null,
+  listing: any | null
+): boolean {
   const actual = getConditionFieldValue(config.field, contact, listing);
   if (actual == null) return false;
 
-  if (config.operator === "equals") return actual === config.value;
-  if (config.operator === "not_equals") return actual !== config.value;
+  const expected = norm(config.value);
 
-  return actual === config.value;
+  if (config.operator === "equals") return actual === expected;
+  if (config.operator === "not_equals") return actual !== expected;
+
+  return actual === expected;
 }
 
 function normalizeIfConfig(raw: any): NormalizedIfConfig {
@@ -210,59 +234,72 @@ function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
  * Core runner
  * -----------------------------------*/
 
-export async function runAutomation(automationId: string, steps: AutomationStep[], ctx: RunContext) {
+export async function runAutomation(
+  automationId: string,
+  steps: AutomationStep[],
+  ctx: RunContext
+) {
   // ✅ Pre-flight: if user is not entitled (ex: downgraded), bail out silently.
   if (!(await canRunAutomations(ctx.userId))) return;
 
   const [user, contact, listing] = await Promise.all([
     prisma.user.findUnique({ where: { id: ctx.userId } }),
     ctx.contactId
-      ? prisma.contact.findFirst({ where: { id: ctx.contactId, userId: ctx.userId } })
+      ? prisma.contact.findFirst({
+          where: { id: ctx.contactId, userId: ctx.userId },
+        })
       : Promise.resolve(null),
     ctx.listingId
-      ? prisma.listing.findFirst({ where: { id: ctx.listingId, userId: ctx.userId } })
+      ? prisma.listing.findFirst({
+          where: { id: ctx.listingId, userId: ctx.userId },
+        })
       : Promise.resolve(null),
   ]);
 
+  // ✅ HARD RULE: Partner contacts do not run automations.
+  // Prisma enum returns "CLIENT" | "PARTNER"
+  if (contact && norm((contact as any).relationshipType) === "partner") {
+    return;
+  }
+
   const contactFullName =
-  contact?.firstName && contact?.lastName
-    ? `${contact.firstName} ${contact.lastName}`
-    : (contact as any)?.name ?? "";
+    contact?.firstName && contact?.lastName
+      ? `${contact.firstName} ${contact.lastName}`
+      : (contact as any)?.name ?? "";
 
-const contactFirstName =
-  contact?.firstName ??
-  (contactFullName ? String(contactFullName).split(" ")[0] : "") ??
-  "";
+  const contactFirstName =
+    contact?.firstName ??
+    (contactFullName ? String(contactFullName).split(" ")[0] : "") ??
+    "";
 
-const agentPhone =
-  (user as any)?.phone ??
-  (user as any)?.phoneNumber ??
-  (user as any)?.mobile ??
-  "";
+  const agentPhone =
+    (user as any)?.phone ??
+    (user as any)?.phoneNumber ??
+    (user as any)?.mobile ??
+    "";
 
-const agentEmail = user?.email ?? "";
+  const agentEmail = user?.email ?? "";
 
-const propertyAddress =
-  (listing as any)?.address ??
-  (listing as any)?.fullAddress ??
-  (listing as any)?.streetAddress ??
-  "";
+  const propertyAddress =
+    (listing as any)?.address ??
+    (listing as any)?.fullAddress ??
+    (listing as any)?.streetAddress ??
+    "";
 
-const templateVars: Record<string, string> = {
-  // Contact
-  firstName: contactFirstName,
-  fullName: contactFullName ? String(contactFullName) : "",
-  lastName: (contact as any)?.lastName ?? "",
+  const templateVars: Record<string, string> = {
+    // Contact
+    firstName: contactFirstName,
+    fullName: contactFullName ? String(contactFullName) : "",
+    lastName: (contact as any)?.lastName ?? "",
 
-  // Agent
-  agentName: user?.name ?? "",
-  agentEmail,
-  agentPhone,
+    // Agent
+    agentName: user?.name ?? "",
+    agentEmail,
+    agentPhone,
 
-  // Listing
-  propertyAddress,
-};
-
+    // Listing
+    propertyAddress,
+  };
 
   let toEmail: string | null = (contact as any)?.email ?? (contact as any)?.primaryEmail ?? null;
   let toPhone: string | null = (contact as any)?.phone ?? (contact as any)?.phoneNumber ?? null;
@@ -360,7 +397,10 @@ const templateVars: Record<string, string> = {
             }
 
             const subject = renderTemplate(step.config?.subject ?? "", templateVars);
-            const html = renderTemplate((step.config?.body ?? "").replace(/\n/g, "<br />"), templateVars);
+            const html = renderTemplate(
+              (step.config?.body ?? "").replace(/\n/g, "<br />"),
+              templateVars
+            );
 
             await sendAutomationEmail({ to: toEmail, subject, html });
 

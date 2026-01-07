@@ -1,7 +1,7 @@
 // src/app/(portal)/people/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import PageHeader from "@/components/layout/page-header";
 import { useCrmMobileWorkspaceScroll } from "@/hooks/useCrmMobileWorkspaceScroll";
 import { FilterPill } from "@/components/ui/filter-pill";
@@ -13,9 +13,12 @@ import { FilterPill } from "@/components/ui/filter-pill";
 type Stage = "new" | "warm" | "hot" | "past";
 type ContactRoleFilter = "all" | "buyers" | "sellers";
 type StageFilter = "all" | "new" | "warm" | "hot" | "past";
-type PeopleTab = "overview" | "activity";
+type PeopleTab = "overview" | "activity" | "pins";
 
-// Internal, lowercase contact type values
+// NEW: client vs partner
+type RelationshipType = "client" | "partner";
+
+// Internal, lowercase contact type values (client only)
 type ContactType = "buyer" | "seller" | "buyer & seller" | null;
 
 type ContactNote = {
@@ -33,19 +36,34 @@ type LinkedListing = {
 };
 
 type Contact = {
-  id?: string; // undefined = not yet saved
+  id?: string;
   name: string;
   label: string;
+
+  relationshipType: RelationshipType;
+
   stage: Stage;
   type: ContactType;
+
   priceRange: string;
-  areas: string; // used for property address OR buyer areas
+  areas: string;
   timeline: string;
   source: string;
   email: string;
   phone: string;
   notes: ContactNote[];
   linkedListings: LinkedListing[];
+
+  partnerProfile?: PartnerProfile | null;
+};
+
+type PartnerProfile = {
+  businessName: string;
+  partnerType: string;
+  coverageMarkets: string;
+  feeComp: string;
+  website: string;
+  link: string;
 };
 
 type ListingOption = {
@@ -70,26 +88,12 @@ const CONTACT_SOURCE_OPTIONS = [
  * Small helpers
  * -----------------------------------*/
 
-function upsertLinkedListing(
-  existing: LinkedListing[] | undefined,
-  next: LinkedListing
-): LinkedListing[] {
-  const current = existing ?? [];
-  const found = current.some((l) => l.id === next.id && l.role === next.role);
-  if (!found) {
-    return [...current, next];
-  }
-  return current.map((l) =>
-    l.id === next.id && l.role === next.role ? { ...l, ...next } : l
-  );
-}
-
 function normalizeContactType(raw: any): ContactType {
   if (!raw) return null;
   const v = String(raw).toLowerCase();
   if (v === "buyer") return "buyer";
   if (v === "seller") return "seller";
-  if (v === "buyer & seller" || v === "buyer & seller") return "buyer & seller";
+  if (v === "buyer & seller") return "buyer & seller";
   return null;
 }
 
@@ -135,6 +139,10 @@ export default function CrmPage() {
   const isMobile = () =>
     typeof window !== "undefined" && window.innerWidth < 1024;
 
+  // NEW: top-level relationship filter (Client vs Partner)
+  const [relationshipFilter, setRelationshipFilter] =
+    useState<RelationshipType>("client");
+
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [roleFilter, setRoleFilter] = useState<ContactRoleFilter>("all");
   const [search, setSearch] = useState("");
@@ -156,13 +164,17 @@ export default function CrmPage() {
   const [error, setError] = useState<string | null>(null);
 
   // ---------- Derived counts for pills ----------
-  const totalContacts = contacts.length;
+  const clientContacts = contacts.filter((c) => c.relationshipType !== "partner");
+  const partnerContacts = contacts.filter((c) => c.relationshipType === "partner");
 
-  const buyersCount = contacts.filter(
+  const clientsCount = clientContacts.length;
+  const partnersCount = partnerContacts.length;
+
+  const buyersCount = clientContacts.filter(
     (c) => c.type === "buyer" || c.type === "buyer & seller"
   ).length;
 
-  const sellersCount = contacts.filter(
+  const sellersCount = clientContacts.filter(
     (c) => c.type === "seller" || c.type === "buyer & seller"
   ).length;
 
@@ -173,6 +185,7 @@ export default function CrmPage() {
       return next;
     });
   }
+
 
   // Listings for tagging
   const [listings, setListings] = useState<ListingOption[]>([]);
@@ -186,6 +199,13 @@ export default function CrmPage() {
 
   // Mobile: whether the right-hand workspace is showing (like Listings page)
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
+
+  useEffect(() => {
+  setSelectedId(null);
+  setActiveContact(null);
+  setWorkspaceOpenMobile(false);
+  setActiveTab("overview");
+}, [relationshipFilter]);
 
   // Convenience: go back to list & clear selection using the hook scroll
   function backToListAndClearSelection() {
@@ -206,35 +226,51 @@ export default function CrmPage() {
 
   useEffect(() => {
   if (!activeContact?.id) return;
-  if (activeTab !== "activity") return;
 
-  let cancelled = false;
+  // Partners: don't run Autopilot activity at all
+  if (activeContact.relationshipType === "partner") {
+    setAutopilotItems([]);
+    setAutopilotTasks([]);
+    setAutopilotLoading(false);
+    return;
+  }
+
+  // If you leave the Activity tab, clear view (prevents stale flash)
+  if (activeTab !== "activity") {
+    setAutopilotItems([]);
+    setAutopilotTasks([]);
+    setAutopilotLoading(false);
+    return;
+  }
+
+  const controller = new AbortController();
 
   async function loadAutopilot() {
     try {
       setAutopilotLoading(true);
-      const res = await fetch(`/api/automations/activity?contactId=${activeContact.id}`);
-      const data = await res.json().catch(() => null);
 
-      if (!cancelled) {
-        setAutopilotItems(Array.isArray(data?.items) ? data.items : []);
-        setAutopilotTasks(Array.isArray(data?.tasks) ? data.tasks : []);
-      }
-    } catch (e) {
-      if (!cancelled) {
-        setAutopilotItems([]);
-        setAutopilotTasks([]);
-      }
+      const res = await fetch(
+        `/api/automations/activity?contactId=${activeContact.id}`,
+        { signal: controller.signal }
+      );
+
+      if (!res.ok) throw new Error("Failed to load activity");
+
+      const data = await res.json();
+      setAutopilotItems(Array.isArray(data?.items) ? data.items : []);
+      setAutopilotTasks(Array.isArray(data?.tasks) ? data.tasks : []);
+    } catch (e: any) {
+      if (e?.name === "AbortError") return;
+      setAutopilotItems([]);
+      setAutopilotTasks([]);
     } finally {
-      if (!cancelled) setAutopilotLoading(false);
+      setAutopilotLoading(false);
     }
   }
 
   loadAutopilot();
-  return () => {
-    cancelled = true;
-  };
-}, [activeContact?.id, activeTab]);
+  return () => controller.abort();
+}, [activeContact?.id, activeContact?.relationshipType, activeTab]);
 
 
   // ---------- Load contacts & listings on mount ----------
@@ -262,6 +298,8 @@ export default function CrmPage() {
             id: c.id,
             name: c.name ?? "",
             label: c.label ?? "",
+            relationshipType:
+              (c.relationshipType === "partner" ? "partner" : "client") as RelationshipType,
             stage,
             type,
             priceRange: c.priceRange ?? "",
@@ -274,6 +312,7 @@ export default function CrmPage() {
             linkedListings: Array.isArray(c.linkedListings)
               ? c.linkedListings
               : [],
+            partnerProfile: c.partnerProfile ?? null,
           };
         });
 
@@ -328,6 +367,11 @@ export default function CrmPage() {
     const base = contacts.slice();
     let list = base;
 
+    // Relationship filter (Client vs Partner)
+  list = list.filter((c) => c.relationshipType === relationshipFilter);
+
+  // Only CLIENTS use pipeline + buyer/seller filters
+  if (relationshipFilter === "client") {
     // Stage filter
     if (stageFilter !== "all") {
       list = list.filter((c) => c.stage === stageFilter);
@@ -343,6 +387,8 @@ export default function CrmPage() {
         (c) => c.type === "seller" || c.type === "buyer & seller"
       );
     }
+  }
+
 
     // Search filter
     if (search.trim()) {
@@ -358,17 +404,27 @@ export default function CrmPage() {
           .join(" ")
           .toLowerCase();
 
+        const partnerText = [
+          c.partnerProfile?.businessName,
+          c.partnerProfile?.partnerType,
+          c.partnerProfile?.coverageMarkets,
+          c.partnerProfile?.feeComp,
+          c.partnerProfile?.website,
+          c.partnerProfile?.link,
+        ].filter(Boolean).join(" ").toLowerCase();
+
         return (
           c.name.toLowerCase().includes(q) ||
           c.areas.toLowerCase().includes(q) ||
           c.priceRange.toLowerCase().includes(q) ||
+          partnerText.includes(q) ||
           notesText.includes(q) ||
           linkedListingAddresses.includes(q)
         );
       });
     }
 
-    // Surface “new contact” while editing
+       // Surface “new contact” while editing
     if (selectedId === "new" && activeContact) {
       list = [
         {
@@ -380,8 +436,24 @@ export default function CrmPage() {
       ];
     }
 
+    // ✅ Keep the selected contact visible even if you changed relationshipType mid-edit
+    // (We only flip the top filter AFTER save, so avoid the "ghost" state pre-save.)
+    if (
+      selectedId &&
+      selectedId !== "new" &&
+      activeContact?.id &&
+      activeContact.id === selectedId
+    ) {
+      const existsInList = list.some((c) => c.id === selectedId);
+
+      if (!existsInList) {
+        list = [activeContact, ...list];
+      }
+    }
+
+
     return list;
-  }, [contacts, stageFilter, roleFilter, search, selectedId, activeContact]);
+  }, [contacts, relationshipFilter, stageFilter, roleFilter, search, selectedId, activeContact]);
 
   // Keep activeContact in sync when selection changes
   useEffect(() => {
@@ -436,10 +508,13 @@ export default function CrmPage() {
   // ---------- Actions ----------
 
   function handleAddContact() {
+    const isPartner = relationshipFilter === "partner";
+
     const fresh: Contact = {
       id: undefined,
       name: "",
       label: "",
+      relationshipType: relationshipFilter ?? "client",
       stage: "new",
       type: null,
       priceRange: "",
@@ -450,11 +525,21 @@ export default function CrmPage() {
       phone: "",
       notes: [],
       linkedListings: [],
+      partnerProfile: isPartner
+        ? {
+            businessName: "",
+            partnerType: "",
+            coverageMarkets: "",
+            feeComp: "",
+            website: "",
+            link: "",
+          }
+        : null,
     };
+
     setSelectedId("new");
     setActiveContact(fresh);
 
-    // On mobile, immediately show the workspace like Listings page
     if (isMobile()) {
       setWorkspaceOpenMobile(true);
       scrollToWorkspace();
@@ -462,9 +547,33 @@ export default function CrmPage() {
   }
 
   function handleFieldChange<K extends keyof Contact>(key: K, value: Contact[K]) {
-    if (!activeContact) return;
-    setActiveContact({ ...activeContact, [key]: value });
+  setActiveContact((prev) => (prev ? { ...prev, [key]: value } : prev));
   }
+
+  function handlePartnerFieldChange<K extends keyof PartnerProfile>(
+  key: K,
+  value: PartnerProfile[K]
+) {
+  setActiveContact((prev) => {
+    if (!prev) return prev;
+    const current = prev.partnerProfile ?? {
+      businessName: "",
+      partnerType: "",
+      coverageMarkets: "",
+      feeComp: "",
+      website: "",
+      link: "",
+    };
+    return {
+      ...prev,
+      partnerProfile: {
+        ...current,
+        [key]: value,
+      },
+    };
+  });
+}
+
 
   // Split "Contact name" into first + last for API
   function splitName(full: string): { firstName?: string; lastName?: string } {
@@ -571,13 +680,20 @@ export default function CrmPage() {
           lastName: lastName ?? "",
           email: activeContact.email ?? "",
           phone: activeContact.phone ?? "",
-          stage: activeContact.stage, 
+          relationshipType: activeContact.relationshipType,
+          stage: activeContact.stage,
           label: activeContact.label ?? "",
           type: activeContact.type ?? null,
           priceRange: activeContact.priceRange ?? "",
           areas: activeContact.areas ?? "",
           timeline: activeContact.timeline ?? "",
           source: activeContact.source ?? "",
+          businessName: activeContact.partnerProfile?.businessName ?? "",
+          partnerType: activeContact.partnerProfile?.partnerType ?? "",
+          coverageMarkets: activeContact.partnerProfile?.coverageMarkets ?? "",
+          feeComp: activeContact.partnerProfile?.feeComp ?? "",
+          website: activeContact.partnerProfile?.website ?? "",
+          link: activeContact.partnerProfile?.link ?? "",
         }),
       });
 
@@ -592,8 +708,13 @@ export default function CrmPage() {
         id: data.contact.id,
         name: data.contact.name ?? "",
         label: data.contact.label ?? "",
+        relationshipType:
+          (data.contact.relationshipType === "partner" ? "partner" : "client") as RelationshipType,
+        partnerProfile: data.contact.partnerProfile ?? null,
+        
         stage:
-          (data.contact.stage as Stage) && ["new", "warm", "hot", "past"].includes(data.contact.stage)
+          (data.contact.stage as Stage) &&
+          ["new", "warm", "hot", "past"].includes(data.contact.stage)
             ? (data.contact.stage as Stage)
             : "new",
         type: normalizeContactType(data.contact.type),
@@ -616,11 +737,23 @@ export default function CrmPage() {
         return next;
       });
 
-      // Desktop OR silent save keeps detail panel open
+            // Desktop OR silent save keeps detail panel open
       if (!isMobileView || silent) {
         setSelectedId(saved.id!);
         setActiveContact(saved);
       }
+
+      // ✅ ONLY after save: keep top filters aligned with the saved contact
+      if (relationshipFilter !== saved.relationshipType) {
+        setRelationshipFilter(saved.relationshipType);
+
+        // Partner view should not inherit pipeline filters
+        if (saved.relationshipType === "partner") {
+          setStageFilter("all");
+          setRoleFilter("all");
+        }
+      }
+
 
       return saved;
     } catch (err: any) {
@@ -722,6 +855,7 @@ export default function CrmPage() {
           id: c.id,
           name: c.name ?? "",
           label: c.label ?? "",
+          relationshipType: (c.relationshipType === "partner" ? "partner" : "client") as RelationshipType,
           stage,
           type,
           priceRange: c.priceRange ?? "",
@@ -734,6 +868,7 @@ export default function CrmPage() {
           linkedListings: Array.isArray(c.linkedListings)
             ? c.linkedListings
             : [],
+          partnerProfile: c.partnerProfile ?? null,
         };
       });
 
@@ -756,7 +891,13 @@ export default function CrmPage() {
       const saved = await ensureContactSaved();
       if (!saved?.id) return;
 
-      const relType: ContactType = saved.type ?? "buyer";
+      // NEW: partners do not link to listings
+      if (saved.relationshipType === "partner") return;
+
+      // ✅ require explicit client type
+      if (!saved.type) return;
+
+      const relType: ContactType = saved.type;
 
       const wantsSeller =
         relType === "seller" || relType === "buyer & seller";
@@ -936,55 +1077,87 @@ export default function CrmPage() {
         {/* Filters + search */}
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-col gap-2">
-            {/* Buyer / seller filter */}
+            {/* NEW: Client / Partner filter (always visible) */}
             <div className="inline-flex flex-wrap gap-2 text-[11px]">
               <FilterPill
-                label="All"
-                active={roleFilter === "all"}
-                onClick={() => setRoleFilter("all")}
-                count={totalContacts || undefined}
+                label="Client"
+                active={relationshipFilter === "client"}
+                variant="modeClient"
+                onClick={() => {
+                  setRelationshipFilter("client");
+                }}
+                count={clientsCount}
               />
+
               <FilterPill
-                label="Buyers"
-                active={roleFilter === "buyers"}
-                onClick={() => setRoleFilter("buyers")}
-                count={buyersCount}
-              />
-              <FilterPill
-                label="Sellers"
-                active={roleFilter === "sellers"}
-                onClick={() => setRoleFilter("sellers")}
-                count={sellersCount}
+                label="Partner"
+                active={relationshipFilter === "partner"}
+                variant="modePartner"
+                onClick={() => {
+                  setRelationshipFilter("partner");
+                  setStageFilter("all");
+                  setRoleFilter("all");
+                }}
+                count={partnersCount}
               />
             </div>
 
-            {/* Stage filter */}
-            <div className="inline-flex flex-wrap gap-2 text-xs">
-              <FilterPill
-                label="New"
-                active={stageFilter === "new"}
-                badgeColor="new"
-                onClick={() => handleStageFilterClick("new")}
-              />
-              <FilterPill
-                label="Warm"
-                active={stageFilter === "warm"}
-                badgeColor="warm"
-                onClick={() => handleStageFilterClick("warm")}
-              />
-              <FilterPill
-                label="Hot"
-                active={stageFilter === "hot"}
-                badgeColor="hot"
-                onClick={() => handleStageFilterClick("hot")}
-              />
-              <FilterPill
-                label="Past / sphere"
-                active={stageFilter === "past"}
-                badgeColor="past"
-                onClick={() => handleStageFilterClick("past")}
-              />
-            </div>
+            {/* CLIENT-only filters */}
+            {relationshipFilter === "client" && (
+              <>
+                {/* Buyer / seller filter */}
+                <div className="inline-flex flex-wrap gap-2 text-[11px]">
+                  <FilterPill
+                    label="All"
+                    active={roleFilter === "all"}
+                    variant="filter"
+                    onClick={() => setRoleFilter("all")}
+                  />
+                  <FilterPill
+                    label="Buyers"
+                    active={roleFilter === "buyers"}
+                    variant="filter"
+                    onClick={() => setRoleFilter("buyers")}
+                    count={buyersCount}
+                  />
+                  <FilterPill
+                    label="Sellers"
+                    active={roleFilter === "sellers"}
+                    variant="filter"
+                    onClick={() => setRoleFilter("sellers")}
+                    count={sellersCount}
+                  />
+                </div>
+
+                {/* Stage filter */}
+                <div className="inline-flex flex-wrap gap-2 text-xs">
+                  <FilterPill
+                    label="New"
+                    active={stageFilter === "new"}
+                    badgeColor="new"
+                    onClick={() => handleStageFilterClick("new")}
+                  />
+                  <FilterPill
+                    label="Warm"
+                    active={stageFilter === "warm"}
+                    badgeColor="warm"
+                    onClick={() => handleStageFilterClick("warm")}
+                  />
+                  <FilterPill
+                    label="Hot"
+                    active={stageFilter === "hot"}
+                    badgeColor="hot"
+                    onClick={() => handleStageFilterClick("hot")}
+                  />
+                  <FilterPill
+                    label="Past / sphere"
+                    active={stageFilter === "past"}
+                    badgeColor="past"
+                    onClick={() => handleStageFilterClick("past")}
+                  />
+                </div>
+              </>
+            )}
           </div>
 
           <div className="w-full md:w-72">
@@ -1044,17 +1217,23 @@ export default function CrmPage() {
                     (selectedId === "new" && contact.id === "new") ||
                     (contact.id && contact.id === selectedId);
 
+                  const isPartner = contact.relationshipType === "partner";
+
                   const relType = contact.type;
                   const isBuyer = relType === "buyer";
                   const isSeller = relType === "seller";
 
-                  const priceLabel = isBuyer
+                  const priceLabel = isPartner
+                    ? "Fee / comp"
+                    : isBuyer
                     ? "Budget"
                     : isSeller
                     ? "Price"
                     : "Price / budget";
 
-                  const areasLabel = isBuyer
+                  const areasLabel = isPartner
+                    ? "Coverage"
+                    : isBuyer
                     ? "Areas"
                     : isSeller
                     ? "Address"
@@ -1090,10 +1269,12 @@ export default function CrmPage() {
                         <span
                           className={
                             "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] " +
-                            stageBadgeClass(contact.stage)
+                            (contact.relationshipType === "partner"
+                              ? "border-violet-200/70 bg-violet-500/10 text-violet-100"
+                              : stageBadgeClass(contact.stage))
                           }
                         >
-                          {stageLabel(contact.stage)}
+                          {contact.relationshipType === "partner" ? "Partner" : stageLabel(contact.stage)}
                         </span>
                       </div>
 
@@ -1101,34 +1282,39 @@ export default function CrmPage() {
                       <div className="mt-2 grid gap-1 text-[11px] text-[var(--avillo-cream-soft)] sm:grid-cols-2">
                         <span className="truncate">
                           <span className="text-[var(--avillo-cream-muted)]">
-                            Type:
+                            {isPartner ? "Relationship:" : "Type:"}
                           </span>{" "}
-                          {prettyContactType(contact.type)}
+                          {isPartner ? "Partner" : prettyContactType(contact.type)}
                         </span>
+
+                        <span className="truncate">
+                          <span className="text-[var(--avillo-cream-muted)]">{priceLabel}:</span>{" "}
+                          {isPartner ? (contact.partnerProfile?.feeComp ?? "—") : (contact.priceRange || "—")}
+                        </span>
+
+                        <span className="truncate">
+                          <span className="text-[var(--avillo-cream-muted)]">{areasLabel}:</span>{" "}
+                          {isPartner
+                            ? (contact.partnerProfile?.coverageMarkets ?? "—")
+                            : (contact.areas || "—")}
+                        </span>
+
                         <span className="truncate">
                           <span className="text-[var(--avillo-cream-muted)]">
-                            {priceLabel}:
+                            {isPartner ? "Business:" : "Timeline:"}
                           </span>{" "}
-                          {contact.priceRange || "—"}
-                        </span>
-                        <span className="truncate">
-                          <span className="text-[var(--avillo-cream-muted)]">
-                            {areasLabel}:
-                          </span>{" "}
-                          {contact.areas || "—"}
-                        </span>
-                        <span className="truncate">
-                          <span className="text-[var(--avillo-cream-muted)]">
-                            Timeline:
-                          </span>{" "}
-                          {contact.timeline || "—"}
+                          {isPartner
+                            ? (contact.partnerProfile?.businessName || "—")
+                            : (contact.timeline || "—")}
                         </span>
                       </div>
 
-                      {/* Source row */}
-                      <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                        Source: {prettySource(contact.source)}
-                      </p>
+                      {/* Source row (CLIENT only) */}
+                      {!isPartner && (
+                        <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                          Source: {prettySource(contact.source)}
+                        </p>
+                      )}
                     </button>
                   );
                 })}
@@ -1189,7 +1375,8 @@ export default function CrmPage() {
             />
           </div>
 
-          {/* Stage selector inside detail panel */}
+          {/* Stage selector inside detail panel (CLIENT only) */}
+        {activeContact.relationshipType === "client" && (
           <div className="flex flex-col gap-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
               Lead status
@@ -1221,6 +1408,7 @@ export default function CrmPage() {
               />
             </div>
           </div>
+        )}
         </div>
 
         {/* Tabs */}
@@ -1250,6 +1438,19 @@ export default function CrmPage() {
           >
             Activity
           </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("pins")}
+              className={
+                "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] " +
+                (activeTab === "pins"
+                  ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
+                  : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50")
+              }
+            >
+              Pins
+            </button>
         </div>
 
         {/* ----------------------------
@@ -1265,23 +1466,61 @@ export default function CrmPage() {
               <div className="inline-flex flex-wrap gap-2">
                 <RoleToggle
                   label="Buyer"
-                  active={activeContact.type === "buyer"}
-                  onClick={() => handleFieldChange("type", "buyer")}
+                  active={activeContact.relationshipType === "client" && activeContact.type === "buyer"}
+                  onClick={() => {
+                    handleFieldChange("relationshipType", "client");
+                    handleFieldChange("type", "buyer");
+                    if (!activeContact.stage) handleFieldChange("stage", "new");
+                  }}
                 />
                 <RoleToggle
                   label="Seller"
-                  active={activeContact.type === "seller"}
-                  onClick={() => handleFieldChange("type", "seller")}
+                  active={activeContact.relationshipType === "client" && activeContact.type === "seller"}
+                  onClick={() => {
+                    handleFieldChange("relationshipType", "client");
+                    handleFieldChange("type", "seller");
+                    if (!activeContact.stage) handleFieldChange("stage", "new");
+                  }}
                 />
                 <RoleToggle
                   label="Buyer & Seller"
-                  active={activeContact.type === "buyer & seller"}
-                  onClick={() => handleFieldChange("type", "buyer & seller")}
+                  active={activeContact.relationshipType === "client" && activeContact.type === "buyer & seller"}
+                  onClick={() => {
+                    handleFieldChange("relationshipType", "client");
+                    handleFieldChange("type", "buyer & seller");
+                    if (!activeContact.stage) handleFieldChange("stage", "new");
+                  }}
+                />
+                <RoleToggle
+                  label="Partner"
+                  active={activeContact.relationshipType === "partner"}
+                  onClick={() => {
+                    handleFieldChange("relationshipType", "partner");
+                    handleFieldChange("type", null);
+
+                    setActiveContact((prev) => {
+                      if (!prev) return prev;
+                      return {
+                        ...prev,
+                        partnerProfile: prev.partnerProfile ?? {
+                          businessName: "",
+                          partnerType: "",
+                          coverageMarkets: "",
+                          feeComp: "",
+                          website: "",
+                          link: "",
+                        },
+                      };
+                    });
+                  }}
                 />
               </div>
             </div>
 
-            {/* Quick stats row 1: price / budget + address/areas */}
+            {/* CLIENT overview */}
+        {activeContact.relationshipType === "client" && (
+          <>
+            {/* Quick stats row 1 */}
             {(() => {
               const relType = activeContact.type;
               const isBuyerOnly = relType === "buyer";
@@ -1375,47 +1614,45 @@ export default function CrmPage() {
             </div>
 
             {/* Linked listings summary */}
-            {activeContact.linkedListings &&
-              activeContact.linkedListings.length > 0 && (
-                <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                  <p className="text-[11px] font-semibold text-amber-100/90">
-                    Linked listings
-                  </p>
-                  <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                    This contact is connected to the listings below. Remove a
-                    link with the “×”.
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {activeContact.linkedListings.map((l) => (
-                      <span
-                        key={`${l.id}-${l.role}`}
-                        className="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-700/80 bg-slate-950/70 px-3 py-1.5 text-[10px] text-[var(--avillo-cream-soft)]"
-                      >
-                        <span className="max-w-[160px] truncate sm:max-w-[220px]">
-                          {l.address || "Unnamed listing"}
-                        </span>
-                        <span
-                          className={
-                            "rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] " +
-                            (l.role === "seller"
-                              ? "border-amber-200/90 bg-amber-400/15 text-amber-50"
-                              : "border-sky-200/90 bg-sky-500/15 text-sky-50")
-                          }
-                        >
-                          {l.role === "seller" ? "Seller" : "Buyer"}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleUnlinkListing(l.id, l.role)}
-                          className="rounded-full border border-slate-700/80 bg-slate-900/80 px-1.5 text-[9px] leading-none text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/50 hover:text-rose-50"
-                        >
-                          ×
-                        </button>
+            {activeContact.linkedListings && activeContact.linkedListings.length > 0 && (
+              <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                <p className="text-[11px] font-semibold text-amber-100/90">
+                  Linked listings
+                </p>
+                <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                  This contact is connected to the listings below. Remove a link with the “×”.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {activeContact.linkedListings.map((l) => (
+                    <span
+                      key={`${l.id}-${l.role}`}
+                      className="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-700/80 bg-slate-950/70 px-3 py-1.5 text-[10px] text-[var(--avillo-cream-soft)]"
+                    >
+                      <span className="max-w-[160px] truncate sm:max-w-[220px]">
+                        {l.address || "Unnamed listing"}
                       </span>
-                    ))}
-                  </div>
+                      <span
+                        className={
+                          "rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] " +
+                          (l.role === "seller"
+                            ? "border-amber-200/90 bg-amber-400/15 text-amber-50"
+                            : "border-sky-200/90 bg-sky-500/15 text-sky-50")
+                        }
+                      >
+                        {l.role === "seller" ? "Seller" : "Buyer"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleUnlinkListing(l.id, l.role)}
+                        className="rounded-full border border-slate-700/80 bg-slate-900/80 px-1.5 text-[9px] leading-none text-[var(--avillo-cream-muted)] hover:border-rose-400/80 hover:bg-rose-900/50 hover:text-rose-50"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
                 </div>
-              )}
+              </div>
+            )}
 
             {/* Tag to listing */}
             <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
@@ -1429,8 +1666,7 @@ export default function CrmPage() {
                 </p>
               ) : listings.length === 0 ? (
                 <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
-                  You don’t have any listings yet. Save this contact, then
-                  create their first listing.
+                  You don’t have any listings yet. Save this contact, then create their first listing.
                 </p>
               ) : (
                 <>
@@ -1443,10 +1679,8 @@ export default function CrmPage() {
                   <div className="mt-2 flex flex-wrap gap-2">
                     {listings.map((l) => {
                       const relType: ContactType = activeContact.type ?? "buyer";
-                      const wantsSeller =
-                        relType === "seller" || relType === "buyer & seller";
-                      const wantsBuyer =
-                        relType === "buyer" || relType === "buyer & seller";
+                      const wantsSeller = relType === "seller" || relType === "buyer & seller";
+                      const wantsBuyer = relType === "buyer" || relType === "buyer & seller";
 
                       const links = activeContact.linkedListings ?? [];
                       const linkedAsSeller = links.some(
@@ -1457,8 +1691,7 @@ export default function CrmPage() {
                       );
 
                       const isLinked =
-                        (wantsSeller && linkedAsSeller) ||
-                        (wantsBuyer && linkedAsBuyer);
+                        (wantsSeller && linkedAsSeller) || (wantsBuyer && linkedAsBuyer);
 
                       return (
                         <button
@@ -1480,6 +1713,73 @@ export default function CrmPage() {
                 </>
               )}
             </div>
+          </>
+        )}
+
+        {/* PARTNER overview */}
+        {activeContact.relationshipType === "partner" && (
+              <>
+                <div className="grid gap-2 text-[11px] sm:grid-cols-2">
+                  <DetailInput
+                    label="Business name"
+                    value={activeContact.partnerProfile?.businessName ?? ""}
+                    onChange={(v) => handlePartnerFieldChange("businessName", v)}
+                    placeholder="Ex: ABC Home Inspections"
+                  />
+                  <DetailInput
+                    label="Partner type"
+                    value={activeContact.partnerProfile?.partnerType ?? ""}
+                    onChange={(v) => handlePartnerFieldChange("partnerType", v)}
+                    placeholder="Ex: Lender, Inspector, Contractor…"
+                  />
+                </div>
+
+                <div className="grid gap-2 text-[11px] sm:grid-cols-2">
+                  <DetailInput
+                    label="Coverage / markets"
+                    value={activeContact.partnerProfile?.coverageMarkets ?? ""}
+                    onChange={(v) => handlePartnerFieldChange("coverageMarkets", v)}
+                    placeholder="Ex: San Diego, North County…"
+                  />
+                  <DetailInput
+                    label="Fee / comp"
+                    value={activeContact.partnerProfile?.feeComp ?? ""}
+                    onChange={(v) => handlePartnerFieldChange("feeComp", v)}
+                    placeholder="Ex: 1% referral, $450 flat…"
+                  />
+                </div>
+
+                <div className="grid gap-2 text-[11px] sm:grid-cols-2">
+                  <DetailInput
+                    label="Website"
+                    value={activeContact.partnerProfile?.website ?? ""}
+                    onChange={(v) => handlePartnerFieldChange("website", v)}
+                    placeholder="https://..."
+                  />
+                  <DetailInput
+                    label="Link"
+                    value={activeContact.partnerProfile?.link ?? ""}
+                    onChange={(v) => handlePartnerFieldChange("link", v)}
+                    placeholder="Calendly / intake form / reviews…"
+                  />
+                </div>
+
+                <div className="grid gap-2 text-[11px] sm:grid-cols-2">
+                  <DetailInput
+                    label="Email"
+                    value={activeContact.email}
+                    onChange={(v) => handleFieldChange("email", v)}
+                    placeholder="email@partner.com"
+                  />
+                  <DetailInput
+                    label="Phone"
+                    value={activeContact.phone}
+                    onChange={(v) => handleFieldChange("phone", v)}
+                    placeholder="(555) 123-4567"
+                  />
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -1488,14 +1788,16 @@ export default function CrmPage() {
         ---------------------------- */}
         {activeTab === "activity" && (
           <div className="space-y-4">
- {/* ✅ NEW: Autopilot activity card (above Notes & tasks) */}
-    <AutopilotActivityCard
-  loading={autopilotLoading}
-  items={autopilotItems}
-  tasks={autopilotTasks}
-  expandedRuns={expandedRuns}
-  setExpandedRuns={setExpandedRuns}
-/>
+      {/* Autopilot activity (CLIENT only) */}
+      {activeContact.relationshipType !== "partner" && (
+        <AutopilotActivityCard
+          loading={autopilotLoading}
+          items={autopilotItems}
+          tasks={autopilotTasks}
+          expandedRuns={expandedRuns}
+          setExpandedRuns={setExpandedRuns}
+        />
+      )}
 
     {/* Notes & tasks */}
     <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
@@ -1600,6 +1902,29 @@ export default function CrmPage() {
           </div>
         </>
       )}
+    </div>
+  </div>
+)}
+
+{/* ----------------------------
+    PINS TAB (ALL CONTACTS)
+---------------------------- */}
+{activeTab === "pins" && (
+  <div className="space-y-4">
+    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+      <p className="text-[11px] font-semibold text-amber-100/90">Pins</p>
+      <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+        Pins will become the workspace for each contact (documents, links, intake notes, and custom fields).
+      </p>
+
+      <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
+        <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
+          Pins coming soon.
+        </p>
+        <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+          For now, track touchpoints in Notes & tasks.
+        </p>
+      </div>
     </div>
   </div>
 )}
@@ -1755,7 +2080,7 @@ function AutopilotActivityCard({
   items: any[];
   tasks: any[];
   expandedRuns: Record<string, boolean>;
-  setExpandedRuns: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  setExpandedRuns: Dispatch<SetStateAction<Record<string, boolean>>>;
 }) {
   const hasRuns = Array.isArray(items) && items.length > 0;
   const hasTasks = Array.isArray(tasks) && tasks.length > 0;
@@ -1926,7 +2251,7 @@ function AutopilotActivityCard({
           <div className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">
             {(tasks ?? []).slice(0, 3).map((t: any) => (
               <div
-                key={String(t?.id ?? Math.random())}
+                key={String(t?.id ?? `${t?.title ?? "task"}-${t?.dueAt ?? t?.createdAt ?? ""}`)}
                 className="flex items-center justify-between gap-3 rounded-md border border-slate-800/70 bg-slate-900/40 px-2 py-1.5"
               >
                 <div className="min-w-0">

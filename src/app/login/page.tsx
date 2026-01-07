@@ -1,10 +1,10 @@
-// src/app/login/page.tsx
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { signIn } from "next-auth/react";
+import { signIn, useSession } from "next-auth/react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 
 function GoogleIcon() {
   return (
@@ -32,40 +32,85 @@ function GoogleIcon() {
   );
 }
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function normalizeAccessLevel(x: unknown) {
+  const s = String(x || "").toUpperCase();
+  if (s === "BETA") return "BETA";
+  if (s === "PAID") return "PAID";
+  if (s === "EXPIRED") return "EXPIRED";
+  return "UNKNOWN";
+}
+
 export default function LoginPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { data: session, status } = useSession();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function normalizeEmail(value: string) {
-    return value.trim().toLowerCase();
-  }
+  const callbackUrl = useMemo(() => {
+    const raw = searchParams?.get("callbackUrl");
+    // Avoid redirecting back to /login or other auth pages
+    if (!raw) return null;
+    if (raw.startsWith("/login") || raw.startsWith("/signup")) return null;
+    return raw;
+  }, [searchParams]);
+
+  const postLoginPath = useMemo(() => {
+    const accessLevel = normalizeAccessLevel((session?.user as any)?.accessLevel);
+
+    // ✅ Your rule: EXPIRED always goes to Billing.
+    if (accessLevel === "EXPIRED") return "/billing?reason=upgrade_required";
+
+    // Otherwise honor callbackUrl if present; fallback to dashboard.
+    return callbackUrl || "/dashboard";
+  }, [session, callbackUrl]);
+
+  // ✅ If already signed in, route deterministically (prevents "stuck on login")
+  useEffect(() => {
+    if (status === "authenticated") {
+      router.replace(postLoginPath);
+    }
+  }, [status, postLoginPath, router]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
 
-    const result = await signIn("credentials", {
-      redirect: false,
-      email: normalizeEmail(email),
-      password,
-    });
+    try {
+      const result = await signIn("credentials", {
+        redirect: false,
+        email: normalizeEmail(email),
+        password,
+      });
 
-    setSubmitting(false);
+      if (result?.error) {
+        setError(result.error);
+        setSubmitting(false);
+        return;
+      }
 
-    if (result?.error) {
-      setError(result.error);
-      return;
+      // ✅ Ensure session refresh before navigating (prevents race)
+      // A tiny delay + hard session refetch is the most reliable approach.
+      await new Promise((r) => setTimeout(r, 150));
+      router.replace(postLoginPath);
+    } catch (err: any) {
+      setError(err?.message || "Sign in failed.");
+    } finally {
+      setSubmitting(false);
     }
-
-    // Credentials provider succeeded
-    window.location.href = "/dashboard";
   }
 
   async function handleGoogleSignIn() {
-    await signIn("google", { callbackUrl: "/dashboard" });
+    // ✅ Always land at billing if expired; middleware will enforce too.
+    await signIn("google", { callbackUrl: "/billing?reason=upgrade_required" });
   }
 
   return (
