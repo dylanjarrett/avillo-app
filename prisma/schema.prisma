@@ -57,6 +57,12 @@ enum TaskSource {
   MANUAL
 }
 
+// Relationship type for Contacts (Client vs Partner)
+enum RelationshipType {
+  CLIENT
+  PARTNER
+}
+
 // ---------------------------
 // USER
 // ---------------------------
@@ -125,8 +131,10 @@ model Contact {
   smsConsentText   String?
   smsOptedOutAt    DateTime?
 
-  stage     String  @default("new") // new → warm → hot → past
-  tags      String[] @default([])
+  relationshipType RelationshipType @default(CLIENT)
+
+  stage      String   @default("new") // new → warm → hot → past
+  tags       String[] @default([])
 
   // Legacy free-form notes field (kept for backwards compatibility)
   notes     String?
@@ -331,7 +339,7 @@ model Task {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   completedAt DateTime?
-  deletedAt DateTime?
+  deletedAt   DateTime?
 
   @@index([userId, status, dueAt])
   @@index([userId, contactId, status, dueAt])
@@ -434,11 +442,11 @@ model Automation {
   description String?
   status      String @default("draft") // draft | active | paused | archived
 
-  trigger       String
-  triggerConfig Json?
-  entryConditions Json?
-  exitConditions  Json?
-  schedule        Json?
+  trigger          String
+  triggerConfig    Json?
+  entryConditions  Json?
+  exitConditions   Json?
+  schedule         Json?
 
   folder String?
 
@@ -478,11 +486,11 @@ model AutomationRun {
   trigger        String?
   triggerPayload Json?
 
-  status   String
-  message  String?
+  status     String
+  message    String?
 
   executedAt DateTime @default(now())
-  lockId    String?
+  lockId     String?
 
   steps AutomationRunStep[]
 
@@ -495,10 +503,10 @@ model AutomationRun {
 }
 
 model AutomationRunStep {
-  id       String @id @default(cuid())
-  runId    String
+  id        String @id @default(cuid())
+  runId     String
 
-  stepId   String?
+  stepId    String?
   stepIndex Int
   stepType  String
   status    String
@@ -530,17 +538,17 @@ model SmsSuppression {
 }
 
 model SmsMessage {
-  id          String       @id @default(cuid())
-  userId      String
-  contactId   String?
-  direction   SmsDirection
-  fromNumber  String
-  toNumber    String
-  body        String
-  twilioSid   String?
-  status      String?
-  error       String?
-  createdAt   DateTime     @default(now())
+  id         String       @id @default(cuid())
+  userId     String
+  contactId  String?
+  direction  SmsDirection
+  fromNumber String
+  toNumber   String
+  body       String
+  twilioSid  String?
+  status     String?
+  error      String?
+  createdAt  DateTime     @default(now())
 
   @@index([userId, createdAt])
   @@index([userId, toNumber])

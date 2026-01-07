@@ -1,3 +1,4 @@
+// src/app/signup/page.tsx
 "use client";
 
 import { FormEvent, useState } from "react";
@@ -28,10 +29,16 @@ export default function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function normalizeEmail(value: string) {
+    return value.trim().toLowerCase();
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
+
+    const normalizedEmail = normalizeEmail(email);
 
     try {
       const res = await fetch("/api/auth/signup", {
@@ -40,7 +47,7 @@ export default function SignupPage() {
         body: JSON.stringify({
           name,
           brokerage: brokerage || undefined,
-          email,
+          email: normalizedEmail,
           password,
         }),
       });
@@ -54,7 +61,7 @@ export default function SignupPage() {
       // Auto sign-in with credentials after successful signup
       await signIn("credentials", {
         redirect: true,
-        email,
+        email: normalizedEmail,
         password,
         callbackUrl: "/dashboard",
       });
@@ -123,6 +130,7 @@ export default function SignupPage() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={(e) => setEmail(normalizeEmail(e.target.value))}
                 placeholder="you@yourbrokerage.com"
                 className="avillo-input w-full"
               />

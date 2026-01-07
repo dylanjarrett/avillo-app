@@ -17,7 +17,12 @@ type TokenShape = {
   accessLevel?: string;
   subscriptionStatus?: string | null;
   sessionKey?: string | null;
+  email?: string | null;
 };
+
+function normalizeEmail(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as any,
@@ -33,26 +38,31 @@ export const authOptions: NextAuthOptions = {
       clientId: process.env.GOOGLE_CLIENT_ID ?? "",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
     }),
+
     CredentialsProvider({
       name: "Email & Password",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
+
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
+        const email = normalizeEmail(credentials?.email);
+        const password = String(credentials?.password ?? "");
+
+        if (!email || !password) {
           throw new Error("Missing email or password");
         }
 
         const user = await prisma.user.findUnique({
-          where: { email: credentials.email },
+          where: { email }, // ✅ normalized (case-insensitive behavior via normalization)
         });
 
         if (!user || !user.passwordHash) {
           throw new Error("Invalid login");
         }
 
-        const valid = await compare(credentials.password, user.passwordHash);
+        const valid = await compare(password, user.passwordHash);
         if (!valid) {
           throw new Error("Invalid login");
         }
@@ -64,7 +74,7 @@ export const authOptions: NextAuthOptions = {
 
   /**
    * ✅ Ensures first-time Google OAuth users default to paywalled state,
-   * even though NextAuth/PrismaAdapter creates them automatically.
+   * and normalizes their email so the DB never stores mixed-case emails.
    */
   events: {
     async createUser({ user }) {
@@ -72,6 +82,9 @@ export const authOptions: NextAuthOptions = {
         await prisma.user.update({
           where: { id: user.id },
           data: {
+            // ✅ Normalize OAuth email to keep DB consistent (important for case-insensitive login expectations)
+            email: user.email ? normalizeEmail(user.email) : undefined,
+
             accessLevel: "EXPIRED" as any,
             plan: "STARTER" as any,
             subscriptionStatus: "NONE" as any,
@@ -101,8 +114,6 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     /**
      * Runs when a JWT is created or updated.
-     * - On initial sign-in, `user` is defined.
-     * - On subsequent requests, `user` is undefined, but `token` persists.
      *
      * ✅ IMPORTANT FIX:
      * When the client calls `useSession().update()`, NextAuth sets `trigger === "update"`.
@@ -117,6 +128,9 @@ export const authOptions: NextAuthOptions = {
             // Rotate session key on every new login
             currentSessionKey: crypto.randomUUID(),
             lastLoginAt: new Date(),
+
+            // ✅ Keep email normalized (covers edge cases where user.email might be mixed-case)
+            email: (user as any)?.email ? normalizeEmail((user as any).email) : undefined,
           },
           select: {
             id: true,
@@ -125,17 +139,19 @@ export const authOptions: NextAuthOptions = {
             accessLevel: true,
             subscriptionStatus: true,
             currentSessionKey: true,
+            email: true,
           },
         });
 
-        (token as TokenShape).id = dbUser.id;
-        (token as TokenShape).role = String(dbUser.role);
-        (token as TokenShape).plan = String(dbUser.plan);
-        (token as TokenShape).accessLevel = String(dbUser.accessLevel);
-        (token as TokenShape).subscriptionStatus = dbUser.subscriptionStatus
-          ? String(dbUser.subscriptionStatus)
-          : null;
-        (token as TokenShape).sessionKey = dbUser.currentSessionKey ?? null;
+        const t = token as TokenShape;
+
+        t.id = dbUser.id;
+        t.role = String(dbUser.role);
+        t.plan = String(dbUser.plan);
+        t.accessLevel = String(dbUser.accessLevel);
+        t.subscriptionStatus = dbUser.subscriptionStatus ? String(dbUser.subscriptionStatus) : null;
+        t.sessionKey = dbUser.currentSessionKey ?? null;
+        t.email = dbUser.email ? normalizeEmail(dbUser.email) : null;
 
         return token;
       }
@@ -154,6 +170,7 @@ export const authOptions: NextAuthOptions = {
               accessLevel: true,
               subscriptionStatus: true,
               currentSessionKey: true,
+              email: true,
             },
           });
 
@@ -163,6 +180,7 @@ export const authOptions: NextAuthOptions = {
             t.accessLevel = String(dbUser.accessLevel);
             t.subscriptionStatus = dbUser.subscriptionStatus ? String(dbUser.subscriptionStatus) : null;
             t.sessionKey = dbUser.currentSessionKey ?? t.sessionKey ?? null;
+            t.email = dbUser.email ? normalizeEmail(dbUser.email) : t.email ?? null;
           }
         } catch {
           // keep existing token if DB read fails
@@ -187,6 +205,7 @@ export const authOptions: NextAuthOptions = {
               accessLevel: true,
               subscriptionStatus: true,
               currentSessionKey: true,
+              email: true,
             },
           });
 
@@ -196,6 +215,7 @@ export const authOptions: NextAuthOptions = {
             t.accessLevel = String(dbUser.accessLevel);
             t.subscriptionStatus = dbUser.subscriptionStatus ? String(dbUser.subscriptionStatus) : null;
             t.sessionKey = dbUser.currentSessionKey ?? t.sessionKey ?? null;
+            t.email = dbUser.email ? normalizeEmail(dbUser.email) : t.email ?? null;
           }
         } catch {
           // keep existing token if DB read fails
@@ -218,6 +238,13 @@ export const authOptions: NextAuthOptions = {
         (session.user as any).accessLevel = t.accessLevel;
         (session.user as any).subscriptionStatus = t.subscriptionStatus ?? null;
         (session.user as any).sessionKey = t.sessionKey ?? null;
+
+        // ✅ Keep session email normalized (optional but keeps consistency everywhere)
+        if ((session.user as any).email) {
+          (session.user as any).email = normalizeEmail((session.user as any).email);
+        } else if (t.email) {
+          (session.user as any).email = normalizeEmail(t.email);
+        }
       }
 
       return session;

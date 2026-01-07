@@ -1,6 +1,6 @@
 // src/app/layout.tsx
 import "./globals.css";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import React from "react";
 import Providers from "./providers";
 import { SpeedInsights } from "@vercel/speed-insights/next";
@@ -19,12 +19,15 @@ export const metadata: Metadata = {
     apple: "/apple-touch-icon.png",
   },
   manifest: "/site.webmanifest",
-  themeColor: "#050814",
-  
+
   robots: {
     index: false,
     follow: false,
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#050814",
 };
 
 export default async function RootLayout({

@@ -14,15 +14,18 @@ type SignupBody = {
   brokerage?: string;
 };
 
+function normalizeEmail(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = ((await req.json().catch(() => ({}))) || {}) as SignupBody;
 
-    const name = (body.name ?? "").trim();
-    const emailRaw = body.email ?? "";
-    const email = emailRaw.trim().toLowerCase();
-    const password = body.password ?? "";
-    const brokerage = (body.brokerage ?? "").trim();
+    const name = String(body.name ?? "").trim();
+    const email = normalizeEmail(body.email);
+    const password = String(body.password ?? "");
+    const brokerage = String(body.brokerage ?? "").trim();
 
     // ------- Basic validation -------
     if (!email || !email.includes("@")) {
@@ -41,49 +44,58 @@ export async function POST(req: NextRequest) {
 
     const { prisma } = await import("@/lib/prisma");
 
-    // ------- Check for existing account -------
-    const existing = await prisma.user.findUnique({
-      where: { email },
-      select: { id: true },
-    });
-
-    if (existing) {
-      return NextResponse.json(
-        { error: "An account already exists with that email." },
-        { status: 400 }
-      );
-    }
-
-    // ------- Create user -------
+    // ------- Create user (case-insensitive by normalization) -------
+    // NOTE: This assumes your DB has a unique constraint on User.email.
+    // If two requests race, Prisma will throw a unique constraint error (P2002) — we handle it below.
     const passwordHash = await hash(password, 10);
 
-    const user = await prisma.user.create({
-      data: {
-        email,
-        name: name || null,
-        passwordHash,
-        brokerage: brokerage || null,
+    let user:
+      | {
+          id: string;
+          email: string;
+          name: string | null;
+          brokerage: string | null;
+        }
+      | null = null;
 
-        // For now we treat email as verified on signup.
-        emailVerified: new Date(),
+    try {
+      user = await prisma.user.create({
+        data: {
+          email,
+          name: name || null,
+          passwordHash,
+          brokerage: brokerage || null,
 
-        // ✅ Monetization defaults
-        // New users are paywalled until they start a Stripe trial/plan.
-        accessLevel: "EXPIRED" as any,
-        plan: "STARTER" as any,
-        subscriptionStatus: "NONE" as any,
-        trialEndsAt: null,
-        currentPeriodEnd: null,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        brokerage: true,
-      },
-    });
+          // For now we treat email as verified on signup.
+          emailVerified: new Date(),
 
-    // Seed initial CRM activity
+          // ✅ Monetization defaults
+          // New users are paywalled until they start a Stripe trial/plan.
+          accessLevel: "EXPIRED" as any,
+          plan: "STARTER" as any,
+          subscriptionStatus: "NONE" as any,
+          trialEndsAt: null,
+          currentPeriodEnd: null,
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          brokerage: true,
+        },
+      });
+    } catch (e: any) {
+      // Prisma unique constraint violation (race condition / existing email)
+      if (e?.code === "P2002") {
+        return NextResponse.json(
+          { error: "An account already exists with that email." },
+          { status: 400 }
+        );
+      }
+      throw e;
+    }
+
+    // Seed initial CRM activity (keep your exact behavior)
     await prisma.cRMActivity.create({
       data: {
         userId: user.id,
@@ -96,15 +108,16 @@ export async function POST(req: NextRequest) {
     // ------- Fire-and-forget welcome email (non-blocking) -------
     const appUrl = process.env.NEXTAUTH_URL || "https://app.avillo.io";
     const logoUrl =
-      process.env.AVILLO_LOGO_URL || "https://app.avillo.io/avillo-logo-cream.png";
+      process.env.AVILLO_LOGO_URL ||
+      "https://app.avillo.io/avillo-logo-cream.png";
 
     (async () => {
       try {
         await sendEmail({
-          to: user.email,
+          to: user!.email,
           subject: "Welcome to Avillo",
           html: buildWelcomeEmailHtml({
-            name: user.name,
+            name: user!.name,
             appUrl,
             logoUrl,
           }),

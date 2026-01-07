@@ -7,7 +7,6 @@ import { signIn } from "next-auth/react";
 import Link from "next/link";
 
 function GoogleIcon() {
-  // Inline SVG so we don't rely on a /google-logo.png file
   return (
     <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-sm bg-white">
       <svg viewBox="0 0 48 48" aria-hidden="true" className="h-4 w-4">
@@ -39,6 +38,10 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function normalizeEmail(value: string) {
+    return value.trim().toLowerCase();
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -46,7 +49,7 @@ export default function LoginPage() {
 
     const result = await signIn("credentials", {
       redirect: false,
-      email,
+      email: normalizeEmail(email),
       password,
     });
 
@@ -54,10 +57,11 @@ export default function LoginPage() {
 
     if (result?.error) {
       setError(result.error);
-    } else {
-      // Let NextAuth handle redirect with callbackUrl
-      window.location.href = "/dashboard";
+      return;
     }
+
+    // Credentials provider succeeded
+    window.location.href = "/dashboard";
   }
 
   async function handleGoogleSignIn() {
@@ -66,9 +70,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen px-4">
-      {/* Center column with logo + card */}
       <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center py-10">
-        {/* Logo block */}
         <div className="mb-6 flex flex-col items-center">
           <Image
             src="/avillo-logo-cream.png"
@@ -80,7 +82,6 @@ export default function LoginPage() {
           />
         </div>
 
-        {/* Auth card */}
         <div className="w-full rounded-3xl border border-[rgba(148,163,184,0.35)] bg-[rgba(9,13,28,0.96)] px-6 py-7 shadow-[0_0_50px_rgba(15,23,42,0.9)] backdrop-blur">
           <div className="mb-6 text-center">
             <p className="text-[11px] font-semibold tracking-[0.24em] text-[var(--avillo-cream-muted)] uppercase">
@@ -107,13 +108,13 @@ export default function LoginPage() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={(e) => setEmail(normalizeEmail(e.target.value))}
                 placeholder="you@example.com"
                 className="avillo-input w-full"
               />
             </div>
 
             <div>
-              {/* Label + input first so tab goes Email -> Password input */}
               <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
                 Password
               </label>
@@ -124,7 +125,7 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="avillo-input w-full"
               />
-              {/* Forgot password comes AFTER input, but stays visually aligned right */}
+
               <div className="mt-1 flex justify-end">
                 <Link
                   href="/forgot-password"
@@ -144,14 +145,12 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Divider */}
           <div className="my-4 flex items-center gap-3 text-[10px] text-[var(--avillo-cream-muted)]">
             <div className="h-px flex-1 bg-[rgba(148,163,184,0.35)]" />
             <span>or</span>
             <div className="h-px flex-1 bg-[rgba(148,163,184,0.35)]" />
           </div>
 
-          {/* Google button */}
           <button
             type="button"
             onClick={handleGoogleSignIn}
