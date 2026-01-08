@@ -1914,15 +1914,17 @@ export default function CrmPage() {
     <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
       <p className="text-[11px] font-semibold text-amber-100/90">Pins</p>
       <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-        Pins will become the workspace for each contact (documents, links, intake notes, and custom fields).
+        Pins will let you create custom tags and attributes you can attach directly to
+        a contact. Whether it’s price ranges, veteran status, preferences, or internal
+        notes — if you can describe it, you’ll be able to pin it.
       </p>
 
       <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
         <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
-          Pins coming soon.
+          Pins are currently in development.
         </p>
         <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-          For now, track touchpoints in Notes & tasks.
+          For now, continue tracking touchpoints in Activity.
         </p>
       </div>
     </div>
