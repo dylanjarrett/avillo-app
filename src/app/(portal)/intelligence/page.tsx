@@ -12,6 +12,8 @@ import NeighborhoodEngine from "@/components/intelligence/engines/NeighborhoodEn
 import OutputHistory, { OutputHistoryEntry } from "@/components/intelligence/OutputHistory";
 import UpgradeModal from "@/components/billing/UpgradeModal";
 
+import { ComplianceGuardBanner } from "@/components/intelligence/compliance-guard-banner";
+
 type ActiveEngine = "listing" | "seller" | "buyer" | "neighborhood";
 type EngineWire = ActiveEngine;
 
@@ -26,10 +28,22 @@ type EngineContext = {
 type ListingOption = { id: string; label: string };
 type ContactOption = { id: string; name: string };
 
+// ✅ compliance types (matches your API)
+type ComplianceHit = { type: "HARD" | "SOFT"; match: string; rule: string };
+
+// ✅ HARD-only guard state
+type ComplianceGuardState = {
+  error: string;
+  hits: ComplianceHit[];
+} | null;
+
 export default function IntelligencePage() {
   const [activeEngine, setActiveEngine] = useState<ActiveEngine>("listing");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ✅ HARD-only compliance banner state
+  const [complianceGuard, setComplianceGuard] = useState<ComplianceGuardState>(null);
 
   const [engineContext, setEngineContext] = useState<EngineContext>({
     type: "none",
@@ -79,6 +93,10 @@ export default function IntelligencePage() {
     } else {
       setEngineContext({ type: "none", id: null, label: null });
     }
+
+    // ✅ if user is restoring, clear any old banner/errors
+    setComplianceGuard(null);
+    setError(null);
   }
 
   // called by engines after save-output succeeds
@@ -146,7 +164,7 @@ export default function IntelligencePage() {
     switch (activeEngine) {
       case "listing":
         return "Listing Engine";
-        case "seller":
+      case "seller":
         return "Seller Studio";
       case "buyer":
         return "Buyer Studio";
@@ -174,6 +192,29 @@ export default function IntelligencePage() {
     });
   }, [allowListingContext, allowContactContext]);
 
+  // ✅ HARD-only handler passed into engines (422 responses)
+  function handleComplianceGuard(payload: { error?: string; hits?: ComplianceHit[] }) {
+    const hits = payload.hits ?? [];
+    const hardHits = hits.filter((h) => h.type === "HARD");
+
+    // ✅ Ignore SOFT completely
+    if (hardHits.length === 0) return;
+
+    setComplianceGuard({
+      error:
+        payload.error ||
+        "We blocked this request due to protected-class targeting or steering language.",
+      hits: hardHits,
+    });
+
+    // Keep the generic error bar clean
+    setError(null);
+  }
+
+  function clearComplianceGuard() {
+    setComplianceGuard(null);
+  }
+
   /* ------------------------------------
    * Render
    * -----------------------------------*/
@@ -188,7 +229,12 @@ export default function IntelligencePage() {
       {/* ENGINE SELECTOR */}
       <EngineSelector
         activeEngine={activeEngine}
-        setActiveEngine={setActiveEngine}
+        setActiveEngine={(e) => {
+          setActiveEngine(e);
+          // ✅ switching engines clears old banner/errors
+          setComplianceGuard(null);
+          setError(null);
+        }}
       />
 
       {/* CONTEXT STRIP */}
@@ -204,6 +250,15 @@ export default function IntelligencePage() {
         optionsLoading={optionsLoading}
       />
 
+      {/* ✅ HARD-only compliance banner */}
+      {complianceGuard ? (
+        <ComplianceGuardBanner
+          error={complianceGuard.error}
+          hits={complianceGuard.hits}
+          onClose={clearComplianceGuard}
+        />
+      ) : null}
+
       {error && <div className="avillo-error-bar mt-1">{error}</div>}
 
       {/* ENGINES */}
@@ -218,6 +273,8 @@ export default function IntelligencePage() {
             contextType={engineContext.type}
             contextId={engineContext.id}
             onSavedRun={handleSavedRun}
+            onComplianceGuard={handleComplianceGuard}
+            clearComplianceGuard={clearComplianceGuard}
           />
         )}
 
@@ -231,6 +288,8 @@ export default function IntelligencePage() {
             contextType={engineContext.type}
             contextId={engineContext.id}
             onSavedRun={handleSavedRun}
+            onComplianceGuard={handleComplianceGuard}
+            clearComplianceGuard={clearComplianceGuard}
           />
         )}
 
@@ -244,6 +303,8 @@ export default function IntelligencePage() {
             contextType={engineContext.type}
             contextId={engineContext.id}
             onSavedRun={handleSavedRun}
+            onComplianceGuard={handleComplianceGuard}
+            clearComplianceGuard={clearComplianceGuard}
           />
         )}
 
@@ -257,6 +318,8 @@ export default function IntelligencePage() {
             contextType={engineContext.type}
             contextId={engineContext.id}
             onSavedRun={handleSavedRun}
+            onComplianceGuard={handleComplianceGuard}
+            clearComplianceGuard={clearComplianceGuard}
           />
         )}
       </section>

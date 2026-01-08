@@ -23,6 +23,8 @@ export type BuyerPack = {
   };
 };
 
+type ComplianceHit = { type: "HARD"; match: string; rule: string };
+
 type RestoreRequest =
   | {
       engine: "listing" | "seller" | "buyer" | "neighborhood";
@@ -39,6 +41,10 @@ type BuyerEngineProps = {
   contextType?: "listing" | "contact" | "none" | null;
   contextId?: string | null;
   onSavedRun?: () => void;
+
+  // Compliance banner hooks (HARD blocks only)
+  onComplianceGuard?: (payload: { error: string; hits?: ComplianceHit[] }) => void;
+  clearComplianceGuard?: () => void;
 };
 
 export default function BuyerEngine({
@@ -50,6 +56,8 @@ export default function BuyerEngine({
   contextType,
   contextId,
   onSavedRun,
+  onComplianceGuard,
+  clearComplianceGuard,
 }: BuyerEngineProps) {
   const [activeTool, setActiveTool] = useState<BuyerToolId>("search");
 
@@ -64,6 +72,11 @@ export default function BuyerEngine({
 
   const [pack, setPack] = useState<BuyerPack | null>(null);
   const [savingOutput, setSavingOutput] = useState(false);
+
+  function clearGuardOnEdit() {
+    // If you want the HARD banner to stay until dismissed, remove this line.
+    clearComplianceGuard?.();
+  }
 
   /* ------------------------------------
    * RESTORE HANDLER (from history)
@@ -94,7 +107,11 @@ export default function BuyerEngine({
     } else {
       setActiveTool("search");
     }
-  }, [restoreRequest]);
+
+    // reset banners/errors on restore
+    clearComplianceGuard?.();
+    setError(null);
+  }, [restoreRequest, clearComplianceGuard, setError]);
 
   /* ------------------------------------
    * VALIDATION
@@ -137,10 +154,25 @@ export default function BuyerEngine({
         body: JSON.stringify(body),
       });
 
+      // HARD compliance block only (server returns 422)
+      if (res.status === 422) {
+        const data = await res.json().catch(() => null);
+        onComplianceGuard?.({
+          error:
+            data?.error ||
+            "We blocked this request due to protected-class targeting or steering language.",
+          hits: (data?.compliance?.hits ?? []) as ComplianceHit[],
+        });
+        return;
+      }
+
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || "Failed to generate buyer outputs.");
       }
+
+      // success: clear old block banner if any
+      clearComplianceGuard?.();
 
       const data = await res.json();
       const nextPack: BuyerPack = { ...(pack || {}), ...(data || {}) };
@@ -181,10 +213,7 @@ export default function BuyerEngine({
           engine: "buyer",
           userInput,
           outputs: pack,
-          contextType: (contextType ?? "none") as
-            | "listing"
-            | "contact"
-            | "none",
+          contextType: (contextType ?? "none") as "listing" | "contact" | "none",
           contextId: contextId ?? null,
         }),
       });
@@ -211,12 +240,10 @@ export default function BuyerEngine({
       <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
         <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)] opacity-40 blur-3xl" />
 
-        <h2 className="mb-1 text-sm font-semibold text-slate-50">
-          Buyer Studio
-        </h2>
+        <h2 className="mb-1 text-sm font-semibold text-slate-50">Buyer Studio</h2>
         <p className="mb-4 text-xs text-slate-200/90">
-          Fill out one buyer brief once. Generate search recaps, tour
-          follow-ups, and offer strategy language from the same canvas.
+          Fill out one buyer brief once. Generate search recaps, tour follow-ups,
+          and offer strategy language from the same canvas.
         </p>
 
         {/* Tool selector – match Seller pill style */}
@@ -225,19 +252,28 @@ export default function BuyerEngine({
             label="Search Recap"
             description="Weekly or milestone check-ins."
             active={activeTool === "search"}
-            onClick={() => setActiveTool("search")}
+            onClick={() => {
+              setActiveTool("search");
+              clearGuardOnEdit();
+            }}
           />
           <BuyerToolPill
             label="Tour Follow-Up"
             description="Recap showings + next steps."
             active={activeTool === "tour"}
-            onClick={() => setActiveTool("tour")}
+            onClick={() => {
+              setActiveTool("tour");
+              clearGuardOnEdit();
+            }}
           />
           <BuyerToolPill
             label="Offer Strategy"
             description="Offer email + talking points."
             active={activeTool === "offer"}
-            onClick={() => setActiveTool("offer")}
+            onClick={() => {
+              setActiveTool("offer");
+              clearGuardOnEdit();
+            }}
           />
         </div>
 
@@ -246,28 +282,40 @@ export default function BuyerEngine({
           <InputField
             label="Buyer name"
             value={buyerName}
-            onChange={setBuyerName}
+            onChange={(v) => {
+              setBuyerName(v);
+              clearGuardOnEdit();
+            }}
             placeholder="Jordan & Alex"
           />
 
           <InputField
             label="Budget"
             value={budget}
-            onChange={setBudget}
+            onChange={(v) => {
+              setBudget(v);
+              clearGuardOnEdit();
+            }}
             placeholder="$900k–$1.1M or up to $850k…"
           />
 
           <InputField
             label="Areas"
             value={areas}
-            onChange={setAreas}
+            onChange={(v) => {
+              setAreas(v);
+              clearGuardOnEdit();
+            }}
             placeholder="North Park, Normal Heights, Mission Hills…"
           />
 
           <TextareaField
             label="Must-haves"
             value={mustHaves}
-            onChange={setMustHaves}
+            onChange={(v) => {
+              setMustHaves(v);
+              clearGuardOnEdit();
+            }}
             rows={2}
             placeholder="3+ beds, at least 1.5 baths, walkable to coffee, quiet street, yard for dog…"
           />
@@ -275,23 +323,32 @@ export default function BuyerEngine({
           <InputField
             label="Timeline (optional)"
             value={timeline}
-            onChange={setTimeline}
+            onChange={(v) => {
+              setTimeline(v);
+              clearGuardOnEdit();
+            }}
             placeholder="Ideally in a new home by May; lease ends in July…"
           />
 
           <InputField
             label="Financing (optional)"
             value={financing}
-            onChange={setFinancing}
+            onChange={(v) => {
+              setFinancing(v);
+              clearGuardOnEdit();
+            }}
             placeholder="Pre-approved with XYZ Mortgage at 5% fixed; 20% down; contingent on sale of condo…"
           />
 
           <TextareaField
             label="Additional context (optional)"
             value={extraContext}
-            onChange={setExtraContext}
+            onChange={(v) => {
+              setExtraContext(v);
+              clearGuardOnEdit();
+            }}
             rows={3}
-            placeholder="How you met, motivation (first home, upsizing, relocating), any tour notes or specific homes they loved/hated…"
+            placeholder="Motivation, tour notes, homes they loved/hated…"
           />
         </div>
 
@@ -433,10 +490,6 @@ function formatBuyerBriefForHistory(brief: BuyerBrief): string {
     .join("\n");
 }
 
-/**
- * Parse the saved buyer brief string back into fields.
- * Any line without a ":" is treated as a continuation of the last labeled field.
- */
 function parseBuyerBriefFromHistory(raw: string): BuyerBrief {
   const brief: BuyerBrief = {};
   if (!raw) return brief;
@@ -449,7 +502,6 @@ function parseBuyerBriefFromHistory(raw: string): BuyerBrief {
   let currentKey: keyof BuyerBrief | null = null;
 
   for (const line of lines) {
-    // labeled line
     if (line.includes(":")) {
       const [labelPart, ...rest] = line.split(":");
       const value = rest.join(":").trim();
@@ -494,21 +546,18 @@ function parseBuyerBriefFromHistory(raw: string): BuyerBrief {
           if (v.includes("search")) brief.lastTool = "search";
           else if (v.includes("tour")) brief.lastTool = "tour";
           else if (v.includes("offer")) brief.lastTool = "offer";
-          currentKey = null; // don't append lines to Tool
+          currentKey = null;
           break;
         }
         default:
-          // unknown labeled field -> treat as extra context
           brief.extraContext =
             (brief.extraContext ? `${brief.extraContext}\n` : "") + value;
           currentKey = "extraContext";
       }
     } else {
-      // unlabeled line -> continuation of previous field (or extraContext)
       if (!currentKey) currentKey = "extraContext";
 
-      const append = (prev?: string) =>
-        (prev ? `${prev}\n` : "") + line;
+      const append = (prev?: string) => (prev ? `${prev}\n` : "") + line;
 
       switch (currentKey) {
         case "buyerName":

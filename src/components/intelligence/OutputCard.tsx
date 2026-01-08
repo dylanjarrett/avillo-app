@@ -83,11 +83,44 @@ function cleanValue(v?: string | null) {
   return t.length > 0 ? t : "";
 }
 
+/**
+ * Normalize a value that is "supposed" to be string[]
+ * but might come back as a string (bullets/newlines) or undefined.
+ */
+function normalizeToStringArray(v: unknown): string[] {
+  if (Array.isArray(v)) {
+    return v
+      .map((x) => (typeof x === "string" ? x.trim() : String(x ?? "").trim()))
+      .filter(Boolean);
+  }
+
+  if (typeof v === "string") {
+    const raw = v.trim();
+    if (!raw) return [];
+
+    // Split on newlines; strip common bullet/number prefixes.
+    return raw
+      .split(/\r?\n+/)
+      .map((s) => s.replace(/^(\s*[-•–—*]|\s*\d+[.)])\s+/, "").trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function toBulletedText(v: unknown) {
+  const arr = normalizeToStringArray(v);
+  return arr.length ? arr.map((b) => `• ${b}`).join("\n") : "";
+}
+
 async function copyToClipboard(text: string) {
   await navigator.clipboard.writeText(text);
 }
 
-function buildCopyPayload(rows: OutputRowModel[], selected: Record<string, boolean>) {
+function buildCopyPayload(
+  rows: OutputRowModel[],
+  selected: Record<string, boolean>
+) {
   const selectedRows = rows.filter((r) => selected[r.id]);
 
   const blocks = selectedRows.map((r) => {
@@ -118,27 +151,31 @@ function CopyToolbar({
   );
 
   const selectedCount = useMemo(() => {
-    return selectableRows.reduce((acc, r) => acc + (selected[r.id] ? 1 : 0), 0);
+    return selectableRows.reduce(
+      (acc, r) => acc + (selected[r.id] ? 1 : 0),
+      0
+    );
   }, [selectableRows, selected]);
 
-  const allSelected = selectableRows.length > 0 && selectedCount === selectableRows.length;
+  const allSelected =
+    selectableRows.length > 0 && selectedCount === selectableRows.length;
 
   const [copied, setCopied] = useState(false);
 
   async function handleCopySelected() {
-  try {
-    const payload = buildCopyPayload(selectableRows, selected);
+    try {
+      const payload = buildCopyPayload(selectableRows, selected);
 
-    // Guard against empty payload
-    if (!payload.trim()) return;
+      // Guard against empty payload
+      if (!payload.trim()) return;
 
-    await copyToClipboard(payload);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  } catch (err) {
-    console.error("Failed to copy selected outputs", err);
+      await copyToClipboard(payload);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch (err) {
+      console.error("Failed to copy selected outputs", err);
+    }
   }
-}
 
   function handleSelectAll() {
     setSelected((prev) => {
@@ -157,7 +194,9 @@ function CopyToolbar({
       <div className="text-[10px] text-slate-300/90">
         {selectedCount > 0 ? (
           <span>
-            <span className="font-semibold text-slate-100">{selectedCount}</span>{" "}
+            <span className="font-semibold text-slate-100">
+              {selectedCount}
+            </span>{" "}
             selected
           </span>
         ) : (
@@ -243,11 +282,12 @@ function isProAccount(account: AccountMe | null): boolean {
   if (isPaidTier) return true;
 
   // 3) Fallback: capability-based gating
-  const can = ((account.entitlements as any)?.can ?? {}) as Record<string, boolean>;
+  const can = ((account.entitlements as any)?.can ?? {}) as Record<
+    string,
+    boolean
+  >;
   return Boolean(
-    can.INTELLIGENCE_SAVE ||
-    can.AUTOMATIONS_RUN ||
-    can.AUTOMATIONS_PERSIST
+    can.INTELLIGENCE_SAVE || can.AUTOMATIONS_RUN || can.AUTOMATIONS_PERSIST
   );
 }
 
@@ -313,7 +353,9 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100/80">
               AI Output
             </p>
-            <h3 className="text-sm font-semibold text-slate-50">Studio canvas</h3>
+            <h3 className="text-sm font-semibold text-slate-50">
+              Studio canvas
+            </h3>
           </div>
 
           <button
@@ -346,7 +388,8 @@ function OutputShell({ children, onSaveOutput, savingOutput }: OutputShellProps)
 
         {!isPro && !accountLoading && (
           <p className="mb-3 text-[10px] text-slate-300/90">
-            Starter can generate and copy outputs. Pro unlocks saved prompts (history) for reruns and iteration.
+            Starter can generate and copy outputs. Pro unlocks saved prompts
+            (history) for reruns and iteration.
           </p>
         )}
 
@@ -402,7 +445,9 @@ function OutputRow({
             : "border-slate-600/80 bg-slate-950/70 hover:border-amber-100/70",
         ].join(" ")}
         aria-label={checked ? "Deselect output" : "Select output"}
-        title={disabled ? "No content to copy" : checked ? "Selected" : "Select to copy"}
+        title={
+          disabled ? "No content to copy" : checked ? "Selected" : "Select to copy"
+        }
       >
         {checked ? <span className="text-[10px] text-amber-100">✓</span> : null}
       </button>
@@ -448,26 +493,47 @@ export function ListingOutputCanvas({
   const rows: OutputRowModel[] = useMemo(() => {
     if (activeTab === "listing") {
       return [
-        { id: "listing.long", title: "Long MLS description", value: pack?.listing?.long },
-        { id: "listing.short", title: "Short description", value: pack?.listing?.short },
+        {
+          id: "listing.long",
+          title: "Long MLS description",
+          value: pack?.listing?.long,
+        },
+        {
+          id: "listing.short",
+          title: "Short description",
+          value: pack?.listing?.short,
+        },
         {
           id: "listing.bullets",
           title: "Feature bullets",
-          value:
-            pack?.listing?.bullets?.length
-              ? pack.listing.bullets.map((b) => `• ${b}`).join("\n")
-              : "",
+          value: toBulletedText(pack?.listing?.bullets),
         },
       ];
     }
 
     if (activeTab === "social") {
       return [
-        { id: "social.ig", title: "Instagram caption", value: pack?.social?.instagram_caption },
-        { id: "social.fb", title: "Facebook post", value: pack?.social?.facebook_post },
-        { id: "social.li", title: "LinkedIn post", value: pack?.social?.linkedin_post },
+        {
+          id: "social.ig",
+          title: "Instagram caption",
+          value: pack?.social?.instagram_caption,
+        },
+        {
+          id: "social.fb",
+          title: "Facebook post",
+          value: pack?.social?.facebook_post,
+        },
+        {
+          id: "social.li",
+          title: "LinkedIn post",
+          value: pack?.social?.linkedin_post,
+        },
         { id: "social.ttHook", title: "TikTok hook", value: pack?.social?.tiktok_hook },
-        { id: "social.ttScript", title: "TikTok script", value: pack?.social?.tiktok_script },
+        {
+          id: "social.ttScript",
+          title: "TikTok script",
+          value: pack?.social?.tiktok_script,
+        },
       ];
     }
 
@@ -483,26 +549,17 @@ export function ListingOutputCanvas({
         {
           id: "talking.highlights",
           title: "Seller highlights",
-          value:
-            pack?.talking_points?.highlights?.length
-              ? pack.talking_points.highlights.map((b) => `• ${b}`).join("\n")
-              : "",
+          value: toBulletedText(pack?.talking_points?.highlights),
         },
         {
           id: "talking.concerns",
           title: "Buyer concerns",
-          value:
-            pack?.talking_points?.buyer_concerns?.length
-              ? pack.talking_points.buyer_concerns.map((b) => `• ${b}`).join("\n")
-              : "",
+          value: toBulletedText(pack?.talking_points?.buyer_concerns),
         },
         {
           id: "talking.responses",
           title: "Suggested responses",
-          value:
-            pack?.talking_points?.responses?.length
-              ? pack.talking_points.responses.map((b) => `• ${b}`).join("\n")
-              : "",
+          value: toBulletedText(pack?.talking_points?.responses),
         },
       ];
     }
@@ -517,14 +574,15 @@ export function ListingOutputCanvas({
               ? String(pack.marketability.score_1_to_10)
               : "",
         },
-        { id: "insights.summary", title: "Marketability summary", value: pack?.marketability?.summary },
+        {
+          id: "insights.summary",
+          title: "Marketability summary",
+          value: pack?.marketability?.summary,
+        },
         {
           id: "insights.improvements",
           title: "Improvement suggestions",
-          value:
-            pack?.marketability?.improvement_suggestions?.length
-              ? pack.marketability.improvement_suggestions.map((b) => `• ${b}`).join("\n")
-              : "",
+          value: toBulletedText(pack?.marketability?.improvement_suggestions),
         },
       ];
     }
@@ -790,10 +848,7 @@ export function NeighborhoodOutputCanvas({
         {
           id: "overview.talkingPoints",
           title: "Buyer-ready talking points",
-          value:
-            pack?.overview?.talkingPoints?.length
-              ? pack.overview.talkingPoints.map((b) => `• ${b}`).join("\n")
-              : "",
+          value: toBulletedText(pack?.overview?.talkingPoints),
         },
       ];
     }

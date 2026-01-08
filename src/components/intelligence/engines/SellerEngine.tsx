@@ -1,16 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { SellerOutputCanvas } from "@/components/intelligence/OutputCard";
 
 export type SellerToolId = "prelisting" | "presentation" | "objection";
 
 export type SellerPack = {
-  prelisting?: {
-    email1?: string;
-    email2?: string;
-    email3?: string;
-  };
+  prelisting?: { email1?: string; email2?: string; email3?: string };
   presentation?: {
     opening?: string;
     questions?: string;
@@ -21,12 +17,10 @@ export type SellerPack = {
     value?: string;
     nextSteps?: string;
   };
-  objection?: {
-    talkTrack?: string;
-    smsReply?: string;
-    emailFollowUp?: string;
-  };
+  objection?: { talkTrack?: string; smsReply?: string; emailFollowUp?: string };
 };
+
+type ComplianceHit = { type: "HARD"; match: string; rule: string };
 
 type RestoreRequest =
   | {
@@ -44,6 +38,10 @@ type SellerEngineProps = {
   contextType?: "listing" | "contact" | "none" | null;
   contextId?: string | null;
   onSavedRun?: () => void;
+
+  // Compliance banner hooks (HARD blocks only)
+  onComplianceGuard?: (payload: { error: string; hits?: ComplianceHit[] }) => void;
+  clearComplianceGuard?: () => void;
 };
 
 export default function SellerEngine({
@@ -55,10 +53,12 @@ export default function SellerEngine({
   contextType,
   contextId,
   onSavedRun,
+  onComplianceGuard,
+  clearComplianceGuard,
 }: SellerEngineProps) {
   const [activeTool, setActiveTool] = useState<SellerToolId>("prelisting");
 
-  // ----- Shared Seller Studio brief (one canvas powering all tools) -----
+  // Shared Seller Studio brief
   const [sellerName, setSellerName] = useState("");
   const [address, setAddress] = useState("");
   const [contextNotes, setContextNotes] = useState("");
@@ -68,9 +68,13 @@ export default function SellerEngine({
   const [objectionType, setObjectionType] = useState("Commission / fee");
   const [objectionContext, setObjectionContext] = useState("");
 
-  // ---- Pack + history ----
   const [pack, setPack] = useState<SellerPack | null>(null);
   const [savingOutput, setSavingOutput] = useState(false);
+
+  function clearGuardOnEdit() {
+    // If you want HARD banners to remain until user dismisses, remove this line.
+    clearComplianceGuard?.();
+  }
 
   /* ------------------------------------
    * RESTORE HANDLER (from history card)
@@ -93,25 +97,26 @@ export default function SellerEngine({
     setObjectionType(brief.objectionFocus || "Commission / fee");
     setObjectionContext(brief.objectionNotes || "");
 
-    if (brief.lastTool) {
-      setActiveTool(brief.lastTool);
-    } else if (brief.objectionFocus || brief.objectionNotes) {
-      setActiveTool("objection");
-    } else if (brief.brand || brief.style) {
-      setActiveTool("presentation");
-    } else {
-      setActiveTool("prelisting");
-    }
-  }, [restoreRequest]);
+    setActiveTool(brief.lastTool || inferToolFromBrief(brief));
+
+    // reset banners/errors on restore
+    clearComplianceGuard?.();
+    setError(null);
+  }, [restoreRequest, clearComplianceGuard, setError]);
+
+  function inferToolFromBrief(brief: SellerBrief): SellerToolId {
+    if (brief.lastTool) return brief.lastTool;
+    if (brief.objectionFocus || brief.objectionNotes) return "objection";
+    if (brief.brand || brief.style) return "presentation";
+    return "prelisting";
+  }
 
   /* ------------------------------------
    * VALIDATION (shared brief)
    * -----------------------------------*/
   function validateBrief(): boolean {
-    if (!sellerName || !address || !agentName) {
-      setError(
-        "Please fill seller name, property address, and your name before generating."
-      );
+    if (!sellerName.trim() || !address.trim() || !agentName.trim()) {
+      setError("Please fill seller name, property address, and your name before generating.");
       return false;
     }
     return true;
@@ -127,10 +132,8 @@ export default function SellerEngine({
     setError(null);
 
     try {
-      const body: any = {
+      const body = {
         engine: "seller",
-        // still send activeTool so the prompt can bias tone,
-        // but the engine always returns the full seller pack
         tool: activeTool,
         sellerName,
         address,
@@ -148,18 +151,28 @@ export default function SellerEngine({
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) {
+      // HARD compliance block only (422)
+      if (res.status === 422) {
         const data = await res.json().catch(() => null);
-        throw new Error(
-          data?.error || "Failed to generate Seller Studio outputs."
-        );
+        onComplianceGuard?.({
+          error:
+            data?.error ||
+            "We blocked this request due to protected-class targeting or steering language.",
+          hits: (data?.compliance?.hits ?? []) as ComplianceHit[],
+        });
+        return;
       }
 
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to generate Seller Studio outputs.");
+      }
+
+      // success: clear any previous block banner
+      clearComplianceGuard?.();
+
       const data = await res.json();
-      const nextPack: SellerPack = {
-        ...(pack || {}),
-        ...(data || {}),
-      };
+      const nextPack: SellerPack = { ...(pack || {}), ...(data || {}) };
 
       setPack(nextPack);
       setOutput(nextPack);
@@ -198,10 +211,7 @@ export default function SellerEngine({
           engine: "seller",
           userInput,
           outputs: pack,
-          contextType: (contextType ?? "none") as
-            | "listing"
-            | "contact"
-            | "none",
+          contextType: (contextType ?? "none") as "listing" | "contact" | "none",
           contextId: contextId ?? null,
         }),
       });
@@ -228,79 +238,103 @@ export default function SellerEngine({
       <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
         <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)] opacity-40 blur-3xl" />
 
-        <h2 className="mb-1 text-sm font-semibold text-slate-50">
-          Seller Studio
-        </h2>
+        <h2 className="mb-1 text-sm font-semibold text-slate-50">Seller Studio</h2>
         <p className="mb-3 text-xs text-slate-200/90">
-          Fill out one seller brief. Avillo will generate pre-listing emails, a
-          listing presentation outline, and objection responses from the same
-          canvas.
+          Fill out one seller brief. Avillo generates pre-listing emails, a listing presentation outline,
+          and objection responses from the same canvas.
         </p>
 
-        {/* PILL SELECTOR – controls which output view is active */}
+        {/* Tool pills */}
         <div className="mb-4 flex flex-col gap-2 text-xs sm:flex-row sm:flex-wrap">
           <SellerToolPill
             label="Pre-listing Emails"
             description="3-part warm-up drip."
             active={activeTool === "prelisting"}
-            onClick={() => setActiveTool("prelisting")}
+            onClick={() => {
+              setActiveTool("prelisting");
+              clearGuardOnEdit();
+            }}
           />
           <SellerToolPill
             label="Listing Presentation"
             description="Structured deck outline."
             active={activeTool === "presentation"}
-            onClick={() => setActiveTool("presentation")}
+            onClick={() => {
+              setActiveTool("presentation");
+              clearGuardOnEdit();
+            }}
           />
           <SellerToolPill
             label="Objection Lab"
             description="Live script + SMS + email."
             active={activeTool === "objection"}
-            onClick={() => setActiveTool("objection")}
+            onClick={() => {
+              setActiveTool("objection");
+              clearGuardOnEdit();
+            }}
           />
         </div>
 
-        {/* SHARED INPUT FIELDS */}
+        {/* Inputs */}
         <div className="space-y-3 text-xs text-slate-100">
           <InputField
             label="Seller name"
             value={sellerName}
-            onChange={setSellerName}
+            onChange={(v) => {
+              setSellerName(v);
+              clearGuardOnEdit();
+            }}
             placeholder="Jordan & Alex"
           />
 
           <InputField
             label="Property address"
             value={address}
-            onChange={setAddress}
+            onChange={(v) => {
+              setAddress(v);
+              clearGuardOnEdit();
+            }}
             placeholder="1234 Ocean View Dr"
           />
 
           <TextareaField
             label="Context / notes"
             value={contextNotes}
-            onChange={setContextNotes}
-            placeholder="High-level goals, timing, concerns, why they’re selling..."
+            onChange={(v) => {
+              setContextNotes(v);
+              clearGuardOnEdit();
+            }}
+            placeholder="Goals, timing, concerns, why they’re selling..."
             rows={3}
           />
 
           <InputField
             label="Your name"
             value={agentName}
-            onChange={setAgentName}
+            onChange={(v) => {
+              setAgentName(v);
+              clearGuardOnEdit();
+            }}
             placeholder="Your name"
           />
 
           <InputField
             label="Brand positioning (optional)"
             value={brandPositioning}
-            onChange={setBrandPositioning}
+            onChange={(v) => {
+              setBrandPositioning(v);
+              clearGuardOnEdit();
+            }}
             placeholder="High-touch, data-driven, neighborhood expert..."
           />
 
           <InputField
             label="Marketing style (optional)"
             value={marketingStyle}
-            onChange={setMarketingStyle}
+            onChange={(v) => {
+              setMarketingStyle(v);
+              clearGuardOnEdit();
+            }}
             placeholder="Concise & direct, story-driven, luxury tone..."
           />
 
@@ -310,7 +344,10 @@ export default function SellerEngine({
             </label>
             <select
               value={objectionType}
-              onChange={(e) => setObjectionType(e.target.value)}
+              onChange={(e) => {
+                setObjectionType(e.target.value);
+                clearGuardOnEdit();
+              }}
               className="w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
             >
               <option>Commission / fee</option>
@@ -320,15 +357,17 @@ export default function SellerEngine({
               <option>We’re not ready yet</option>
             </select>
             <p className="mt-1 text-[10px] text-slate-400/90">
-              Used primarily for Objection Lab, but it also helps tone the
-              emails and presentation.
+              Used mainly for Objection Lab. It can also influence tone across outputs.
             </p>
           </div>
 
           <TextareaField
             label="Objection notes (optional)"
             value={objectionContext}
-            onChange={setObjectionContext}
+            onChange={(v) => {
+              setObjectionContext(v);
+              clearGuardOnEdit();
+            }}
             placeholder="What did they say? Any history or specific pushback you want handled?"
             rows={3}
           />
@@ -344,7 +383,7 @@ export default function SellerEngine({
         </button>
       </div>
 
-      {/* RIGHT: Seller outputs (tabbed by activeTool) */}
+      {/* RIGHT: Outputs */}
       <SellerOutputCanvas
         pack={pack}
         activeTool={activeTool}
@@ -460,10 +499,8 @@ type SellerBrief = {
 
 function formatSellerBriefForHistory(brief: SellerBrief): string {
   return [
-    brief.sellerName && brief.address
-      ? `Seller: ${brief.sellerName} — ${brief.address}`
-      : brief.sellerName && `Seller: ${brief.sellerName}`,
-    !brief.sellerName && brief.address && `Address: ${brief.address}`,
+    brief.sellerName && `Seller: ${brief.sellerName}`,
+    brief.address && `Address: ${brief.address}`,
     brief.context && `Context: ${brief.context}`,
     brief.agentName && `Agent: ${brief.agentName}`,
     brief.brand && `Brand positioning: ${brief.brand}`,
@@ -476,11 +513,6 @@ function formatSellerBriefForHistory(brief: SellerBrief): string {
     .join("\n");
 }
 
-/**
- * Parse the saved seller brief string back into fields.
- * Multi-line values are preserved by treating unlabeled lines
- * as continuations of the last labeled field.
- */
 function parseSellerBriefFromHistory(raw: string): SellerBrief {
   const brief: SellerBrief = {};
   if (!raw) return brief;
@@ -490,128 +522,86 @@ function parseSellerBriefFromHistory(raw: string): SellerBrief {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  let currentKey:
-    | "sellerName"
-    | "address"
-    | "context"
-    | "agentName"
-    | "brand"
-    | "style"
-    | "objectionFocus"
-    | "objectionNotes"
-    | null = null;
+  let current: keyof SellerBrief | null = null;
 
   const append = (prev: string | undefined, line: string) =>
     (prev ? `${prev}\n` : "") + line;
 
   for (const line of lines) {
-    // handle legacy "Name — Address" line without label
-    if (!line.includes(":") && line.includes("—") && !line.startsWith("Tool")) {
-      const [name, addr] = line.split("—");
-      if (name && !brief.sellerName) brief.sellerName = name.trim();
-      if (addr && !brief.address) brief.address = addr.trim();
-      currentKey = "context";
+    const idx = line.indexOf(":");
+    if (idx === -1) {
+      // continuation -> context by default
+      brief.context = append(brief.context, line);
+      current = "context";
       continue;
     }
 
-    if (line.includes(":")) {
-      const [labelPart, ...rest] = line.split(":");
-      const value = rest.join(":").trim();
-      const key = labelPart.toLowerCase().replace(/[^a-z]/g, "");
+    const label = line.slice(0, idx).toLowerCase().replace(/[^a-z]/g, "");
+    const value = line.slice(idx + 1).trim();
+    if (!value) continue;
 
-      switch (key) {
-        case "seller":
-        case "sellername":
-          if (value.includes("—")) {
-            const [name, addr] = value.split("—");
-            brief.sellerName = name.trim();
-            brief.address = addr.trim();
-          } else {
-            brief.sellerName = value;
-          }
-          currentKey = "sellerName";
-          break;
-        case "address":
-        case "property":
-        case "propertyaddress":
-          brief.address = value;
-          currentKey = "address";
-          break;
-        case "context":
-        case "notes":
-        case "contextnotes":
-          brief.context = value;
-          currentKey = "context";
-          break;
-        case "agent":
-        case "yourname":
-          brief.agentName = value;
-          currentKey = "agentName";
-          break;
-        case "brandpositioning":
-        case "brand":
-          brief.brand = value;
-          currentKey = "brand";
-          break;
-        case "marketingstyle":
-        case "style":
-          brief.style = value;
-          currentKey = "style";
-          break;
-        case "objectionfocus":
-        case "objection":
-          brief.objectionFocus = value;
-          currentKey = "objectionFocus";
-          break;
-        case "objectionnotes":
-          brief.objectionNotes = value;
-          currentKey = "objectionNotes";
-          break;
-        case "tool": {
-          const v = value.toLowerCase();
-          if (v.includes("pre")) brief.lastTool = "prelisting";
-          else if (v.includes("present")) brief.lastTool = "presentation";
-          else if (v.includes("object")) brief.lastTool = "objection";
-          currentKey = null; // stop attaching to Tool
-          break;
-        }
-        default:
-          brief.context = append(brief.context, value);
-          currentKey = "context";
+    switch (label) {
+      case "seller":
+      case "sellername":
+        brief.sellerName = value;
+        current = "sellerName";
+        break;
+      case "address":
+      case "property":
+      case "propertyaddress":
+        brief.address = value;
+        current = "address";
+        break;
+      case "context":
+      case "notes":
+      case "contextnotes":
+        brief.context = value;
+        current = "context";
+        break;
+      case "agent":
+      case "yourname":
+        brief.agentName = value;
+        current = "agentName";
+        break;
+      case "brand":
+      case "brandpositioning":
+        brief.brand = value;
+        current = "brand";
+        break;
+      case "style":
+      case "marketingstyle":
+        brief.style = value;
+        current = "style";
+        break;
+      case "objection":
+      case "objectionfocus":
+        brief.objectionFocus = value;
+        current = "objectionFocus";
+        break;
+      case "objectionnotes":
+        brief.objectionNotes = value;
+        current = "objectionNotes";
+        break;
+      case "tool": {
+        const v = value.toLowerCase();
+        if (v.includes("pre")) brief.lastTool = "prelisting";
+        else if (v.includes("present")) brief.lastTool = "presentation";
+        else if (v.includes("object")) brief.lastTool = "objection";
+        current = null;
+        break;
       }
-    } else {
-      // unlabeled continuation line
-      if (!currentKey) currentKey = "context";
-
-      switch (currentKey) {
-        case "sellerName":
-          brief.sellerName = append(brief.sellerName, line);
-          break;
-        case "address":
-          brief.address = append(brief.address, line);
-          break;
-        case "agentName":
-          brief.agentName = append(brief.agentName, line);
-          break;
-        case "brand":
-          brief.brand = append(brief.brand, line);
-          break;
-        case "style":
-          brief.style = append(brief.style, line);
-          break;
-        case "objectionFocus":
-          brief.objectionFocus = append(brief.objectionFocus, line);
-          break;
-        case "objectionNotes":
-          brief.objectionNotes = append(brief.objectionNotes, line);
-          break;
-        case "context":
-        default:
-          brief.context = append(brief.context, line);
-          currentKey = "context";
-          break;
-      }
+      default:
+        // Unknown label -> treat as context
+        brief.context = append(brief.context, value);
+        current = "context";
+        break;
     }
+  }
+
+  // If someone pasted multi-line values without labels, try to attach them to the last seen key.
+  // (Optional: keep tiny logic; safe default is doing nothing.)
+  if (current && lines.length) {
+    // no-op; retained for clarity
   }
 
   return brief;

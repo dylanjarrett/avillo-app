@@ -4,10 +4,14 @@ import { useEffect, useState } from "react";
 import type { IntelligencePack, ListingTabId } from "@/lib/intelligence";
 import { ListingOutputCanvas } from "@/components/intelligence/OutputCard";
 
-type RestoreRequest = {
-  engine: "listing" | "seller" | "buyer" | "neighborhood";
-  prompt: string;
-} | null;
+type ComplianceHit = { type: "HARD"; match: string; rule: string };
+
+type RestoreRequest =
+  | {
+      engine: "listing" | "seller" | "buyer" | "neighborhood";
+      prompt: string;
+    }
+  | null;
 
 type ListingEngineProps = {
   isGenerating: boolean;
@@ -18,6 +22,10 @@ type ListingEngineProps = {
   contextType?: "listing" | "contact" | "none" | null;
   contextId?: string | null;
   onSavedRun?: () => void;
+
+  // Compliance banner hooks (HARD blocks only)
+  onComplianceGuard?: (payload: { error: string; hits?: ComplianceHit[] }) => void;
+  clearComplianceGuard?: () => void;
 };
 
 export default function ListingEngine({
@@ -29,11 +37,18 @@ export default function ListingEngine({
   contextType,
   contextId,
   onSavedRun,
+  onComplianceGuard,
+  clearComplianceGuard,
 }: ListingEngineProps) {
   const [propertyText, setPropertyText] = useState("");
   const [activeTab, setActiveTab] = useState<ListingTabId>("listing");
   const [pack, setPack] = useState<IntelligencePack | null>(null);
   const [savingOutput, setSavingOutput] = useState(false);
+
+  function clearGuardOnEdit() {
+    // If you want HARD banners to remain until user dismisses, remove this line.
+    clearComplianceGuard?.();
+  }
 
   /* ------------------------------------
    * RESTORE HANDLER
@@ -42,18 +57,23 @@ export default function ListingEngine({
     if (!restoreRequest) return;
     if (restoreRequest.engine !== "listing") return;
 
-    const restored = restoreRequest.prompt.trim();
+    const restored = (restoreRequest.prompt || "").trim();
     if (!restored) return;
 
     setPropertyText(restored);
     setActiveTab("listing");
-  }, [restoreRequest]);
+
+    // Reset banners/errors on restore
+    clearComplianceGuard?.();
+    setError(null);
+  }, [restoreRequest, clearComplianceGuard, setError]);
 
   /* ------------------------------------
    * GENERATE LISTING PACK
    * -----------------------------------*/
   async function handleGenerate() {
-    if (!propertyText.trim()) {
+    const notes = propertyText.trim();
+    if (!notes) {
       setError("Please add property notes first.");
       return;
     }
@@ -65,19 +85,31 @@ export default function ListingEngine({
       const res = await fetch("/api/generate-intelligence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          engine: "listing",
-          notes: propertyText,
-        }),
+        body: JSON.stringify({ engine: "listing", notes }),
       });
+
+      // HARD compliance block only (server returns 422)
+      if (res.status === 422) {
+        const data = await res.json().catch(() => null);
+        onComplianceGuard?.({
+          error:
+            data?.error ||
+            "We blocked this request due to protected-class targeting or steering language.",
+          hits: (data?.compliance?.hits ?? []) as ComplianceHit[],
+        });
+        return;
+      }
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || "Failed to generate listing pack.");
       }
 
+      // Success: clear any previous block banner
+      clearComplianceGuard?.();
+
       const data = await res.json();
-      const nextPack = (data.pack ?? data) as IntelligencePack;
+      const nextPack = (data?.pack ?? data) as IntelligencePack;
 
       setPack(nextPack);
       setOutput(nextPack);
@@ -133,12 +165,9 @@ export default function ListingEngine({
       <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
         <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)] opacity-40 blur-3xl" />
 
-        <h2 className="mb-1 text-sm font-semibold text-slate-50">
-          Listing Engine
-        </h2>
+        <h2 className="mb-1 text-sm font-semibold text-slate-50">Listing Engine</h2>
         <p className="mb-4 text-xs text-slate-200/90">
-          Turn messy property notes into a full MLS + social + email + insights
-          pack.
+          Turn messy property notes into a full MLS + social + email + insights pack.
         </p>
 
         <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em] text-slate-300/90">
@@ -147,7 +176,10 @@ export default function ListingEngine({
 
         <textarea
           value={propertyText}
-          onChange={(e) => setPropertyText(e.target.value)}
+          onChange={(e) => {
+            setPropertyText(e.target.value);
+            clearGuardOnEdit();
+          }}
           placeholder="3 Bed • 3 Bath • San Diego — upgrades, lot size, schools, neighborhood vibes…"
           className="mb-4 h-44 w-full rounded-xl border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-100/70 focus:ring-1 focus:ring-amber-100/70"
         />
