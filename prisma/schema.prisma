@@ -18,14 +18,12 @@ enum UserRole {
   ADMIN
 }
 
-// Plans you sell (Starter / Pro / Founding Pro)
 enum SubscriptionPlan {
   STARTER
   PRO
   FOUNDING_PRO
 }
 
-// Stripe lifecycle status (trialing/active/etc.)
 enum SubscriptionStatus {
   NONE
   TRIALING
@@ -64,6 +62,21 @@ enum RelationshipType {
   PARTNER
 }
 
+// Client pipeline stage (CLIENT only; PARTNER should be null)
+enum ContactStage {
+  NEW
+  WARM
+  HOT
+  PAST
+}
+
+// Buyer/Seller role (CLIENT only)
+enum ClientRole {
+  BUYER
+  SELLER
+  BOTH
+}
+
 // ---------------------------
 // USER
 // ---------------------------
@@ -84,7 +97,7 @@ model User {
   lastLoginAt       DateTime?
   openAITokensUsed  Int       @default(0)
 
-  // Billing / subscription state (NEW)
+  // Billing / subscription state
   accessLevel        AccessLevel        @default(EXPIRED)
   plan               SubscriptionPlan   @default(STARTER)
   subscriptionStatus SubscriptionStatus @default(NONE)
@@ -108,7 +121,7 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
   tasks                   Task[]
-  intelligenceOutputs     IntelligenceOutput[] // <-- NEW
+  intelligenceOutputs     IntelligenceOutput[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -134,19 +147,22 @@ model Contact {
 
   relationshipType RelationshipType @default(CLIENT)
 
-  stage String   @default("new") // new → warm → hot → past
-  tags  String[] @default([])
+  // Pipeline + role (CLIENT only; keep null for PARTNER)
+  stage      ContactStage? @default(NEW)
+  clientRole ClientRole?
+  label      String? // e.g. "potential buy"
 
-  // Legacy free-form notes field (kept for backwards compatibility)
-  notes  String?
+  // Common attributes
+  tags  String[] @default([])
+  notes String?  // Legacy free-form notes (backwards compatibility)
   source String? // Zillow, Open House, Referral, Social, etc.
 
-  // Avillo CRM — pipeline + profile fields
-  label          String? // e.g. "potential buy"
-  type           String? // "Buyer" | "Seller" | "Past / sphere"
-  priceRange     String?
-  areas          String?
-  timeline       String?
+  // Client profile fields (optional; typically for CLIENT)
+  priceRange String?
+  areas      String?
+  timeline   String?
+
+  // Partner profile (only meaningful for PARTNER)
   partnerProfile PartnerProfile?
 
   // Structured note entries per contact
@@ -159,12 +175,18 @@ model Contact {
   activities       Activity[]
   crmActivity      CRMActivity[]
 
-  intelligenceOutputs IntelligenceOutput[] // <-- NEW
+  intelligenceOutputs IntelligenceOutput[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Indexes to match UI filtering
+  @@index([userId, relationshipType])
+  @@index([userId, relationshipType, stage])
+  @@index([userId, relationshipType, clientRole])
 }
 
+// Partner profile is a "detail table" for Contact when relationshipType=PARTNER
 model PartnerProfile {
   id String @id @default(cuid())
 
@@ -176,8 +198,8 @@ model PartnerProfile {
   coverageMarkets String?
   feeComp         String?
 
-  website String?
-  link    String?
+  website    String?
+  profileUrl String? // renamed from `link` for clarity
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -206,11 +228,10 @@ model Listing {
   // Tagged buyers (many-to-many via join table)
   buyers ListingBuyerLink[]
 
-  // Listing photos (1-many)
   photos              ListingPhoto[]
   activities          Activity[]
   tasks               Task[]
-  intelligenceOutputs IntelligenceOutput[] // <-- NEW
+  intelligenceOutputs IntelligenceOutput[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -271,7 +292,6 @@ model Activity {
 
 // ---------------------------
 // CRM ACTIVITY (TIMELINE LOG)
-// Billion-dollar SaaS standard
 // ---------------------------
 model CRMActivity {
   id        String  @id @default(cuid())
@@ -286,6 +306,9 @@ model CRMActivity {
 
   user    User     @relation(fields: [userId], references: [id])
   contact Contact? @relation(fields: [contactId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([userId, contactId, createdAt])
 }
 
 // ---------------------------
@@ -294,25 +317,21 @@ model CRMActivity {
 model IntelligenceOutput {
   id String @id @default(cuid())
 
-  // owner
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  // which engine
   engine IntelligenceEngine
 
-  // optional context
   listingId String?
   listing   Listing? @relation(fields: [listingId], references: [id])
 
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id])
 
-  // request + response blobs
   engineInput  Json?
-  inputSummary String? // short line of what the user typed / selected
-  payload      Json? // full pack
-  preview      String? // short preview of output
+  inputSummary String?
+  payload      Json?
+  preview      String?
 
   createdAt DateTime @default(now())
 
@@ -333,6 +352,8 @@ model ContactNote {
   reminderAt DateTime?
 
   createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
 }
 
 // ---------------------------
@@ -389,6 +410,7 @@ model Account {
   user User @relation(fields: [userId], references: [id])
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
 model Session {
@@ -398,6 +420,8 @@ model Session {
   expires      DateTime
 
   user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
 }
 
 model VerificationToken {
@@ -421,6 +445,7 @@ model EmailVerificationToken {
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId])
+  @@index([token])
 }
 
 // ---------------------------
@@ -436,6 +461,7 @@ model PasswordResetToken {
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId])
+  @@index([token])
 }
 
 // ---------------------------
@@ -450,6 +476,9 @@ model CRMRecord {
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([userId, type, createdAt])
 }
 
 // ---------------------------
