@@ -223,7 +223,7 @@ export default function IntelligencePage() {
       <PageHeader
         eyebrow="AI Tools for Real Estate"
         title="Avillo AI Studio"
-        subtitle="Turn messy notes into listing packs, seller scripts, buyer follow-ups, and neighborhood snapshots — built for fast iteration and reruns."
+        subtitle="Turn messy notes into listing packs, seller scripts, buyer follow-ups, and neighborhood snapshots — built for fast iteration, reruns, and compliant output."
       />
 
       {/* ENGINE SELECTOR */}

@@ -1043,7 +1043,7 @@ export default function CrmPage() {
       <PageHeader
         eyebrow="People"
         title="Pipeline & relationships"
-        subtitle="Manage buyers, sellers, and past relationships — with notes, tasks, activity tracking, and listing context."
+        subtitle="Manage clients and partners across every relationship — with notes, tasks, activity tracking, and deal context."
       />
 
       <section className="space-y-5">
