@@ -18,8 +18,8 @@ type PeopleTab = "overview" | "activity" | "pins";
 // NEW: client vs partner
 type RelationshipType = "client" | "partner";
 
-// Internal, lowercase contact type values (client only)
-type ContactType = "buyer" | "seller" | "buyer & seller" | null;
+// Client role (client only) — matches Prisma enum
+type ClientRole = "BUYER" | "SELLER" | "BOTH" | null;
 
 type ContactNote = {
   id: string;
@@ -35,6 +35,15 @@ type LinkedListing = {
   role: "buyer" | "seller";
 };
 
+type PartnerProfile = {
+  businessName: string;
+  partnerType: string;
+  coverageMarkets: string;
+  feeComp: string;
+  website: string;
+  profileUrl: string;
+};
+
 type Contact = {
   id?: string;
   name: string;
@@ -42,8 +51,9 @@ type Contact = {
 
   relationshipType: RelationshipType;
 
-  stage: Stage;
-  type: ContactType;
+  stage: Stage | null;
+  clientRole: ClientRole;
+
 
   priceRange: string;
   areas: string;
@@ -57,14 +67,6 @@ type Contact = {
   partnerProfile?: PartnerProfile | null;
 };
 
-type PartnerProfile = {
-  businessName: string;
-  partnerType: string;
-  coverageMarkets: string;
-  feeComp: string;
-  website: string;
-  link: string;
-};
 
 type ListingOption = {
   id: string;
@@ -88,22 +90,22 @@ const CONTACT_SOURCE_OPTIONS = [
  * Small helpers
  * -----------------------------------*/
 
-function normalizeContactType(raw: any): ContactType {
+function normalizeClientRole(raw: any): ClientRole {
   if (!raw) return null;
-  const v = String(raw).toLowerCase();
-  if (v === "buyer") return "buyer";
-  if (v === "seller") return "seller";
-  if (v === "buyer & seller") return "buyer & seller";
+  const v = String(raw).toUpperCase().trim();
+  if (v === "BUYER") return "BUYER";
+  if (v === "SELLER") return "SELLER";
+  if (v === "BOTH") return "BOTH";
   return null;
 }
 
-function prettyContactType(type: ContactType): string {
-  switch (type) {
-    case "buyer":
+function prettyClientRole(role: ClientRole): string {
+  switch (role) {
+    case "BUYER":
       return "Buyer";
-    case "seller":
+    case "SELLER":
       return "Seller";
-    case "buyer & seller":
+    case "BOTH":
       return "Buyer & Seller";
     default:
       return "—";
@@ -171,11 +173,11 @@ export default function CrmPage() {
   const partnersCount = partnerContacts.length;
 
   const buyersCount = clientContacts.filter(
-    (c) => c.type === "buyer" || c.type === "buyer & seller"
+  (c) => c.clientRole === "BUYER" || c.clientRole === "BOTH"
   ).length;
 
   const sellersCount = clientContacts.filter(
-    (c) => c.type === "seller" || c.type === "buyer & seller"
+  (c) => c.clientRole === "SELLER" || c.clientRole === "BOTH"
   ).length;
 
   function handleStageFilterClick(next: StageFilter) {
@@ -199,6 +201,14 @@ export default function CrmPage() {
 
   // Mobile: whether the right-hand workspace is showing (like Listings page)
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
+
+    // ✅ Clear selected contact when filters change
+  function clearSelection() {
+    setSelectedId(null);
+    setActiveContact(null);
+    setWorkspaceOpenMobile(false);
+    setActiveTab("overview");
+  }
 
   useEffect(() => {
   setSelectedId(null);
@@ -288,20 +298,24 @@ export default function CrmPage() {
         }
         const data = await res.json();
         const loaded: Contact[] = (data.contacts ?? []).map((c: any) => {
-          const type: ContactType = normalizeContactType(c.type);
-          const stage: Stage =
-            (c.stage as Stage) && ["new", "warm", "hot", "past"].includes(c.stage)
-              ? c.stage
+          const clientRole: ClientRole = normalizeClientRole(c.clientRole);
+          const relationshipType =
+            (c.relationshipType === "partner" ? "partner" : "client") as RelationshipType;
+
+          const stage: Stage | null =
+            relationshipType === "partner"
+              ? null
+              : (c.stage as Stage) && ["new", "warm", "hot", "past"].includes(c.stage)
+              ? (c.stage as Stage)
               : "new";
 
           return {
             id: c.id,
             name: c.name ?? "",
             label: c.label ?? "",
-            relationshipType:
-              (c.relationshipType === "partner" ? "partner" : "client") as RelationshipType,
+            relationshipType,
             stage,
-            type,
+            clientRole,
             priceRange: c.priceRange ?? "",
             areas: c.areas ?? "",
             timeline: c.timeline ?? "",
@@ -379,13 +393,9 @@ export default function CrmPage() {
 
     // Role filter
     if (roleFilter === "buyers") {
-      list = list.filter(
-        (c) => c.type === "buyer" || c.type === "buyer & seller"
-      );
+  list = list.filter((c) => c.clientRole === "BUYER" || c.clientRole === "BOTH");
     } else if (roleFilter === "sellers") {
-      list = list.filter(
-        (c) => c.type === "seller" || c.type === "buyer & seller"
-      );
+      list = list.filter((c) => c.clientRole === "SELLER" || c.clientRole === "BOTH");
     }
   }
 
@@ -410,7 +420,7 @@ export default function CrmPage() {
           c.partnerProfile?.coverageMarkets,
           c.partnerProfile?.feeComp,
           c.partnerProfile?.website,
-          c.partnerProfile?.link,
+          c.partnerProfile?.profileUrl,
         ].filter(Boolean).join(" ").toLowerCase();
 
         return (
@@ -516,7 +526,7 @@ export default function CrmPage() {
       label: "",
       relationshipType: relationshipFilter ?? "client",
       stage: "new",
-      type: null,
+      clientRole: null,
       priceRange: "",
       areas: "",
       timeline: "",
@@ -532,7 +542,7 @@ export default function CrmPage() {
             coverageMarkets: "",
             feeComp: "",
             website: "",
-            link: "",
+            profileUrl: "",
           }
         : null,
     };
@@ -562,7 +572,7 @@ export default function CrmPage() {
       coverageMarkets: "",
       feeComp: "",
       website: "",
-      link: "",
+      profileUrl: "",
     };
     return {
       ...prev,
@@ -671,31 +681,48 @@ export default function CrmPage() {
 
       const { firstName, lastName } = splitName(activeContact.name);
 
-      const res = await fetch("/api/crm/contacts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+       const basePayload: any = {
           id: activeContact.id,
           firstName: firstName ?? "",
           lastName: lastName ?? "",
           email: activeContact.email ?? "",
           phone: activeContact.phone ?? "",
           relationshipType: activeContact.relationshipType,
-          stage: activeContact.stage,
+
+          stage:
+            activeContact.relationshipType === "partner"
+              ? null
+              : activeContact.stage,
+          clientRole:
+            activeContact.relationshipType === "partner"
+              ? null
+              : activeContact.clientRole ?? null,
+
           label: activeContact.label ?? "",
-          type: activeContact.type ?? null,
           priceRange: activeContact.priceRange ?? "",
           areas: activeContact.areas ?? "",
           timeline: activeContact.timeline ?? "",
           source: activeContact.source ?? "",
-          businessName: activeContact.partnerProfile?.businessName ?? "",
-          partnerType: activeContact.partnerProfile?.partnerType ?? "",
-          coverageMarkets: activeContact.partnerProfile?.coverageMarkets ?? "",
-          feeComp: activeContact.partnerProfile?.feeComp ?? "",
-          website: activeContact.partnerProfile?.website ?? "",
-          link: activeContact.partnerProfile?.link ?? "",
-        }),
-      });
+        };
+
+        const payload =
+          activeContact.relationshipType === "partner"
+            ? {
+                ...basePayload,
+                businessName: activeContact.partnerProfile?.businessName ?? "",
+                partnerType: activeContact.partnerProfile?.partnerType ?? "",
+                coverageMarkets: activeContact.partnerProfile?.coverageMarkets ?? "",
+                feeComp: activeContact.partnerProfile?.feeComp ?? "",
+                website: activeContact.partnerProfile?.website ?? "",
+                profileUrl: activeContact.partnerProfile?.profileUrl ?? "",
+              }
+            : basePayload;
+
+        const res = await fetch("/api/crm/contacts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -713,11 +740,13 @@ export default function CrmPage() {
         partnerProfile: data.contact.partnerProfile ?? null,
         
         stage:
-          (data.contact.stage as Stage) &&
+      data.contact.relationshipType === "partner"
+        ? null
+        : (data.contact.stage as Stage) &&
           ["new", "warm", "hot", "past"].includes(data.contact.stage)
-            ? (data.contact.stage as Stage)
-            : "new",
-        type: normalizeContactType(data.contact.type),
+        ? (data.contact.stage as Stage)
+        : "new",
+        clientRole: normalizeClientRole(data.contact.clientRole),
         priceRange: data.contact.priceRange ?? "",
         areas: data.contact.areas ?? "",
         timeline: data.contact.timeline ?? "",
@@ -725,7 +754,9 @@ export default function CrmPage() {
         email: data.contact.email ?? "",
         phone: data.contact.phone ?? "",
         notes: Array.isArray(data.contact.notes) ? data.contact.notes : [],
-        linkedListings: activeContact.linkedListings ?? [],
+        linkedListings: Array.isArray(data.contact.linkedListings)
+          ? data.contact.linkedListings
+          : (activeContact.linkedListings ?? []),
       };
 
       // Update local list
@@ -807,14 +838,16 @@ export default function CrmPage() {
         throw new Error(data?.error || "Failed to delete contact.");
       }
 
-      setContacts((prev) => prev.filter((c) => c.id !== activeContact.id));
-      const remaining = contacts.filter((c) => c.id !== activeContact.id);
+      setContacts((prev) => {
+      const next = prev.filter((c) => c.id !== activeContact.id);
 
-      // Desktop fallback
-      if (!isMobileView) {
-        setActiveContact(remaining[0] ?? null);
-        setSelectedId(remaining[0]?.id ?? null);
-      }
+      // ❗ NEVER auto-select after delete
+      setActiveContact(null);
+      setSelectedId(null);
+
+      return next;
+    });
+
     } catch (err: any) {
       console.error("Delete contact error", err);
       setError(
@@ -845,19 +878,24 @@ export default function CrmPage() {
       }
       const data = await res.json();
       const loaded: Contact[] = (data.contacts ?? []).map((c: any) => {
-        const type: ContactType = normalizeContactType(c.type);
-        const stage: Stage =
-          (c.stage as Stage) && ["new", "warm", "hot", "past"].includes(c.stage)
-            ? c.stage
-            : "new";
+        const clientRole: ClientRole = normalizeClientRole(c.clientRole);
+        const relationshipType =
+            (c.relationshipType === "partner" ? "partner" : "client") as RelationshipType;
+
+          const stage: Stage | null =
+            relationshipType === "partner"
+              ? null
+              : (c.stage as Stage) && ["new", "warm", "hot", "past"].includes(c.stage)
+              ? (c.stage as Stage)
+              : "new";
 
         return {
           id: c.id,
           name: c.name ?? "",
           label: c.label ?? "",
-          relationshipType: (c.relationshipType === "partner" ? "partner" : "client") as RelationshipType,
+          relationshipType,
           stage,
-          type,
+          clientRole,
           priceRange: c.priceRange ?? "",
           areas: c.areas ?? "",
           timeline: c.timeline ?? "",
@@ -894,14 +932,11 @@ export default function CrmPage() {
       // NEW: partners do not link to listings
       if (saved.relationshipType === "partner") return;
 
-      // ✅ require explicit client type
-      if (!saved.type) return;
+      if (!saved.clientRole) return;
+        const role: ClientRole = saved.clientRole;
 
-      const relType: ContactType = saved.type;
-
-      const wantsSeller =
-        relType === "seller" || relType === "buyer & seller";
-      const wantsBuyer = relType === "buyer" || relType === "buyer & seller";
+        const wantsSeller = role === "SELLER" || role === "BOTH";
+        const wantsBuyer = role === "BUYER" || role === "BOTH";
 
       if (!wantsSeller && !wantsBuyer) {
         return;
@@ -1111,20 +1146,23 @@ export default function CrmPage() {
                     label="All"
                     active={roleFilter === "all"}
                     variant="filter"
-                    onClick={() => setRoleFilter("all")}
+                    onClick={() => {clearSelection(); setRoleFilter("all");
+                    }}
                   />
                   <FilterPill
                     label="Buyers"
                     active={roleFilter === "buyers"}
                     variant="filter"
-                    onClick={() => setRoleFilter("buyers")}
+                    onClick={() => {clearSelection(); setRoleFilter("buyers");
+                    }}
                     count={buyersCount}
                   />
                   <FilterPill
                     label="Sellers"
                     active={roleFilter === "sellers"}
                     variant="filter"
-                    onClick={() => setRoleFilter("sellers")}
+                    onClick={() => {clearSelection(); setRoleFilter("sellers");
+                    }}
                     count={sellersCount}
                   />
                 </div>
@@ -1135,25 +1173,29 @@ export default function CrmPage() {
                     label="New"
                     active={stageFilter === "new"}
                     badgeColor="new"
-                    onClick={() => handleStageFilterClick("new")}
+                    onClick={() => {clearSelection(); handleStageFilterClick("new");
+                    }}
                   />
                   <FilterPill
                     label="Warm"
                     active={stageFilter === "warm"}
                     badgeColor="warm"
-                    onClick={() => handleStageFilterClick("warm")}
+                    onClick={() => {clearSelection(); handleStageFilterClick("warm");
+                    }}
                   />
                   <FilterPill
                     label="Hot"
                     active={stageFilter === "hot"}
                     badgeColor="hot"
-                    onClick={() => handleStageFilterClick("hot")}
+                    onClick={() => {clearSelection(); handleStageFilterClick("hot");
+                    }}
                   />
                   <FilterPill
                     label="Past / sphere"
                     active={stageFilter === "past"}
                     badgeColor="past"
-                    onClick={() => handleStageFilterClick("past")}
+                    onClick={() => {clearSelection(); handleStageFilterClick("past");
+                    }}
                   />
                 </div>
               </>
@@ -1163,7 +1205,7 @@ export default function CrmPage() {
           <div className="w-full md:w-72">
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {clearSelection(); setSearch(e.target.value);}}
               placeholder="Search by name, area, notes..."
               className="avillo-input w-full text-slate-50"
             />
@@ -1219,9 +1261,9 @@ export default function CrmPage() {
 
                   const isPartner = contact.relationshipType === "partner";
 
-                  const relType = contact.type;
-                  const isBuyer = relType === "buyer";
-                  const isSeller = relType === "seller";
+                  const relRole = contact.clientRole;
+                  const isBuyer = relRole === "BUYER" || relRole === "BOTH";
+                  const isSeller = relRole === "SELLER" || relRole === "BOTH";
 
                   const priceLabel = isPartner
                     ? "Fee / comp"
@@ -1241,7 +1283,7 @@ export default function CrmPage() {
 
                   return (
                     <button
-                      key={contact.id ?? "new-contact-row"}
+                      key={contact.id || "new"}
                       type="button"
                       data-contact-id={contact.id ?? "new"}
                       onClick={() => {
@@ -1284,7 +1326,7 @@ export default function CrmPage() {
                           <span className="text-[var(--avillo-cream-muted)]">
                             {isPartner ? "Relationship:" : "Type:"}
                           </span>{" "}
-                          {isPartner ? "Partner" : prettyContactType(contact.type)}
+                          {isPartner ? "Partner" : prettyClientRole(contact.clientRole)}
                         </span>
 
                         <span className="truncate">
@@ -1466,29 +1508,31 @@ export default function CrmPage() {
               <div className="inline-flex flex-wrap gap-2">
                 <RoleToggle
                   label="Buyer"
-                  active={activeContact.relationshipType === "client" && activeContact.type === "buyer"}
+                  active={activeContact.relationshipType === "client" && activeContact.clientRole === "BUYER"}
                   onClick={() => {
                     handleFieldChange("relationshipType", "client");
-                    handleFieldChange("type", "buyer");
-                    if (!activeContact.stage) handleFieldChange("stage", "new");
+                    handleFieldChange("clientRole", "BUYER");
+                    handleFieldChange("stage", activeContact.stage || "new");
                   }}
                 />
+
                 <RoleToggle
                   label="Seller"
-                  active={activeContact.relationshipType === "client" && activeContact.type === "seller"}
+                  active={activeContact.relationshipType === "client" && activeContact.clientRole === "SELLER"}
                   onClick={() => {
                     handleFieldChange("relationshipType", "client");
-                    handleFieldChange("type", "seller");
-                    if (!activeContact.stage) handleFieldChange("stage", "new");
+                    handleFieldChange("clientRole", "SELLER");
+                    handleFieldChange("stage", activeContact.stage || "new");
                   }}
                 />
+
                 <RoleToggle
                   label="Buyer & Seller"
-                  active={activeContact.relationshipType === "client" && activeContact.type === "buyer & seller"}
+                  active={activeContact.relationshipType === "client" && activeContact.clientRole === "BOTH"}
                   onClick={() => {
                     handleFieldChange("relationshipType", "client");
-                    handleFieldChange("type", "buyer & seller");
-                    if (!activeContact.stage) handleFieldChange("stage", "new");
+                    handleFieldChange("clientRole", "BOTH");
+                    handleFieldChange("stage", activeContact.stage || "new");
                   }}
                 />
                 <RoleToggle
@@ -1497,7 +1541,8 @@ export default function CrmPage() {
                   active={activeContact.relationshipType === "partner"}
                   onClick={() => {
                     handleFieldChange("relationshipType", "partner");
-                    handleFieldChange("type", null);
+                    handleFieldChange("clientRole", null);
+                    handleFieldChange("stage", null);
 
                     setActiveContact((prev) => {
                       if (!prev) return prev;
@@ -1509,7 +1554,7 @@ export default function CrmPage() {
                           coverageMarkets: "",
                           feeComp: "",
                           website: "",
-                          link: "",
+                          profileUrl: "",
                         },
                       };
                     });
@@ -1523,25 +1568,25 @@ export default function CrmPage() {
           <>
             {/* Quick stats row 1 */}
             {(() => {
-              const relType = activeContact.type;
-              const isBuyerOnly = relType === "buyer";
+              const relRole = activeContact.clientRole;
+                const isBuyerOrBoth = relRole === "BUYER" || relRole === "BOTH";
 
               const priceLabel =
-                relType === "buyer"
+                relRole === "BUYER"
                   ? "Budget"
-                  : relType === "seller"
+                  : relRole === "SELLER"
                   ? "Price"
                   : "Price / budget";
 
               const pricePlaceholder =
-                relType === "buyer"
+                relRole === "BUYER"
                   ? "Ex: $650K–$750K"
-                  : relType === "seller"
+                  : relRole === "SELLER"
                   ? "Ex: $1.3M–$1.5M"
-                  : "Ex: Buyer $650K–$750K or Seller $1.3M";
+                  : "Ex: Buyer $650K–$750K • Seller $1.3M–$1.5M";
 
-              const addressLabel = isBuyerOnly ? "Areas" : "Property address";
-              const addressPlaceholder = isBuyerOnly
+              const addressLabel = isBuyerOrBoth ? "Areas" : "Property address";
+              const addressPlaceholder = isBuyerOrBoth
                 ? "Ex: Mission Valley, North Park"
                 : "Ex: 1234 Coastal Dr, La Jolla";
 
@@ -1679,9 +1724,11 @@ export default function CrmPage() {
 
                   <div className="mt-2 flex flex-wrap gap-2">
                     {listings.map((l) => {
-                      const relType: ContactType = activeContact.type ?? "buyer";
-                      const wantsSeller = relType === "seller" || relType === "buyer & seller";
-                      const wantsBuyer = relType === "buyer" || relType === "buyer & seller";
+                      const role = activeContact.clientRole;
+                      const roleSelected = role === "BUYER" || role === "SELLER" || role === "BOTH";
+                      const wantsSeller = role === "SELLER" || role === "BOTH";
+                      const wantsBuyer = role === "BUYER" || role === "BOTH";
+
 
                       const links = activeContact.linkedListings ?? [];
                       const linkedAsSeller = links.some(
@@ -1698,13 +1745,17 @@ export default function CrmPage() {
                         <button
                           key={l.id}
                           type="button"
-                          onClick={() => toggleListingLink(l.id)}
+                          disabled={!roleSelected}
+                          onClick={() => roleSelected && toggleListingLink(l.id)}
                           className={
-                            "rounded-full border px-3 py-1.5 text-[10px] font-semibold tracking-[0.16em] " +
-                            (isLinked
+                            "rounded-full border px-3 py-1.5 text-[10px] font-semibold tracking-[0.16em] transition-opacity " +
+                            (!roleSelected
+                              ? "border-slate-800/80 bg-slate-900/50 text-[var(--avillo-cream-muted)] opacity-50 cursor-not-allowed"
+                              : isLinked
                               ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
                               : "border-slate-700/80 bg-slate-900/80 text-[var(--avillo-cream-soft)] hover:border-amber-100/70 hover:text-amber-50")
                           }
+                          title={!roleSelected ? "Select Buyer, Seller, or Buyer & Seller first" : undefined}
                         >
                           {l.label}
                         </button>
@@ -1759,8 +1810,8 @@ export default function CrmPage() {
                   />
                   <DetailInput
                     label="Link"
-                    value={activeContact.partnerProfile?.link ?? ""}
-                    onChange={(v) => handlePartnerFieldChange("link", v)}
+                    value={activeContact.partnerProfile?.profileUrl ?? ""}
+                    onChange={(v) => handlePartnerFieldChange("profileUrl", v)}
                     placeholder="Calendly / intake form / reviews…"
                   />
                 </div>

@@ -33,23 +33,13 @@ type CRMContactsResponse =
       contacts: Array<{
         id: string;
         name: string;
-        stage: string; // lowercase in DB per your code
-        type: string | null; // lowercase in DB per your code
-        contactNotes?: Array<{
-          id: string;
-          text: string;
-          createdAt: string;
-          taskAt: string | null; // legacy / may exist
-        }>;
-        notes?: Array<{
-          id: string;
-          text: string;
-          createdAt: string;
-          taskAt: string | null; // legacy / may exist
-        }>;
+        relationshipType: "client" | "partner";
+        stage: string | null; // "new" | "warm" | "hot" | "past" for clients, null for partners
+        clientRole: string | null; // "buyer" | "seller" | "both" for clients, null for partners
       }>;
     }
   | { error?: string };
+
 
 type IntelligenceRecentResponse =
   | {
@@ -93,9 +83,6 @@ function normalizeStage(raw?: string | null): Stage {
   return "new";
 }
 
-function normalizeType(raw?: string | null) {
-  return (raw || "").toLowerCase().trim();
-}
 
 function startOfDay(d: Date) {
   const x = new Date(d);
@@ -425,7 +412,7 @@ export default function DashboardPage() {
 
         const [profileRes, contactsRes, listingsRes, intelligenceRes] = await Promise.all([
           fetch("/api/account/profile").catch(() => null),
-          fetch("/api/crm/contacts").catch(() => null),
+          fetch("/api/crm/contacts?includePartners=false").catch(() => null),
           fetch("/api/listings?status=all").catch(() => null),
           fetch("/api/intelligence/recent").catch(() => null),
         ]);
@@ -451,8 +438,11 @@ export default function DashboardPage() {
               const s = normalizeStage(c.stage);
               counts[s] += 1;
 
-              const t = normalizeType(c.type);
-              const isBuyer = t.includes("buyer");
+              if (c.relationshipType !== "client") continue;
+
+              const role = (c.clientRole || "").toLowerCase().trim();
+              const isBuyer = role === "buyer" || role === "both";
+
               if (isBuyer) {
                 if (s === "warm" || s === "hot") activeBuyers += 1;
                 else if (s === "new") nurtureBuyers += 1;

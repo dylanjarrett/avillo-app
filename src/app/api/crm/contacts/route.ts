@@ -2,7 +2,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { Prisma } from "@prisma/client";
+import {
+  Prisma,
+  ContactStage,
+  RelationshipType,
+  ClientRole,
+} from "@prisma/client";
 import { processTriggers } from "@/lib/automations/processTriggers";
 
 export const runtime = "nodejs";
@@ -24,20 +29,78 @@ type LinkedListing = {
   role: "buyer" | "seller";
 };
 
-const PIPELINE_STAGES = ["new", "warm", "hot", "past"] as const;
-type PipelineStage = (typeof PIPELINE_STAGES)[number];
+type RelationshipTypeLower = "client" | "partner";
+type StageLower = "new" | "warm" | "hot" | "past";
+type ClientRoleLower = "buyer" | "seller" | "both";
+
+/* ----------------------------------------------------
+ * Enum helpers
+ * ---------------------------------------------------*/
+
+const STAGE_MAP: Record<StageLower, ContactStage> = {
+  new: ContactStage.NEW,
+  warm: ContactStage.WARM,
+  hot: ContactStage.HOT,
+  past: ContactStage.PAST,
+};
+
+function normalizeStage(raw?: string | null): ContactStage | undefined {
+  if (!raw) return undefined;
+  const v = String(raw).toLowerCase().trim() as StageLower;
+  return STAGE_MAP[v];
+}
+
+function stageToLower(stage?: ContactStage | null): StageLower | null {
+  if (!stage) return null;
+  switch (stage) {
+    case ContactStage.NEW:
+      return "new";
+    case ContactStage.WARM:
+      return "warm";
+    case ContactStage.HOT:
+      return "hot";
+    case ContactStage.PAST:
+      return "past";
+    default:
+      return "new";
+  }
+}
+
+function normalizeRelationshipType(
+  raw?: string | null
+): RelationshipTypeLower | undefined {
+  if (!raw) return undefined;
+  const v = raw.toLowerCase().trim();
+  if (v === "client" || v === "partner") return v;
+  return undefined;
+}
+
+function normalizeClientRole(raw?: string | null): ClientRole | undefined {
+  if (!raw) return undefined;
+  const v = raw.toLowerCase().trim() as ClientRoleLower;
+  if (v === "buyer") return ClientRole.BUYER;
+  if (v === "seller") return ClientRole.SELLER;
+  if (v === "both") return ClientRole.BOTH;
+  return undefined;
+}
+
+function clientRoleToLower(role?: ClientRole | null): ClientRoleLower | null {
+  if (!role) return null;
+  switch (role) {
+    case ClientRole.BUYER:
+      return "buyer";
+    case ClientRole.SELLER:
+      return "seller";
+    case ClientRole.BOTH:
+      return "both";
+    default:
+      return null;
+  }
+}
 
 /* ----------------------------------------------------
  * Normalization helpers
  * ---------------------------------------------------*/
-
-function normalizeStage(raw?: string | null): PipelineStage | undefined {
-  if (!raw) return undefined;
-  const value = String(raw).toLowerCase().trim();
-  return PIPELINE_STAGES.includes(value as PipelineStage)
-    ? (value as PipelineStage)
-    : undefined;
-}
 
 function normalizeLowerTrim(raw?: string | null): string | undefined {
   const v = raw?.toLowerCase().trim();
@@ -47,14 +110,6 @@ function normalizeLowerTrim(raw?: string | null): string | undefined {
 function normalizeTrim(raw?: string | null): string | undefined {
   const v = raw?.trim();
   return v && v.length > 0 ? v : undefined;
-}
-
-type RelationshipTypeLower = "client" | "partner";
-function normalizeRelationshipType(raw?: string | null): RelationshipTypeLower | undefined {
-  if (!raw) return undefined;
-  const v = raw.toLowerCase().trim();
-  if (v === "client" || v === "partner") return v;
-  return undefined;
 }
 
 /* ----------------------------------------------------
@@ -78,7 +133,7 @@ function shapePartnerProfile(pp: any) {
     coverageMarkets: pp.coverageMarkets ?? "",
     feeComp: pp.feeComp ?? "",
     website: pp.website ?? "",
-    link: pp.link ?? "",
+    profileUrl: pp.profileUrl ?? "",
   };
 }
 
@@ -88,44 +143,96 @@ function shapeContact(contactRecord: any, linkedListings: LinkedListing[] = []) 
     contactRecord.email ||
     "Unnamed contact";
 
-  const relationshipTypeRaw = String(contactRecord.relationshipType ?? "CLIENT");
-  const relationshipType =
-    relationshipTypeRaw.toLowerCase() === "partner" ? "partner" : "client";
+  const relationshipTypeEnum = (contactRecord.relationshipType ??
+    RelationshipType.CLIENT) as RelationshipType;
+
+  const relationshipType: RelationshipTypeLower =
+    relationshipTypeEnum === RelationshipType.PARTNER ? "partner" : "client";
 
   const isPartner = relationshipType === "partner";
 
   return {
     id: contactRecord.id,
     name,
-    label: contactRecord.label ?? "",
-    stage: (contactRecord.stage as any) ?? "new",
-    type: contactRecord.type ?? null,
 
     relationshipType,
+
+    // Client-only fields (safe defaults)
+    label: contactRecord.label ?? "",
+    stage: isPartner ? null : stageToLower(contactRecord.stage),
+    clientRole: isPartner ? null : clientRoleToLower(contactRecord.clientRole),
 
     priceRange: contactRecord.priceRange ?? "",
     areas: contactRecord.areas ?? "",
     timeline: contactRecord.timeline ?? "",
     source: contactRecord.source ?? "",
+
     email: contactRecord.email ?? "",
     phone: contactRecord.phone ?? "",
 
-    // ✅ only return partnerProfile for partner contacts
+    // Partner-only
     partnerProfile: isPartner ? shapePartnerProfile(contactRecord.partnerProfile) : null,
 
     notes: Array.isArray(contactRecord.contactNotes)
       ? contactRecord.contactNotes.map(shapeContactNote)
       : [],
 
-    // ✅ partners never return linked listings
+    // Partners never return linked listings
     linkedListings: isPartner ? [] : linkedListings,
   };
+}
+
+async function getLinkedListingsForContact(
+  prisma: any,
+  userId: string,
+  contactId: string
+): Promise<LinkedListing[]> {
+  const linked: LinkedListing[] = [];
+
+  // Seller links (listing.sellerContactId)
+  const sellerListings = await prisma.listing.findMany({
+    where: { userId, sellerContactId: contactId },
+    select: { id: true, address: true, status: true },
+  });
+
+  for (const l of sellerListings) {
+    linked.push({
+      id: l.id,
+      address: l.address,
+      status: l.status,
+      role: "seller",
+    });
+  }
+
+  // Buyer links (listingBuyerLink)
+  const buyerLinks = await prisma.listingBuyerLink.findMany({
+    where: {
+      contactId,
+      listing: { userId },
+    },
+    select: {
+      listing: {
+        select: { id: true, address: true, status: true },
+      },
+    },
+  });
+
+  for (const link of buyerLinks) {
+    linked.push({
+      id: link.listing.id,
+      address: link.listing.address,
+      status: link.listing.status,
+      role: "buyer",
+    });
+  }
+
+  return linked;
 }
 
 /* ----------------------------------------------------
  * GET /api/crm/contacts
  * ---------------------------------------------------*/
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
@@ -143,15 +250,21 @@ export async function GET(_req: NextRequest) {
       return NextResponse.json({ error: "Account not found." }, { status: 404 });
     }
 
+    const url = new URL(req.url);
+    const includePartners = url.searchParams.get("includePartners") !== "false";
+
     const contacts = await prisma.contact.findMany({
-      where: { userId: user.id },
+      where: {
+        userId: user.id,
+        ...(includePartners ? {} : { relationshipType: RelationshipType.CLIENT }),
+      },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       include: {
         contactNotes: true,
         partnerProfile: true,
       },
     });
-
+    
     const listings = await prisma.listing.findMany({
       where: { userId: user.id },
       select: {
@@ -199,7 +312,11 @@ export async function GET(_req: NextRequest) {
       });
     }
 
-    const items = contacts.map((c: any) => shapeContact(c, linkedByContact[c.id] ?? []));
+    const items = contacts.map((c: any) => {
+      const isPartner = (c.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER;
+      return shapeContact(c, isPartner ? [] : linkedByContact[c.id] ?? []);
+    });
+
     return NextResponse.json({ contacts: items });
   } catch (err) {
     console.error("crm/contacts GET error:", err);
@@ -224,23 +341,25 @@ type SaveContactBody = {
   email?: string;
   phone?: string;
 
-  stage?: string;
+  // client-only (accepted as legacy lowercase strings from UI)
+  stage?: StageLower | string | null;
+  clientRole?: ClientRoleLower | string | null;
 
   label?: string;
-  type?: string | null;
   priceRange?: string;
   areas?: string;
   timeline?: string;
   source?: string;
 
-  relationshipType?: "client" | "partner";
+  relationshipType?: RelationshipTypeLower;
 
+  // partner profile (UI fields)
   businessName?: string;
   partnerType?: string;
   coverageMarkets?: string;
   feeComp?: string;
   website?: string;
-  link?: string;
+  profileUrl?: string;
 };
 
 export async function POST(req: NextRequest) {
@@ -273,8 +392,8 @@ export async function POST(req: NextRequest) {
       email,
       phone,
       stage,
+      clientRole,
       label,
-      type,
       priceRange,
       areas,
       timeline,
@@ -285,16 +404,16 @@ export async function POST(req: NextRequest) {
       coverageMarkets,
       feeComp,
       website,
-      link,
+      profileUrl,
     } = body;
 
-    const normalizedStage = normalizeStage(stage);
-    const normalizedType = normalizeLowerTrim(type ?? undefined);
+    const normalizedStageEnum = normalizeStage(stage ?? undefined);
+    const normalizedClientRoleEnum = normalizeClientRole(clientRole ?? undefined);
     const normalizedSource = normalizeLowerTrim(source ?? undefined);
 
     const normalizedRelationship = normalizeRelationshipType(relationshipType ?? null);
-    const prismaRelationshipEnum =
-      normalizedRelationship === "partner" ? "PARTNER" : "CLIENT";
+    const prismaRelationshipEnum: RelationshipType =
+      normalizedRelationship === "partner" ? RelationshipType.PARTNER : RelationshipType.CLIENT;
 
     const partnerProfileTouched =
       "businessName" in body ||
@@ -302,7 +421,7 @@ export async function POST(req: NextRequest) {
       "coverageMarkets" in body ||
       "feeComp" in body ||
       "website" in body ||
-      "link" in body;
+      "profileUrl" in body;
 
     const partnerProfilePayload = {
       businessName: normalizeTrim(businessName) ?? "",
@@ -310,11 +429,14 @@ export async function POST(req: NextRequest) {
       coverageMarkets: normalizeTrim(coverageMarkets) ?? "",
       feeComp: normalizeTrim(feeComp) ?? "",
       website: normalizeTrim(website) ?? "",
-      link: normalizeTrim(link) ?? "",
+      profileUrl: normalizeTrim(profileUrl) ?? "",
     };
 
     let contactRecord: any = null;
 
+    // -----------------------------
+    // UPDATE
+    // -----------------------------
     if (id) {
       const existing = await prisma.contact.findFirst({
         where: { id, userId: user.id },
@@ -325,14 +447,17 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Contact not found." }, { status: 404 });
       }
 
-      const wasPartner = String(existing.relationshipType ?? "CLIENT") === "PARTNER";
+      const wasPartner =
+        (existing.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER;
+
       const willBePartner =
-        "relationshipType" in body ? prismaRelationshipEnum === "PARTNER" : wasPartner;
+        "relationshipType" in body ? prismaRelationshipEnum === RelationshipType.PARTNER : wasPartner;
 
-      const previousStage =
-        (normalizeStage(existing.stage) ?? ("new" as PipelineStage)) as PipelineStage;
+      const previousStageEnum: ContactStage | null = wasPartner
+        ? null
+        : (existing.stage as ContactStage | null) ?? ContactStage.NEW;
 
-      const data: any = {};
+      const data: Prisma.ContactUpdateInput = {};
 
       if ("firstName" in body) data.firstName = body.firstName ?? "";
       if ("lastName" in body) data.lastName = body.lastName ?? "";
@@ -344,15 +469,21 @@ export async function POST(req: NextRequest) {
         data.relationshipType = prismaRelationshipEnum;
       }
 
-      // ✅ stage: only meaningful for CLIENT contacts
-      if (!willBePartner && "stage" in body) {
-        const maybeStage = normalizeStage(body.stage);
-        if (maybeStage) data.stage = maybeStage;
+      // ✅ client-only updates
+      if (!willBePartner) {
+        if ("stage" in body) {
+          // allow clearing if stage is explicitly null/invalid
+          data.stage = normalizedStageEnum ?? ContactStage.NEW;
+        }
+        if ("clientRole" in body) {
+          data.clientRole = normalizedClientRoleEnum ?? null;
+        }
       }
 
+      // ✅ partner-only invariants
       if (willBePartner) {
-        data.stage = "past";
-        data.type = null;
+        data.stage = null;
+        data.clientRole = null;
 
         if (partnerProfileTouched) {
           data.partnerProfile = {
@@ -363,15 +494,8 @@ export async function POST(req: NextRequest) {
           };
         }
       } else {
-        // ✅ client updates: do NOT touch partnerProfile unless switching from partner -> client
-        if ("type" in body) {
-          if (body.type === null) {
-            data.type = null;
-          } else {
-            const v = String(body.type ?? "").toLowerCase().trim();
-            data.type = v.length ? v : null;
-          }
-        }
+        // if switching away from partner, we may delete profile in transaction below
+        // and do NOT touch partnerProfile otherwise.
       }
 
       if ("priceRange" in body) data.priceRange = body.priceRange ?? "";
@@ -383,7 +507,7 @@ export async function POST(req: NextRequest) {
       const switchedToClient = wasPartner && !willBePartner;
 
       contactRecord = await prisma.$transaction(async (tx) => {
-        // ✅ If converting to PARTNER, unlink from listings
+        // ✅ If converting to PARTNER, unlink from listings (buyers + sellers)
         if (becamePartner) {
           await tx.listingBuyerLink.deleteMany({ where: { contactId: existing.id } });
           await tx.listing.updateMany({
@@ -409,11 +533,15 @@ export async function POST(req: NextRequest) {
             contactId: updated.id,
             type: "updated",
             summary:
-              ["Updated contact", (firstName ?? existing.firstName) || (lastName ?? existing.lastName)]
+              ["Updated contact", (updated.firstName ?? "").trim(), (updated.lastName ?? "").trim()]
                 .filter(Boolean)
-                .join(" ") || "Updated contact",
+                .join(" ")
+                .trim() || "Updated contact",
             data: {
-              relationshipType: String(updated.relationshipType ?? "CLIENT").toLowerCase(),
+              relationshipType:
+                (updated.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER
+                  ? "partner"
+                  : "client",
             },
           },
         });
@@ -421,35 +549,52 @@ export async function POST(req: NextRequest) {
         return updated;
       });
 
-      const savedRelationship = String(contactRecord.relationshipType ?? "CLIENT");
-      const savedStage =
-        (normalizeStage(contactRecord.stage) ?? ("new" as PipelineStage)) as PipelineStage;
+      // Trigger stage-change automations (CLIENT only)
+      const savedRelationship =
+        (contactRecord.relationshipType ?? RelationshipType.CLIENT) as RelationshipType;
 
-      if (savedRelationship === "CLIENT" && previousStage !== savedStage) {
+      const savedStageEnum: ContactStage | null =
+        savedRelationship === RelationshipType.CLIENT
+          ? (contactRecord.stage as ContactStage | null) ?? ContactStage.NEW
+          : null;
+
+      if (
+        savedRelationship === RelationshipType.CLIENT &&
+        previousStageEnum &&
+        savedStageEnum &&
+        previousStageEnum !== savedStageEnum
+      ) {
         await processTriggers("LEAD_STAGE_CHANGE", {
           userId: user.id,
           contactId: contactRecord.id,
           listingId: null,
-          payload: { fromStage: previousStage, toStage: savedStage },
+          payload: {
+            fromStage: stageToLower(previousStageEnum),
+            toStage: stageToLower(savedStageEnum),
+          },
         });
       }
-    } else {
-      const isPartner = prismaRelationshipEnum === "PARTNER";
-      const createStage: PipelineStage = isPartner ? "past" : normalizedStage ?? "new";
+    }
+    // -----------------------------
+    // CREATE
+    // -----------------------------
+    else {
+      const isPartner = prismaRelationshipEnum === RelationshipType.PARTNER;
 
-      const createData: any = {
-        userId: user.id,
+      const createData: Prisma.ContactCreateInput = {
+        user: { connect: { id: user.id } },
         firstName: firstName ?? "",
         lastName: lastName ?? "",
         email: email ?? "",
         phone: phone ?? "",
 
-        relationshipType: prismaRelationshipEnum as any,
+        relationshipType: prismaRelationshipEnum,
 
-        stage: createStage,
+        // ✅ Stage / role rules
+        stage: isPartner ? null : normalizedStageEnum ?? ContactStage.NEW,
+        clientRole: isPartner ? null : normalizedClientRoleEnum ?? null,
+
         label: label ?? (isPartner ? "partner" : "new lead"),
-
-        type: isPartner ? null : normalizedType ?? "buyer",
 
         priceRange: priceRange ?? "",
         areas: areas ?? "",
@@ -475,25 +620,37 @@ export async function POST(req: NextRequest) {
             `New contact: ${(firstName ?? "").trim()} ${(lastName ?? "").trim()}`.trim() ||
             "New contact added",
           data: {
-            relationshipType: String(contactRecord.relationshipType ?? "CLIENT").toLowerCase(),
+            relationshipType:
+              (contactRecord.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER
+                ? "partner"
+                : "client",
           },
         },
       });
 
-      if (String(contactRecord.relationshipType ?? "CLIENT") === "CLIENT") {
+      // Trigger NEW_CONTACT automations (CLIENT only)
+      if ((contactRecord.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.CLIENT) {
         await processTriggers("NEW_CONTACT", {
           userId: user.id,
           contactId: contactRecord.id,
           listingId: null,
           payload: {
-            stage: createStage,
+            stage: stageToLower((contactRecord.stage as ContactStage | null) ?? ContactStage.NEW),
             source: contactRecord.source ?? "",
           },
         });
       }
     }
 
-    const shaped = shapeContact(contactRecord);
+    const relationship =
+  (contactRecord.relationshipType ?? RelationshipType.CLIENT) as RelationshipType;
+
+    const linkedListings =
+      relationship === RelationshipType.CLIENT
+        ? await getLinkedListingsForContact(prisma, user.id, contactRecord.id)
+        : [];
+
+    const shaped = shapeContact(contactRecord, linkedListings);
     return NextResponse.json({ contact: shaped });
   } catch (err) {
     console.error("crm/contacts POST error:", err);
@@ -557,7 +714,9 @@ export async function DELETE(req: NextRequest) {
       await tx.task.deleteMany({ where: { contactId, userId: user.id } });
       await tx.contactNote.deleteMany({ where: { contactId } });
 
-      // PartnerProfile should delete via FK cascade (or explicit delete in schema)
+      // PartnerProfile deletes via cascade, but safe to keep explicit too:
+      await tx.partnerProfile.deleteMany({ where: { contactId } });
+
       await tx.contact.delete({ where: { id: contactId } });
     });
 
