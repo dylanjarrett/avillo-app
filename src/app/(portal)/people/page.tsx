@@ -1493,6 +1493,7 @@ export default function CrmPage() {
                 />
                 <RoleToggle
                   label="Partner"
+                  tone="partner"
                   active={activeContact.relationshipType === "partner"}
                   onClick={() => {
                     handleFieldChange("relationshipType", "partner");
@@ -2017,18 +2018,24 @@ function StageChip({ label, stage, active, onClick }: StageChipProps) {
 type RoleToggleProps = {
   label: string;
   active: boolean;
+  tone?: "default" | "partner";
   onClick: () => void;
 };
 
-function RoleToggle({ label, active, onClick }: RoleToggleProps) {
+function RoleToggle({ label, active, tone = "default", onClick }: RoleToggleProps) {
+  const activeClass =
+    tone === "partner"
+      ? "border-violet-200/70 bg-violet-500/10 text-violet-100 shadow-[0_0_16px_rgba(167,139,250,0.35)]"
+      : "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]";
+
   return (
     <button
       type="button"
       onClick={onClick}
       className={
-        "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] " +
+        "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] transition-colors " +
         (active
-          ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
+          ? activeClass
           : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50")
       }
     >
