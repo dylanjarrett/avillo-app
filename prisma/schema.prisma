@@ -153,8 +153,8 @@ model Contact {
   label      String? // e.g. "potential buy"
 
   // Common attributes
-  tags  String[] @default([])
-  notes String?  // Legacy free-form notes (backwards compatibility)
+  tags   String[] @default([])
+  notes  String? // Legacy free-form notes (backwards compatibility)
   source String? // Zillow, Open House, Referral, Social, etc.
 
   // Client profile fields (optional; typically for CLIENT)
