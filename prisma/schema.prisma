@@ -13,9 +13,18 @@ datasource db {
 // ---------------------------
 // ENUMS
 // ---------------------------
+
+// Platform-wide role (Avillo staff/admin)
 enum UserRole {
   USER
   ADMIN
+}
+
+// Workspace membership role (teams)
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  AGENT
 }
 
 enum SubscriptionPlan {
@@ -56,13 +65,11 @@ enum TaskSource {
   MANUAL
 }
 
-// Relationship type for Contacts (Client vs Partner)
 enum RelationshipType {
   CLIENT
   PARTNER
 }
 
-// Client pipeline stage (CLIENT only; PARTNER should be null)
 enum ContactStage {
   NEW
   WARM
@@ -70,11 +77,15 @@ enum ContactStage {
   PAST
 }
 
-// Buyer/Seller role (CLIENT only)
 enum ClientRole {
   BUYER
   SELLER
   BOTH
+}
+
+enum SmsDirection {
+  OUTBOUND
+  INBOUND
 }
 
 // ---------------------------
@@ -108,32 +119,106 @@ model User {
   stripeSubscriptionId String? @db.VarChar(255)
   stripePriceId        String? @db.VarChar(255)
 
-  // Auth relations
+  // NextAuth relations
   accounts Account[]
   sessions Session[]
 
-  // App relations
-  contacts                Contact[]
-  listings                Listing[]
-  activities              Activity[]
-  CRMRecord               CRMRecord[]
-  crmActivity             CRMActivity[]
+  // Workspace relations
+  ownedWorkspaces       Workspace[]     @relation("UserOwnedWorkspaces")
+  workspaceMemberships  WorkspaceUser[]
+
+  // Audit / assignment relations (workspace-scoped records)
+  createdContacts       Contact[]       @relation("ContactCreatedBy")
+  ownedContacts         Contact[]       @relation("ContactOwner")
+
+  createdListings       Listing[]       @relation("ListingCreatedBy")
+  ownedListings         Listing[]       @relation("ListingOwner")
+
+  createdTasks          Task[]          @relation("TaskCreatedBy")
+  assignedTasks         Task[]          @relation("TaskAssignedTo")
+
+  activityActor         Activity[]      @relation("ActivityActor")
+  crmActivityActor      CRMActivity[]   @relation("CRMActivityActor")
+
+  intelligenceOutputs   IntelligenceOutput[] @relation("IntelligenceCreatedBy")
+  crmRecords            CRMRecord[]     @relation("CRMRecordCreatedBy")
+  automations           Automation[]    @relation("AutomationCreatedBy")
+
+  smsMessages           SmsMessage[]    @relation("SmsMessageCreatedBy")
+  smsSuppressions       SmsSuppression[] @relation("SmsSuppressionCreatedBy")
+
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
-  tasks                   Task[]
-  intelligenceOutputs     IntelligenceOutput[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 // ---------------------------
+// WORKSPACES (TENANT / TEAM)
+// ---------------------------
+model Workspace {
+  id   String @id @default(cuid())
+  name String
+
+  ownerId String
+  owner   User @relation("UserOwnedWorkspaces", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members WorkspaceUser[]
+
+  // Tenant-owned relations
+  contacts            Contact[]
+  listings            Listing[]
+  activities          Activity[]
+  crmActivity         CRMActivity[]
+  tasks               Task[]
+  intelligenceOutputs IntelligenceOutput[]
+  crmRecords          CRMRecord[]
+  automations          Automation[]
+  automationRuns       AutomationRun[]
+  smsMessages          SmsMessage[]
+  smsSuppressions      SmsSuppression[]
+
+  @@index([ownerId])
+}
+
+model WorkspaceUser {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role WorkspaceRole @default(AGENT)
+
+  createdAt DateTime @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@index([workspaceId])
+}
+
+// ---------------------------
 // CONTACTS
 // ---------------------------
 model Contact {
-  id     String @id @default(cuid())
-  user   User   @relation(fields: [userId], references: [id])
-  userId String
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Audit / assignment (optional)
+  createdByUserId String?
+  createdByUser   User? @relation("ContactCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  ownerUserId String?
+  ownerUser   User? @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   firstName String?
   lastName  String?
@@ -150,19 +235,19 @@ model Contact {
   // Pipeline + role (CLIENT only; keep null for PARTNER)
   stage      ContactStage? @default(NEW)
   clientRole ClientRole?
-  label      String? // e.g. "potential buy"
+  label      String?
 
   // Common attributes
   tags   String[] @default([])
-  notes  String? // Legacy free-form notes (backwards compatibility)
-  source String? // Zillow, Open House, Referral, Social, etc.
+  notes  String?
+  source String?
 
-  // Client profile fields (optional; typically for CLIENT)
+  // Client profile fields
   priceRange String?
   areas      String?
   timeline   String?
 
-  // Partner profile (only meaningful for PARTNER)
+  // Partner profile
   partnerProfile PartnerProfile?
 
   // Structured note entries per contact
@@ -180,10 +265,11 @@ model Contact {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Indexes to match UI filtering
-  @@index([userId, relationshipType])
-  @@index([userId, relationshipType, stage])
-  @@index([userId, relationshipType, clientRole])
+  @@index([workspaceId, relationshipType])
+  @@index([workspaceId, relationshipType, stage])
+  @@index([workspaceId, relationshipType, clientRole])
+  @@index([workspaceId, ownerUserId])
+  @@index([workspaceId, createdAt])
 }
 
 // Partner profile is a "detail table" for Contact when relationshipType=PARTNER
@@ -199,7 +285,7 @@ model PartnerProfile {
   feeComp         String?
 
   website    String?
-  profileUrl String? // renamed from `link` for clarity
+  profileUrl String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -209,9 +295,18 @@ model PartnerProfile {
 // LISTINGS
 // ---------------------------
 model Listing {
-  id     String @id @default(cuid())
-  user   User   @relation(fields: [userId], references: [id])
-  userId String
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Audit / assignment (optional)
+  createdByUserId String?
+  createdByUser   User? @relation("ListingCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  ownerUserId String?
+  ownerUser   User? @relation("ListingOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   // Primary seller contact for this listing
   seller          Contact? @relation("SellerListings", fields: [sellerContactId], references: [id])
@@ -225,7 +320,6 @@ model Listing {
   aiCopy      String?
   aiNotes     String?
 
-  // Tagged buyers (many-to-many via join table)
   buyers ListingBuyerLink[]
 
   photos              ListingPhoto[]
@@ -235,6 +329,9 @@ model Listing {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, ownerUserId])
 }
 
 // ---------------------------
@@ -242,7 +339,7 @@ model Listing {
 // ---------------------------
 model ListingPhoto {
   id        String  @id @default(cuid())
-  listing   Listing @relation(fields: [listingId], references: [id])
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   listingId String
 
   url       String
@@ -250,6 +347,8 @@ model ListingPhoto {
   sortOrder Int     @default(0)
 
   createdAt DateTime @default(now())
+
+  @@index([listingId])
 }
 
 // ---------------------------
@@ -257,58 +356,80 @@ model ListingPhoto {
 // ---------------------------
 model ListingBuyerLink {
   id        String  @id @default(cuid())
-  listing   Listing @relation(fields: [listingId], references: [id])
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   listingId String
 
-  contact   Contact @relation(fields: [contactId], references: [id])
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
   contactId String
 
-  role String? // "primary", "backup", "interested", etc.
+  role String?
 
   createdAt DateTime @default(now())
 
   @@unique([listingId, contactId])
+  @@index([listingId])
+  @@index([contactId])
 }
 
 // ---------------------------
 // ACTIVITIES (SYSTEM EVENTS)
 // ---------------------------
 model Activity {
-  id     String @id @default(cuid())
-  user   User   @relation(fields: [userId], references: [id])
-  userId String
+  id String @id @default(cuid())
 
-  contact   Contact? @relation(fields: [contactId], references: [id])
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Who performed the action (optional; keep null for system events)
+  actorUserId String?
+  actorUser   User? @relation("ActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
   contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
-  listing   Listing? @relation(fields: [listingId], references: [id])
   listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
 
-  type    String // "call", "email", "note", "showing", "task"
+  type    String
   details String?
 
   createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, contactId, createdAt])
+  @@index([workspaceId, listingId, createdAt])
+  @@index([contactId])
+  @@index([listingId])
+  @@index([actorUserId])
 }
 
 // ---------------------------
 // CRM ACTIVITY (TIMELINE LOG)
 // ---------------------------
 model CRMActivity {
-  id        String  @id @default(cuid())
-  userId    String
-  contactId String?
+  id String @id @default(cuid())
 
-  type    String // "created", "updated", "stage_change", "note", "call", "ai_generated"
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Who performed the action (optional)
+  actorUserId String?
+  actorUser   User? @relation("CRMActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  type    String
   summary String
   data    Json?
 
   createdAt DateTime @default(now())
 
-  user    User     @relation(fields: [userId], references: [id])
-  contact Contact? @relation(fields: [contactId], references: [id])
-
-  @@index([userId, createdAt])
-  @@index([userId, contactId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, contactId, createdAt])
+  @@index([actorUserId])
 }
 
 // ---------------------------
@@ -317,16 +438,21 @@ model CRMActivity {
 model IntelligenceOutput {
   id String @id @default(cuid())
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Who ran/saved it (optional)
+  createdByUserId String?
+  createdByUser   User? @relation("IntelligenceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   engine IntelligenceEngine
 
   listingId String?
-  listing   Listing? @relation(fields: [listingId], references: [id])
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
 
   contactId String?
-  contact   Contact? @relation(fields: [contactId], references: [id])
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   engineInput  Json?
   inputSummary String?
@@ -335,9 +461,10 @@ model IntelligenceOutput {
 
   createdAt DateTime @default(now())
 
-  @@index([userId, createdAt])
-  @@index([userId, listingId, createdAt])
-  @@index([userId, contactId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, listingId, createdAt])
+  @@index([workspaceId, contactId, createdAt])
+  @@index([createdByUserId, createdAt])
 }
 
 // ---------------------------
@@ -345,8 +472,8 @@ model IntelligenceOutput {
 // ---------------------------
 model ContactNote {
   id        String  @id @default(cuid())
-  contact   Contact @relation(fields: [contactId], references: [id])
   contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   text       String
   reminderAt DateTime?
@@ -362,8 +489,16 @@ model ContactNote {
 model Task {
   id String @id @default(cuid())
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Audit / assignment
+  createdByUserId String?
+  createdByUser   User? @relation("TaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  assignedToUserId String?
+  assignedToUser   User? @relation("TaskAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
 
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -382,10 +517,12 @@ model Task {
   completedAt DateTime?
   deletedAt   DateTime?
 
-  @@index([userId, status, dueAt])
-  @@index([userId, contactId, status, dueAt])
-  @@index([userId, listingId, status, dueAt])
-  @@index([userId, deletedAt, status, dueAt])
+  @@index([workspaceId, status, dueAt])
+  @@index([workspaceId, assignedToUserId, status, dueAt])
+  @@index([workspaceId, contactId, status, dueAt])
+  @@index([workspaceId, listingId, status, dueAt])
+  @@index([workspaceId, deletedAt, status, dueAt])
+  @@index([createdByUserId])
 }
 
 // ---------------------------
@@ -407,7 +544,7 @@ model Account {
   id_token      String?
   session_state String?
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -419,7 +556,7 @@ model Session {
   userId       String
   expires      DateTime
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -442,7 +579,7 @@ model EmailVerificationToken {
   expiresAt DateTime
   usedAt    DateTime?
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([token])
@@ -458,7 +595,7 @@ model PasswordResetToken {
   expiresAt DateTime
   usedAt    DateTime?
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([token])
@@ -468,28 +605,43 @@ model PasswordResetToken {
 // CRM RAW RECORDS
 // ---------------------------
 model CRMRecord {
-  id        String   @id @default(cuid())
-  userId    String
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Who created/ingested it (optional)
+  createdByUserId String?
+  createdByUser   User? @relation("CRMRecordCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
   raw       String
   processed String
-  type      String // listing | buyer | seller
+  type      String
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
-
-  @@index([userId, createdAt])
-  @@index([userId, type, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, type, createdAt])
+  @@index([createdByUserId, createdAt])
 }
 
 // ---------------------------
 // AUTOMATION (workflow definition)
 // ---------------------------
 model Automation {
-  id          String  @id @default(cuid())
-  userId      String
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Who created it (optional)
+  createdByUserId String?
+  createdByUser   User? @relation("AutomationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
   name        String
   description String?
-  status      String  @default("draft") // draft | active | paused | archived
+  status      String  @default("draft")
 
   trigger         String
   triggerConfig   Json?
@@ -512,9 +664,10 @@ model Automation {
   steps AutomationStepGroup?
   runs  AutomationRun[]
 
-  @@index([userId])
-  @@index([userId, active])
+  @@index([workspaceId])
+  @@index([workspaceId, active])
   @@index([status])
+  @@index([createdByUserId])
 }
 
 model AutomationStepGroup {
@@ -527,7 +680,13 @@ model AutomationStepGroup {
 
 model AutomationRun {
   id           String @id @default(cuid())
+
   automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  // Tenant boundary (strict) — denormalized for safe querying
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   contactId String?
   listingId String?
@@ -543,8 +702,7 @@ model AutomationRun {
 
   steps AutomationRunStep[]
 
-  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
-
+  @@index([workspaceId, executedAt])
   @@index([automationId])
   @@index([contactId])
   @@index([listingId])
@@ -570,25 +728,39 @@ model AutomationRunStep {
   @@index([status])
 }
 
-enum SmsDirection {
-  OUTBOUND
-  INBOUND
-}
-
+// ---------------------------
+// SMS
+// ---------------------------
 model SmsSuppression {
-  id        String   @id @default(cuid())
-  userId    String
-  phone     String // E.164
-  reason    String   @default("STOP")
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  createdByUserId String?
+  createdByUser   User? @relation("SmsSuppressionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  phone  String
+  reason String @default("STOP")
+
   createdAt DateTime @default(now())
 
-  @@unique([userId, phone])
-  @@index([userId, phone])
+  @@unique([workspaceId, phone])
+  @@index([workspaceId, phone])
+  @@index([createdByUserId])
 }
 
 model SmsMessage {
-  id         String       @id @default(cuid())
-  userId     String
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  createdByUserId String?
+  createdByUser   User? @relation("SmsMessageCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
   contactId  String?
   direction  SmsDirection
   fromNumber String
@@ -597,9 +769,11 @@ model SmsMessage {
   twilioSid  String?
   status     String?
   error      String?
-  createdAt  DateTime     @default(now())
 
-  @@index([userId, createdAt])
-  @@index([userId, toNumber])
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, toNumber])
   @@index([contactId])
+  @@index([createdByUserId])
 }

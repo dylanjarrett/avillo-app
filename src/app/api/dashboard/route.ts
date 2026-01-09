@@ -1,14 +1,10 @@
+// src/app/api/dashboard/route.ts
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-async function getPrisma() {
-  const { prisma } = await import("@/lib/prisma");
-  return prisma;
-}
 
 function startOfDay(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -17,24 +13,27 @@ function endOfDay(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 }
 
-
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.email) return NextResponse.json({ tasksToday: [], overdueCount: 0 });
+  const ctx = await requireWorkspace();
 
-  const prisma = await getPrisma();
-  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-  if (!user) return NextResponse.json({ tasksToday: [], overdueCount: 0 });
-
+  // Keep old behavior: return empty dashboard data if logged out / no workspace
+  if (!ctx.ok) {
+    return NextResponse.json({ tasksToday: [], overdueCount: 0 });
+  }
 
   const now = new Date();
 
+  const baseWhere = {
+    workspaceId: ctx.workspaceId,
+    assignedToUserId: ctx.userId,
+    status: "OPEN" as const,
+    deletedAt: null as any, // if your Prisma type is nullable Date, this is fine without `as any`
+  };
 
   const [tasksToday, overdueCount] = await Promise.all([
     prisma.task.findMany({
       where: {
-        userId: user.id,
-        status: "OPEN",
+        ...baseWhere,
         dueAt: { gte: startOfDay(now), lte: endOfDay(now) },
       },
       orderBy: { dueAt: "asc" },
@@ -45,8 +44,7 @@ export async function GET() {
     }),
     prisma.task.count({
       where: {
-        userId: user.id,
-        status: "OPEN",
+        ...baseWhere,
         dueAt: { lt: startOfDay(now) },
       },
     }),
@@ -58,16 +56,15 @@ export async function GET() {
       id: t.id,
       title: t.title,
       dueAt: t.dueAt ? t.dueAt.toISOString() : null,
-      contact:
-        t.contact
-          ? {
-              id: t.contact.id,
-              name:
-                `${(t.contact.firstName ?? "").trim()} ${(t.contact.lastName ?? "").trim()}`.trim() ||
-                t.contact.email ||
-                "Contact",
-            }
-          : null,
+      contact: t.contact
+        ? {
+            id: t.contact.id,
+            name:
+              `${(t.contact.firstName ?? "").trim()} ${(t.contact.lastName ?? "").trim()}`.trim() ||
+              t.contact.email ||
+              "Contact",
+          }
+        : null,
     })),
   });
 }

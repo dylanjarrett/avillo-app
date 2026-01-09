@@ -18,132 +18,156 @@ function normalizeEmail(value: unknown) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = ((await req.json().catch(() => ({}))) || {}) as SignupBody;
+    const body = (await req.json().catch(() => null)) as SignupBody | null;
 
-    const name = String(body.name ?? "").trim();
-    const email = normalizeEmail(body.email);
-    const password = String(body.password ?? "");
-    const brokerage = String(body.brokerage ?? "").trim();
+    const name = String(body?.name ?? "").trim();
+    const email = normalizeEmail(body?.email);
+    const password = String(body?.password ?? "");
+    const brokerage = String(body?.brokerage ?? "").trim();
 
-    // ------- Basic validation -------
-    if (!email || !email.includes("@")) {
-      return NextResponse.json(
-        { error: "Please enter a valid email address." },
-        { status: 400 }
-      );
-    }
-
-    if (!password || password.length < 8) {
-      return NextResponse.json(
-        { error: "Password must be at least 8 characters long." },
-        { status: 400 }
-      );
-    }
+    // ---------------------------
+    // Validation
+    // ---------------------------
+    if (!email || !email.includes("@")) return jsonError("Please enter a valid email address.", 400);
+    if (!password || password.length < 8) return jsonError("Password must be at least 8 characters long.", 400);
 
     const { prisma } = await import("@/lib/prisma");
 
-    // ------- Create user (case-insensitive by normalization) -------
-    // NOTE: This assumes your DB has a unique constraint on User.email.
-    // If two requests race, Prisma will throw a unique constraint error (P2002) — we handle it below.
+    // ---------------------------
+    // Create user + workspace + OWNER membership (atomic)
+    // ---------------------------
     const passwordHash = await hash(password, 10);
 
-    let user:
-      | {
-          id: string;
-          email: string;
-          name: string | null;
-          brokerage: string | null;
-        }
-      | null = null;
+    let created: {
+      user: { id: string; email: string; name: string | null; brokerage: string | null; role: any };
+      workspace: { id: string; name: string };
+      membership: { workspaceId: string; role: any };
+    };
 
     try {
-      user = await prisma.user.create({
-        data: {
-          email,
-          name: name || null,
-          passwordHash,
-          brokerage: brokerage || null,
+      created = await prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email,
+            name: name || null,
+            passwordHash,
+            brokerage: brokerage || null,
 
-          // For now we treat email as verified on signup.
-          emailVerified: new Date(),
+            // If you still want "verified on signup"
+            emailVerified: new Date(),
 
-          // ✅ Monetization defaults
-          // New users are paywalled until they start a Stripe trial/plan.
-          accessLevel: "EXPIRED" as any,
-          plan: "STARTER" as any,
-          subscriptionStatus: "NONE" as any,
-          trialEndsAt: null,
-          currentPeriodEnd: null,
-        },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          brokerage: true,
-        },
+            // Billing defaults
+            accessLevel: "EXPIRED" as any,
+            plan: "STARTER" as any,
+            subscriptionStatus: "NONE" as any,
+            trialEndsAt: null,
+            currentPeriodEnd: null,
+          },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            brokerage: true,
+            role: true,
+          },
+        });
+
+        const workspace = await tx.workspace.create({
+          data: {
+            name: name ? `${name}'s Workspace` : "My Workspace",
+            ownerId: user.id,
+          },
+          select: { id: true, name: true },
+        });
+
+        const membership = await tx.workspaceUser.create({
+          data: {
+            workspaceId: workspace.id,
+            userId: user.id,
+            role: "OWNER" as any,
+          },
+          select: { workspaceId: true, role: true },
+        });
+
+        // Optional timeline seed (non-blocking if it fails)
+        try {
+          await tx.cRMActivity.create({
+            data: {
+              workspaceId: workspace.id,
+              actorUserId: user.id,
+              type: "system",
+              summary: "Workspace created.",
+              data: { source: "signup" },
+            },
+          });
+        } catch {
+          // ignore
+        }
+
+        return { user, workspace, membership };
       });
     } catch (e: any) {
-      // Prisma unique constraint violation (race condition / existing email)
+      // Prisma unique constraint violation (email already exists)
       if (e?.code === "P2002") {
-        return NextResponse.json(
-          { error: "An account already exists with that email." },
-          { status: 400 }
-        );
+        return jsonError("An account already exists with that email.", 400);
       }
       throw e;
     }
 
-    // Seed initial CRM activity (keep your exact behavior)
-    await prisma.cRMActivity.create({
-      data: {
-        userId: user.id,
-        type: "system",
-        summary: "Avillo workspace created.",
-        data: { accessLevel: "EXPIRED" },
-      },
-    });
-
-    // ------- Fire-and-forget welcome email (non-blocking) -------
+    // ---------------------------
+    // Fire-and-forget welcome email
+    // ---------------------------
     const appUrl = process.env.NEXTAUTH_URL || "https://app.avillo.io";
-    const logoUrl =
-      process.env.AVILLO_LOGO_URL ||
-      "https://app.avillo.io/avillo-logo-cream.png";
+    const logoUrl = process.env.AVILLO_LOGO_URL || "https://app.avillo.io/avillo-logo-cream.png";
 
-    (async () => {
+    void (async () => {
       try {
         await sendEmail({
-          to: user!.email,
+          to: created.user.email,
           subject: "Welcome to Avillo",
           html: buildWelcomeEmailHtml({
-            name: user!.name,
+            name: created.user.name,
             appUrl,
             logoUrl,
           }),
         });
       } catch (err) {
-        console.error("Welcome email failed (non-blocking):", err);
+        console.error("[signup] Welcome email failed (non-blocking):", err);
       }
     })();
 
-    // ------- Response to client -------
-    return NextResponse.json({
-      success: true,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        brokerage: user.brokerage ?? null,
-      },
-    });
-  } catch (err) {
-    console.error("signup error:", err);
+    // ---------------------------
+    // Response
+    // ---------------------------
     return NextResponse.json(
       {
-        error:
-          "We couldn’t create your account right now. Try again or contact support@avillo.io.",
+        success: true,
+        user: {
+          id: created.user.id,
+          email: created.user.email,
+          name: created.user.name,
+          brokerage: created.user.brokerage ?? null,
+
+          // Platform role (Avillo staff layer)
+          platformRole: String(created.user.role),
+
+          // Workspace context (team layer)
+          workspaceId: created.workspace.id,
+          workspaceRole: String(created.membership.role),
+        },
       },
+      { status: 201 }
+    );
+  } catch (err) {
+    console.error("[signup] error:", err);
+    return NextResponse.json(
+      { error: "We couldn’t create your account right now. Try again or contact support@avillo.io." },
       { status: 500 }
     );
   }

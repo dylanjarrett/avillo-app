@@ -595,6 +595,23 @@ export default function CrmPage() {
     return { firstName, lastName };
   }
 
+  function datetimeLocalToIso(value: string): string | null {
+    if (!value) return null;
+
+    // value looks like: "2026-01-08T14:30"
+    const [datePart, timePart] = value.split("T");
+    if (!datePart || !timePart) return null;
+
+    const [y, m, d] = datePart.split("-").map(Number);
+    const [hh, mm] = timePart.split(":").map(Number);
+
+    // Construct a Date in LOCAL time explicitly
+    const local = new Date(y, m - 1, d, hh, mm, 0, 0);
+    if (Number.isNaN(local.getTime())) return null;
+
+    return local.toISOString();
+  }
+
   function updateNoteDraft(
     contactId: string,
     field: "text" | "taskAt",
@@ -623,7 +640,7 @@ export default function CrmPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: draft.text,
-          taskAt: draft.taskAt || undefined,
+          taskAt: datetimeLocalToIso(draft.taskAt) || undefined,
         }),
       });
 

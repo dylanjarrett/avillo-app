@@ -1,74 +1,60 @@
 // src/app/api/listings/delete/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function safeTrim(v: any) {
+  const t = String(v ?? "").trim();
+  return t.length ? t : "";
+}
+
+function jsonError(message: string, status: number) {
+  return NextResponse.json({ error: message }, { status });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const ctx = await requireWorkspace();
+    if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-    if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: "Not authenticated." },
-        { status: 401 }
-      );
-    }
-
-    const { id } = await req.json().catch(() => ({} as { id?: string }));
-
-    if (!id) {
-      return NextResponse.json(
-        { error: "Missing listing id." },
-        { status: 400 }
-      );
-    }
-
-    const { prisma } = await import("@/lib/prisma");
-
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
-    }
+    const payload = (await req.json().catch(() => null)) as { id?: string } | null;
+    const id = safeTrim(payload?.id);
+    if (!id) return jsonError("Missing listing id.", 400);
 
     const listing = await prisma.listing.findFirst({
-      where: { id, userId: user.id },
+      where: { id, workspaceId: ctx.workspaceId },
+      select: { id: true },
     });
+    if (!listing) return jsonError("Listing not found.", 404);
 
-    if (!listing) {
-      return NextResponse.json(
-        { error: "Listing not found." },
-        { status: 404 }
-      );
-    }
+    await prisma.$transaction(async (tx) => {
+      await tx.listingBuyerLink.deleteMany({ where: { listingId: listing.id } });
+      await tx.listingPhoto.deleteMany({ where: { listingId: listing.id } });
 
-    // Clean up related rows so CRM views stay accurate
-    await prisma.listingBuyerLink.deleteMany({
-      where: { listingId: listing.id },
-    });
+      // Optional: keep timelines clean (best-effort)
+      try {
+        await tx.cRMActivity.deleteMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            data: { path: ["listingId"], equals: listing.id },
+          } as any,
+        });
+      } catch (e) {
+        console.warn("cRMActivity JSON-path delete skipped:", e);
+      }
 
-    await prisma.listingPhoto.deleteMany({
-      where: { listingId: listing.id },
-    });
+      await tx.task.deleteMany({ where: { workspaceId: ctx.workspaceId, listingId: listing.id } });
+      await tx.activity.deleteMany({ where: { workspaceId: ctx.workspaceId, listingId: listing.id } });
 
-    await prisma.listing.delete({
-      where: { id: listing.id },
+      await tx.listing.delete({ where: { id: listing.id } });
     });
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("delete listing error", err);
-    return NextResponse.json(
-      { error: "Failed to delete listing." },
-      { status: 500 }
-    );
+    console.error("listings/delete POST error:", err);
+    return NextResponse.json({ error: "Failed to delete listing." }, { status: 500 });
   }
 }

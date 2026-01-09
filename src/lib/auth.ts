@@ -1,7 +1,6 @@
 // src/lib/auth.ts
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import type { NextAuthOptions, User } from "next-auth";
-import type { AdapterUser } from "next-auth/adapters";
+import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
@@ -10,29 +9,138 @@ import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 
+/* ----------------------------------------
+ * Types
+ * ------------------------------------- */
+
 type TokenShape = {
   id?: string;
+
+  // Platform (Avillo staff) role
   role?: string;
+
+  // Billing / access
   plan?: string;
   accessLevel?: string;
   subscriptionStatus?: string | null;
+
   sessionKey?: string | null;
   email?: string | null;
+
+  // Workspace context (tenant/team layer)
+  workspaceId?: string | null;
+  workspaceRole?: string | null; // OWNER | ADMIN | AGENT
 };
+
+/* ----------------------------------------
+ * Utils
+ * ------------------------------------- */
 
 function normalizeEmail(value: unknown) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+/**
+ * Ensures a user has at least one workspace membership.
+ * Returns the workspace context (workspaceId + workspaceRole).
+ *
+ * - If membership exists, returns the first one.
+ * - Else creates a workspace and OWNER membership.
+ */
+async function ensureWorkspaceForUser(userId: string, name?: string | null) {
+  const existing = await prisma.workspaceUser.findFirst({
+    where: { userId },
+    select: { workspaceId: true, role: true },
+  });
+
+  if (existing?.workspaceId) {
+    return {
+      workspaceId: existing.workspaceId,
+      workspaceRole: String(existing.role),
+    };
+  }
+
+  const workspace = await prisma.workspace.create({
+    data: {
+      name: name ? `${name}'s Workspace` : "My Workspace",
+      ownerId: userId,
+    },
+    select: { id: true },
+  });
+
+  const membership = await prisma.workspaceUser.create({
+    data: {
+      workspaceId: workspace.id,
+      userId,
+      role: "OWNER" as any,
+    },
+    select: { role: true },
+  });
+
+  // Optional: timeline/audit
+  try {
+    await prisma.cRMActivity.create({
+      data: {
+        workspaceId: workspace.id,
+        actorUserId: userId,
+        type: "system",
+        summary: "Workspace created.",
+        data: { source: "ensureWorkspaceForUser" },
+      },
+    });
+  } catch {
+    // ignore
+  }
+
+  return {
+    workspaceId: workspace.id,
+    workspaceRole: String(membership.role),
+  };
+}
+
+/**
+ * Pull fresh user + workspace context for token hydration/refresh.
+ */
+async function loadUserContext(userId: string) {
+  const [dbUser, membership] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        role: true,
+        plan: true,
+        accessLevel: true,
+        subscriptionStatus: true,
+        currentSessionKey: true,
+        email: true,
+        name: true,
+      },
+    }),
+    prisma.workspaceUser.findFirst({
+      where: { userId },
+      select: { workspaceId: true, role: true },
+    }),
+  ]);
+
+  return { dbUser, membership };
+}
+
+/* ----------------------------------------
+ * NextAuth Config
+ * ------------------------------------- */
+
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as any,
+
   session: {
     strategy: "jwt",
   },
+
   pages: {
     signIn: "/login",
     error: "/login",
   },
+
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID ?? "",
@@ -46,35 +154,39 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
 
+      /**
+       * IMPORTANT:
+       * Return a minimal user object (id/email/name) — do NOT return the full Prisma user model.
+       * This avoids NextAuth serialization errors after schema changes.
+       */
       async authorize(credentials) {
         const email = normalizeEmail(credentials?.email);
         const password = String(credentials?.password ?? "");
 
-        if (!email || !password) {
-          throw new Error("Missing email or password");
-        }
+        if (!email || !password) throw new Error("Missing email or password");
 
         const user = await prisma.user.findUnique({
-          where: { email }, // ✅ normalized (case-insensitive behavior via normalization)
+          where: { email },
+          select: { id: true, email: true, name: true, passwordHash: true },
         });
 
-        if (!user || !user.passwordHash) {
-          throw new Error("Invalid login");
-        }
+        if (!user || !user.passwordHash) throw new Error("Invalid login");
 
         const valid = await compare(password, user.passwordHash);
-        if (!valid) {
-          throw new Error("Invalid login");
-        }
+        if (!valid) throw new Error("Invalid login");
 
-        return user as unknown as AdapterUser;
+        return { id: user.id, email: user.email, name: user.name ?? null };
       },
     }),
   ],
 
+  /* ----------------------------------------
+   * Events
+   * ------------------------------------- */
+
   /**
-   * ✅ Ensures first-time Google OAuth users default to paywalled state,
-   * and normalizes their email so the DB never stores mixed-case emails.
+   * Runs when NextAuth creates a new user via OAuth (Google).
+   * We normalize email + set billing defaults + ensure workspace membership.
    */
   events: {
     async createUser({ user }) {
@@ -82,7 +194,6 @@ export const authOptions: NextAuthOptions = {
         await prisma.user.update({
           where: { id: user.id },
           data: {
-            // ✅ Normalize OAuth email to keep DB consistent (important for case-insensitive login expectations)
             email: user.email ? normalizeEmail(user.email) : undefined,
 
             accessLevel: "EXPIRED" as any,
@@ -93,43 +204,33 @@ export const authOptions: NextAuthOptions = {
           },
         });
 
-        try {
-          await prisma.cRMActivity.create({
-            data: {
-              userId: user.id,
-              type: "system",
-              summary: "Avillo workspace created.",
-              data: { accessLevel: "EXPIRED", source: "oauth_create_user" },
-            },
-          });
-        } catch {
-          // ignore
-        }
+        await ensureWorkspaceForUser(user.id, (user as any)?.name ?? null);
       } catch (e) {
-        console.error("[auth.events.createUser] Failed to set defaults:", e);
+        console.error("[auth.events.createUser] Failed:", e);
       }
     },
   },
 
+  /* ----------------------------------------
+   * Callbacks
+   * ------------------------------------- */
+
   callbacks: {
     /**
-     * Runs when a JWT is created or updated.
-     *
-     * ✅ IMPORTANT FIX:
-     * When the client calls `useSession().update()`, NextAuth sets `trigger === "update"`.
-     * We use that moment to pull fresh plan/accessLevel from DB so middleware stops using stale EXPIRED.
+     * JWT lifecycle
      */
     async jwt({ token, user, trigger }) {
-      // On initial sign-in, `user` is defined
+      const t = token as TokenShape;
+
+      // Initial sign-in
       if (user) {
+        const userId = String((user as any).id);
+
         const dbUser = await prisma.user.update({
-          where: { id: (user as User).id },
+          where: { id: userId },
           data: {
-            // Rotate session key on every new login
             currentSessionKey: crypto.randomUUID(),
             lastLoginAt: new Date(),
-
-            // ✅ Keep email normalized (covers edge cases where user.email might be mixed-case)
             email: (user as any)?.email ? normalizeEmail((user as any).email) : undefined,
           },
           select: {
@@ -140,10 +241,11 @@ export const authOptions: NextAuthOptions = {
             subscriptionStatus: true,
             currentSessionKey: true,
             email: true,
+            name: true,
           },
         });
 
-        const t = token as TokenShape;
+        const ws = await ensureWorkspaceForUser(dbUser.id, dbUser.name ?? null);
 
         t.id = dbUser.id;
         t.role = String(dbUser.role);
@@ -153,26 +255,18 @@ export const authOptions: NextAuthOptions = {
         t.sessionKey = dbUser.currentSessionKey ?? null;
         t.email = dbUser.email ? normalizeEmail(dbUser.email) : null;
 
+        t.workspaceId = ws.workspaceId;
+        t.workspaceRole = ws.workspaceRole;
+
         return token;
       }
 
-      const t = token as TokenShape;
       if (!t?.id) return token;
 
-      // ✅ If billing page calls `useSession().update()`, resync from DB
+      // Client called useSession().update()
       if (trigger === "update") {
         try {
-          const dbUser = await prisma.user.findUnique({
-            where: { id: String(t.id) },
-            select: {
-              role: true,
-              plan: true,
-              accessLevel: true,
-              subscriptionStatus: true,
-              currentSessionKey: true,
-              email: true,
-            },
-          });
+          const { dbUser, membership } = await loadUserContext(String(t.id));
 
           if (dbUser) {
             t.role = String(dbUser.role);
@@ -181,34 +275,21 @@ export const authOptions: NextAuthOptions = {
             t.subscriptionStatus = dbUser.subscriptionStatus ? String(dbUser.subscriptionStatus) : null;
             t.sessionKey = dbUser.currentSessionKey ?? t.sessionKey ?? null;
             t.email = dbUser.email ? normalizeEmail(dbUser.email) : t.email ?? null;
+
+            t.workspaceId = membership?.workspaceId ?? t.workspaceId ?? null;
+            t.workspaceRole = membership?.role ? String(membership.role) : t.workspaceRole ?? null;
           }
         } catch {
-          // keep existing token if DB read fails
+          // keep token
         }
 
         return token;
       }
 
-      /**
-       * Existing session:
-       * Keep token as-is, but make sure accessLevel/subscriptionStatus are present.
-       * This protects you if older tokens were created before you added these fields.
-       */
-      if (!t.accessLevel || !t.plan || !t.role) {
+      // Safety net for older tokens or missing workspace context
+      if (!t.role || !t.plan || !t.accessLevel || !t.workspaceId || !t.workspaceRole) {
         try {
-          const dbUser = await prisma.user.findUnique({
-            where: { id: String(t.id) },
-            select: {
-              id: true,
-              role: true,
-              plan: true,
-              accessLevel: true,
-              subscriptionStatus: true,
-              currentSessionKey: true,
-              email: true,
-            },
-          });
-
+          const { dbUser, membership } = await loadUserContext(String(t.id));
           if (dbUser) {
             t.role = String(dbUser.role);
             t.plan = String(dbUser.plan);
@@ -216,9 +297,12 @@ export const authOptions: NextAuthOptions = {
             t.subscriptionStatus = dbUser.subscriptionStatus ? String(dbUser.subscriptionStatus) : null;
             t.sessionKey = dbUser.currentSessionKey ?? t.sessionKey ?? null;
             t.email = dbUser.email ? normalizeEmail(dbUser.email) : t.email ?? null;
+
+            t.workspaceId = membership?.workspaceId ?? null;
+            t.workspaceRole = membership?.role ? String(membership.role) : null;
           }
         } catch {
-          // keep existing token if DB read fails
+          // ignore
         }
       }
 
@@ -226,20 +310,24 @@ export const authOptions: NextAuthOptions = {
     },
 
     /**
-     * Controls what goes into `session` on the client.
+     * Client-visible session shape
      */
     async session({ session, token }) {
       if (session.user && token) {
         const t = token as TokenShape;
 
         (session.user as any).id = t.id;
-        (session.user as any).role = t.role;
+        (session.user as any).role = t.role; // platform role (Avillo staff layer)
+
         (session.user as any).plan = t.plan;
         (session.user as any).accessLevel = t.accessLevel;
         (session.user as any).subscriptionStatus = t.subscriptionStatus ?? null;
         (session.user as any).sessionKey = t.sessionKey ?? null;
 
-        // ✅ Keep session email normalized (optional but keeps consistency everywhere)
+        (session.user as any).workspaceId = t.workspaceId ?? null;
+        (session.user as any).workspaceRole = t.workspaceRole ?? null; // team layer
+
+        // Keep email normalized
         if ((session.user as any).email) {
           (session.user as any).email = normalizeEmail((session.user as any).email);
         } else if (t.email) {
@@ -254,14 +342,16 @@ export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
 };
 
+/* ----------------------------------------
+ * Helpers
+ * ------------------------------------- */
+
 export async function getUser() {
   const session = await getServerSession(authOptions);
   const sessionUser = session?.user as { id?: string } | undefined;
   if (!sessionUser?.id) return null;
 
-  const user = await prisma.user.findUnique({
+  return prisma.user.findUnique({
     where: { id: sessionUser.id },
   });
-
-  return user;
 }

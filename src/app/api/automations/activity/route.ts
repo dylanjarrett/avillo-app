@@ -1,20 +1,11 @@
-// src/app/api/automations/activity/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { requireEntitlement } from "@/lib/entitlements";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function getPrisma() {
-  const { prisma } = await import("@/lib/prisma");
-  return prisma;
-}
-
-/**
- * Normalize automation run + step statuses into a small set for UI.
- */
 function normalizeRunStatus(v: any) {
   const s = String(v || "").toLowerCase();
   if (s.includes("success") || s.includes("completed") || s === "ok") return "success";
@@ -24,10 +15,6 @@ function normalizeRunStatus(v: any) {
   return s || "unknown";
 }
 
-/**
- * Normalize task statuses (Prisma enum OPEN/DONE) into "open"/"done" for UI consistency.
- * Your UI already lowercases on display, but this keeps the API consistent.
- */
 function normalizeTaskStatus(v: any) {
   const s = String(v || "").toUpperCase();
   if (s === "DONE" || s === "COMPLETED") return "done";
@@ -36,26 +23,31 @@ function normalizeTaskStatus(v: any) {
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    const email = session?.user?.email;
-    if (!email) return NextResponse.json({ items: [], tasks: [] });
+    const ctx = await requireWorkspace();
+    if (!ctx.ok) return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
 
-    const prisma = await getPrisma();
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return NextResponse.json({ items: [], tasks: [] });
-
-    const gate = await requireEntitlement(user.id, "AUTOMATIONS_READ");
-    if (!gate.ok) return NextResponse.json({ items: [], tasks: [] });
+    const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_READ");
+    if (!gate.ok) return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
 
     const url = new URL(req.url);
     const contactId = url.searchParams.get("contactId");
-    if (!contactId) return NextResponse.json({ items: [], tasks: [] });
+    if (!contactId) return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
 
-    // --- Runs + steps ---
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, workspaceId: ctx.workspaceId },
+      select: { id: true, relationshipType: true },
+    });
+
+    if (!contact) return NextResponse.json({ items: [], tasks: [] }, { status: 404 });
+
+    if (String(contact.relationshipType) === "PARTNER") {
+      return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
+    }
+
     const runs = await prisma.automationRun.findMany({
       where: {
-        contactId,
-        automation: { userId: user.id },
+        workspaceId: ctx.workspaceId,
+        contactId: contact.id,
       },
       orderBy: { executedAt: "desc" },
       take: 15,
@@ -76,16 +68,14 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    // --- Tasks created by Autopilot ---
-    // ✅ Critical: exclude soft-deleted tasks so People reflects Dashboard deletes.
     const tasks = await prisma.task.findMany({
       where: {
-        userId: user.id,
-        contactId,
+        workspaceId: ctx.workspaceId,
+        contactId: contact.id,
         source: "AUTOPILOT",
-        deletedAt: null, // ✅ recommendation 1: keep People in sync with deletions
+        deletedAt: null,
       },
-      orderBy: [{ status: "asc" }, { createdAt: "desc" }], // open tasks first, then newest
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
       take: 25,
       select: {
         id: true,
@@ -130,7 +120,6 @@ export async function GET(req: NextRequest) {
         id: t.id,
         title: t.title,
         dueAt: t.dueAt ? t.dueAt.toISOString() : null,
-        // ✅ recommendation 2: normalized status for UI consistency
         status: normalizeTaskStatus(t.status),
         createdAt: t.createdAt.toISOString(),
         completedAt: t.completedAt ? t.completedAt.toISOString() : null,

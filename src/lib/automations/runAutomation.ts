@@ -1,4 +1,4 @@
-// /lib/automations/runAutomation.ts
+// src/lib/automations/runAutomation.ts
 import { prisma } from "@/lib/prisma";
 import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messaging";
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
@@ -20,15 +20,43 @@ export type AutomationStep = {
 
 type RunContext = {
   userId: string;
+  workspaceId: string;
+
   contactId?: string | null;
   listingId?: string | null;
+
   trigger: string;
   payload?: any;
+
+  idempotencyKey?: string;
 };
+
+type RunStatus = "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED";
+
+/* ------------------------------------
+ * Small helpers
+ * -----------------------------------*/
+
+function safeId(v: any): string | null {
+  const s = String(v ?? "").trim();
+  return s.length ? s : null;
+}
+
+function norm(v: any): string {
+  return String(v ?? "").trim().toLowerCase();
+}
 
 async function canRunAutomations(userId: string) {
   const gate = await requireEntitlement(userId, "AUTOMATIONS_RUN");
   return gate.ok;
+}
+
+function renderTemplate(template: string, vars: Record<string, string>): string {
+  if (!template) return "";
+  return String(template).replace(/{{\s*([\w.]+)\s*}}/g, (_, key) => {
+    const val = vars[key];
+    return typeof val === "string" ? val : "";
+  });
 }
 
 /* ------------------------------------
@@ -36,48 +64,20 @@ async function canRunAutomations(userId: string) {
  * -----------------------------------*/
 
 type ConditionJoin = "AND" | "OR";
+type ConditionConfig = { field: string; operator: "equals" | "not_equals" | string; value: string };
+type NormalizedIfConfig = { join: ConditionJoin; conditions: ConditionConfig[] };
 
-type ConditionConfig = {
-  field: string;
-  operator: "equals" | "not_equals" | string;
-  value: string;
-};
-
-type NormalizedIfConfig = {
-  join: ConditionJoin;
-  conditions: ConditionConfig[];
-};
-
-function renderTemplate(template: string, vars: Record<string, string>): string {
-  if (!template) return "";
-  return template.replace(/{{\s*([\w.]+)\s*}}/g, (_, key) => {
-    const val = vars[key];
-    return typeof val === "string" ? val : "";
-  });
-}
-
-// ✅ Normalize for comparisons (UI uses lowercase values; DB may store Title Case / mixed case)
-function norm(v: any): string {
-  return String(v ?? "").trim().toLowerCase();
-}
-
-function getConditionFieldValue(
-  field: string,
-  contact: any | null,
-  listing: any | null
-): string | null {
+function getConditionFieldValue(field: string, contact: any | null, listing: any | null): string | null {
   switch (field) {
     case "contact.stage":
       return contact?.stage != null ? norm(contact.stage) : null;
 
-    case "contact.type":
-      // DB might store "Buyer"/"Seller" while UI stores "buyer"/"seller"
-      return contact?.type != null ? norm(contact.type) : null;
+    case "contact.clientRole":
+      return contact?.clientRole != null ? norm(contact.clientRole) : null;
 
     case "contact.source":
       return contact?.source != null ? norm(contact.source) : null;
 
-    // ✅ Client vs Partner conditions (Prisma enum returns CLIENT/PARTNER)
     case "contact.relationshipType":
       return contact?.relationshipType != null ? norm(contact.relationshipType) : null;
 
@@ -89,16 +89,11 @@ function getConditionFieldValue(
   }
 }
 
-function evaluateSingleCondition(
-  config: ConditionConfig,
-  contact: any | null,
-  listing: any | null
-): boolean {
+function evaluateSingleCondition(config: ConditionConfig, contact: any | null, listing: any | null): boolean {
   const actual = getConditionFieldValue(config.field, contact, listing);
   if (actual == null) return false;
 
   const expected = norm(config.value);
-
   if (config.operator === "equals") return actual === expected;
   if (config.operator === "not_equals") return actual !== expected;
 
@@ -117,23 +112,15 @@ function normalizeIfConfig(raw: any): NormalizedIfConfig {
 
     return {
       join,
-      conditions: conditions.filter((c) => !!c.field && !!c.value),
+      conditions: conditions.filter((c) => !!c.field && !!String(c.value ?? "").trim()),
     };
   }
 
-  if (!raw?.field || !raw?.value) {
-    return { join: "AND", conditions: [] };
-  }
+  if (!raw?.field || raw?.value == null) return { join: "AND", conditions: [] };
 
   return {
     join: "AND",
-    conditions: [
-      {
-        field: String(raw.field),
-        operator: String(raw.operator ?? "equals"),
-        value: String(raw.value),
-      },
-    ],
+    conditions: [{ field: String(raw.field), operator: String(raw.operator ?? "equals"), value: String(raw.value ?? "") }],
   };
 }
 
@@ -146,8 +133,46 @@ function evaluateIfGroup(rawConfig: any, contact: any | null, listing: any | nul
 }
 
 /* ------------------------------------
- * Timing helpers
+ * Timing helpers (relative only)
  * -----------------------------------*/
+
+type WaitUnit = "hours" | "days" | "weeks" | "months";
+
+function normalizeWait(config: any): { amount: number; unit: WaitUnit } | null {
+  const amountRaw = config?.amount ?? config?.value ?? null;
+  const unitRaw = String(config?.unit ?? "").toLowerCase().trim();
+  const amount = Number(amountRaw ?? 0);
+
+  const unit: WaitUnit | null =
+    unitRaw === "hours" || unitRaw === "days" || unitRaw === "weeks" || unitRaw === "months"
+      ? (unitRaw as WaitUnit)
+      : null;
+
+  if (unit && Number.isFinite(amount) && amount > 0) return { amount, unit };
+
+  const legacyHours = Number(config?.hours ?? 0);
+  if (Number.isFinite(legacyHours) && legacyHours > 0) return { amount: legacyHours, unit: "hours" };
+
+  const legacyDays = Number(config?.days ?? 0);
+  if (Number.isFinite(legacyDays) && legacyDays > 0) return { amount: legacyDays, unit: "days" };
+
+  return null;
+}
+
+function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
+  const d = new Date(base);
+  if (unit === "hours") return new Date(d.getTime() + amount * 60 * 60 * 1000);
+  if (unit === "days") {
+    d.setDate(d.getDate() + amount);
+    return d;
+  }
+  if (unit === "weeks") {
+    d.setDate(d.getDate() + amount * 7);
+    return d;
+  }
+  d.setMonth(d.getMonth() + amount);
+  return d;
+}
 
 function parseDueAt(raw: any): Date | null {
   if (!raw) return null;
@@ -156,14 +181,7 @@ function parseDueAt(raw: any): Date | null {
 }
 
 function computeExplicitDueAtFromTaskConfig(config: any, base: Date): Date | null {
-  const direct =
-    config?.dueAt ??
-    config?.taskAt ??
-    config?.reminderAt ??
-    config?.date ??
-    config?.datetime ??
-    null;
-
+  const direct = config?.dueAt ?? config?.taskAt ?? config?.reminderAt ?? config?.date ?? config?.datetime ?? null;
   const parsed = parseDueAt(direct);
   if (parsed) return parsed;
 
@@ -179,149 +197,123 @@ function computeExplicitDueAtFromTaskConfig(config: any, base: Date): Date | nul
   return d;
 }
 
-type WaitUnit = "hours" | "days" | "weeks" | "months";
-
-function normalizeWait(config: any): { amount: number; unit: WaitUnit } | null {
-  const amountRaw = config?.amount ?? config?.value ?? null;
-  const unitRaw = String(config?.unit ?? "").toLowerCase().trim();
-  const amount = Number(amountRaw ?? 0);
-
-  const unit: WaitUnit | null =
-    unitRaw === "hours" || unitRaw === "days" || unitRaw === "weeks" || unitRaw === "months"
-      ? (unitRaw as WaitUnit)
-      : null;
-
-  if (unit && Number.isFinite(amount) && amount > 0) {
-    return { amount, unit };
-  }
-
-  const legacyHours = Number(config?.hours ?? 0);
-  if (Number.isFinite(legacyHours) && legacyHours > 0) {
-    return { amount: legacyHours, unit: "hours" };
-  }
-
-  const legacyDays = Number(config?.days ?? 0);
-  if (Number.isFinite(legacyDays) && legacyDays > 0) {
-    return { amount: legacyDays, unit: "days" };
-  }
-
-  return null;
-}
-
-function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
-  const d = new Date(base);
-
-  if (unit === "hours") {
-    d.setTime(d.getTime() + amount * 60 * 60 * 1000);
-    return d;
-  }
-
-  if (unit === "days") {
-    d.setDate(d.getDate() + amount);
-    return d;
-  }
-
-  if (unit === "weeks") {
-    d.setDate(d.getDate() + amount * 7);
-    return d;
-  }
-
-  d.setMonth(d.getMonth() + amount);
-  return d;
-}
-
 /* ------------------------------------
  * Core runner
  * -----------------------------------*/
 
-export async function runAutomation(
-  automationId: string,
-  steps: AutomationStep[],
-  ctx: RunContext
-) {
-  // ✅ Pre-flight: if user is not entitled (ex: downgraded), bail out silently.
-  if (!(await canRunAutomations(ctx.userId))) return;
+export async function runAutomation(automationIdRaw: string, steps: AutomationStep[], ctx: RunContext) {
+  const userId = safeId(ctx.userId);
+  const workspaceId = safeId(ctx.workspaceId);
+  const automationId = safeId(automationIdRaw);
+
+  if (!userId || !workspaceId || !automationId) return;
+
+  // Plan gate
+  if (!(await canRunAutomations(userId))) return;
+
+  // Membership guard
+  const membership = await prisma.workspaceUser.findUnique({
+    where: { workspaceId_userId: { workspaceId, userId } },
+    select: { id: true },
+  });
+  if (!membership) return;
+
+  // ✅ Workspace-first: automation must belong to workspace (no legacy userId scoping)
+  const automation = await prisma.automation.findFirst({
+    where: { id: automationId, workspaceId },
+    select: { id: true, name: true, active: true },
+  });
+  if (!automation) return;
+  if (!automation.active) return;
+
+  const contactId = safeId(ctx.contactId);
+  const listingId = safeId(ctx.listingId);
 
   const [user, contact, listing] = await Promise.all([
-    prisma.user.findUnique({ where: { id: ctx.userId } }),
-    ctx.contactId
-      ? prisma.contact.findFirst({
-          where: { id: ctx.contactId, userId: ctx.userId },
-        })
-      : Promise.resolve(null),
-    ctx.listingId
-      ? prisma.listing.findFirst({
-          where: { id: ctx.listingId, userId: ctx.userId },
-        })
-      : Promise.resolve(null),
+    prisma.user.findUnique({ where: { id: userId } }),
+    contactId ? prisma.contact.findFirst({ where: { id: contactId, workspaceId } }) : Promise.resolve(null),
+    listingId ? prisma.listing.findFirst({ where: { id: listingId, workspaceId } }) : Promise.resolve(null),
   ]);
 
-  // ✅ HARD RULE: Partner contacts do not run automations.
-  // Prisma enum returns "CLIENT" | "PARTNER"
-  if (contact && norm((contact as any).relationshipType) === "partner") {
-    return;
-  }
+  if (!user) return;
+  if (contactId && !contact) return;
+  if (listingId && !listing) return;
 
+  // HARD RULE: Partner contacts do not run automations.
+  if (contact && norm((contact as any).relationshipType) === "partner") return;
+
+  // Derive idempotency key to avoid duplicates on retries
+  const lockId =
+    safeId(ctx.idempotencyKey) ||
+    [
+      "auto",
+      automationId,
+      workspaceId,
+      safeId(ctx.trigger) ?? "trigger",
+      contactId ?? "no_contact",
+      listingId ?? "no_listing",
+      safeId(JSON.stringify(ctx.payload ?? {}))?.slice(0, 120) ?? "no_payload",
+    ].join(":");
+
+  // ✅ Idempotency should be tenant-aware
+  const existingRun = await prisma.automationRun.findFirst({
+    where: { workspaceId, automationId, lockId },
+    select: { id: true },
+    orderBy: { executedAt: "desc" },
+  });
+  if (existingRun) return;
+
+  // Template vars
   const contactFullName =
-    contact?.firstName && contact?.lastName
-      ? `${contact.firstName} ${contact.lastName}`
-      : (contact as any)?.name ?? "";
-
-  const contactFirstName =
-    contact?.firstName ??
-    (contactFullName ? String(contactFullName).split(" ")[0] : "") ??
+    (contact?.firstName && contact?.lastName ? `${contact.firstName} ${contact.lastName}` : "") ||
+    (contact as any)?.name ||
     "";
 
-  const agentPhone =
-    (user as any)?.phone ??
-    (user as any)?.phoneNumber ??
-    (user as any)?.mobile ??
-    "";
+  const contactFirstName = contact?.firstName ?? (contactFullName ? String(contactFullName).split(" ")[0] : "") ?? "";
 
+  const agentPhone = (user as any)?.phone ?? (user as any)?.phoneNumber ?? (user as any)?.mobile ?? "";
   const agentEmail = user?.email ?? "";
-
   const propertyAddress =
-    (listing as any)?.address ??
-    (listing as any)?.fullAddress ??
-    (listing as any)?.streetAddress ??
-    "";
+    (listing as any)?.address ?? (listing as any)?.fullAddress ?? (listing as any)?.streetAddress ?? "";
 
   const templateVars: Record<string, string> = {
-    // Contact
     firstName: contactFirstName,
     fullName: contactFullName ? String(contactFullName) : "",
     lastName: (contact as any)?.lastName ?? "",
-
-    // Agent
     agentName: user?.name ?? "",
     agentEmail,
     agentPhone,
-
-    // Listing
     propertyAddress,
   };
 
   let toEmail: string | null = (contact as any)?.email ?? (contact as any)?.primaryEmail ?? null;
   let toPhone: string | null = (contact as any)?.phone ?? (contact as any)?.phoneNumber ?? null;
 
-  // ✅ Test mode: if no contact, send to the user (email + phone)
-  // NOTE: real outbound is still sent from the shared Avillo number in sendAutomationSms
+  // Test mode: no contact => send to agent
   if (!contact) {
     toEmail = user?.email ?? null;
     toPhone = (user as any)?.phone ?? null;
   }
 
-  let runStatus: "success" | "failed" = "success";
+  let runStatus: RunStatus = "SUCCESS";
   let runMessage: string | null = null;
 
+  // ✅ REQUIRED by schema: workspaceId on AutomationRun
   const run = await prisma.automationRun.create({
     data: {
       automationId,
-      contactId: ctx.contactId ?? null,
-      listingId: ctx.listingId ?? null,
-      trigger: ctx.trigger,
+      workspaceId,
+
+      contactId: contactId ?? null,
+      listingId: listingId ?? null,
+
+      trigger: String(ctx.trigger ?? "UNKNOWN"),
       triggerPayload: ctx.payload ?? {},
-      status: "running",
+
+      status: "RUNNING",
+      message: null,
+
+      lockId,
     },
   });
 
@@ -330,7 +322,7 @@ export async function runAutomation(
   const recordStep = async (data: {
     stepId?: string;
     stepType: StepType;
-    status: string;
+    status: "SUCCESS" | "FAILED" | "SKIPPED";
     message?: string | null;
     payload?: any;
   }) => {
@@ -347,67 +339,66 @@ export async function runAutomation(
     });
   };
 
+  // Relative “cursor” time
   let cursorTime = run.executedAt ?? new Date();
-
-  const stopForDowngrade = async (stepType: StepType) => {
-    await recordStep({
-      stepType,
-      status: "skipped",
-      message: "Skipped: plan no longer allows automations.",
-    });
-    runStatus = "failed";
-    runMessage = "Automation stopped due to plan downgrade.";
-  };
 
   const executeSteps = async (stepsToRun: AutomationStep[]) => {
     for (const step of stepsToRun) {
       try {
+        // Mid-run downgrade safety
+        if (!(await canRunAutomations(userId))) {
+          await recordStep({
+            stepId: step.id,
+            stepType: step.type,
+            status: "SKIPPED",
+            message: "Skipped: plan no longer allows automations.",
+          });
+          runStatus = "FAILED";
+          runMessage = "Automation stopped due to plan downgrade.";
+          return;
+        }
+
         switch (step.type) {
           case "SMS": {
             if (!toPhone) throw new Error("No phone number available for SMS.");
-
-            if (!(await canRunAutomations(ctx.userId))) {
-              await stopForDowngrade("SMS");
-              return;
-            }
-
             const body = renderTemplate(step.config?.text ?? "", templateVars);
+
             await sendAutomationSms({
-              userId: ctx.userId,
+              userId,
+              workspaceId,
               to: toPhone,
               body,
-              contactId: ctx.contactId ?? null,
+              contactId: contactId ?? null,
             });
 
             await recordStep({
               stepId: step.id,
               stepType: "SMS",
-              status: "success",
+              status: "SUCCESS",
               payload: { to: toPhone },
             });
             break;
           }
 
           case "EMAIL": {
-            if (!toEmail) throw new Error("No email on contact.");
-
-            if (!(await canRunAutomations(ctx.userId))) {
-              await stopForDowngrade("EMAIL");
-              return;
-            }
+            if (!toEmail) throw new Error("No email available for Email step.");
 
             const subject = renderTemplate(step.config?.subject ?? "", templateVars);
-            const html = renderTemplate(
-              (step.config?.body ?? "").replace(/\n/g, "<br />"),
-              templateVars
-            );
+            const html = renderTemplate(String(step.config?.body ?? "").replace(/\n/g, "<br />"), templateVars);
 
-            await sendAutomationEmail({ to: toEmail, subject, html });
+            await sendAutomationEmail({
+              userId,
+              workspaceId,
+              to: toEmail,
+              subject,
+              html,
+              contactId: contactId ?? null,
+            });
 
             await recordStep({
               stepId: step.id,
               stepType: "EMAIL",
-              status: "success",
+              status: "SUCCESS",
               payload: { to: toEmail, subject },
             });
             break;
@@ -419,11 +410,10 @@ export async function runAutomation(
 
             if (wait) {
               cursorTime = addToDate(cursorTime, wait.amount, wait.unit);
-
               await recordStep({
                 stepId: step.id,
                 stepType: "WAIT",
-                status: "success",
+                status: "SUCCESS",
                 message: `Advanced time by ${wait.amount} ${wait.unit}.`,
                 payload: {
                   ...step.config,
@@ -435,35 +425,33 @@ export async function runAutomation(
               await recordStep({
                 stepId: step.id,
                 stepType: "WAIT",
-                status: "success",
-                message: "Wait recorded (no timing applied — missing amount/unit).",
-                payload: {
-                  ...step.config,
-                  cursorAt: cursorTime.toISOString(),
-                },
+                status: "SUCCESS",
+                message: "Wait recorded (missing amount/unit).",
+                payload: { ...step.config, cursorAt: cursorTime.toISOString() },
               });
             }
             break;
           }
 
           case "TASK": {
-            const title =
-              step.config?.title ??
-              step.config?.taskTitle ??
-              step.config?.name ??
-              step.config?.text ??
-              "Task";
+            const titleRaw =
+              step.config?.title ?? step.config?.taskTitle ?? step.config?.name ?? step.config?.text ?? "Task";
 
-            const notes = step.config?.notes ?? step.config?.description ?? "";
+            const title = String(titleRaw ?? "").trim();
+            if (!title) throw new Error("Task title is required.");
+
+            const notes = String(step.config?.notes ?? step.config?.description ?? "").trim() || null;
+
             const explicitDueAt = computeExplicitDueAtFromTaskConfig(step.config, cursorTime);
             const dueAt = explicitDueAt ?? cursorTime;
 
             const created = await createAutopilotTask({
-              userId: ctx.userId,
-              contactId: ctx.contactId ?? null,
-              listingId: ctx.listingId ?? null,
-              title: String(title).trim(),
-              notes: String(notes).trim() || null,
+              userId,
+              workspaceId,
+              contactId: contactId ?? null,
+              listingId: listingId ?? null,
+              title,
+              notes,
               dueAt,
               dedupeWindowMinutes: 60,
             });
@@ -471,8 +459,8 @@ export async function runAutomation(
             await recordStep({
               stepId: step.id,
               stepType: "TASK",
-              status: "success",
-              message: created ? "Task created." : "Task skipped.",
+              status: "SUCCESS",
+              message: created ? "Task created." : "Task skipped (deduped/blocked).",
               payload: {
                 taskId: created?.id ?? null,
                 dueAt: dueAt ? dueAt.toISOString() : null,
@@ -489,7 +477,7 @@ export async function runAutomation(
             await recordStep({
               stepId: step.id,
               stepType: "IF",
-              status: "success",
+              status: "SUCCESS",
               message: `Condition evaluated to ${result}.`,
               payload: normalizeIfConfig(step.config),
             });
@@ -503,23 +491,22 @@ export async function runAutomation(
             await recordStep({
               stepId: step.id,
               stepType: step.type,
-              status: "error",
+              status: "FAILED",
               message: `Unknown step type: ${String(step.type)}`,
             });
-
-            runStatus = "failed";
+            runStatus = "FAILED";
             runMessage = `Unknown step type: ${String(step.type)}`;
             return;
           }
         }
       } catch (err: any) {
-        runStatus = "failed";
+        runStatus = "FAILED";
         runMessage = err?.message ?? "Automation step failed.";
 
         await recordStep({
           stepId: step.id,
           stepType: step.type,
-          status: "error",
+          status: "FAILED",
           message: runMessage,
         });
         return;
@@ -527,10 +514,12 @@ export async function runAutomation(
     }
   };
 
-  await executeSteps(steps);
-
-  await prisma.automationRun.update({
-    where: { id: run.id },
-    data: { status: runStatus, message: runMessage },
-  });
+  try {
+    await executeSteps(Array.isArray(steps) ? steps : []);
+  } finally {
+    await prisma.automationRun.update({
+      where: { id: run.id },
+      data: { status: runStatus, message: runMessage },
+    });
+  }
 }

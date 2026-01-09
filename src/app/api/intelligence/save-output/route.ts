@@ -1,8 +1,11 @@
+// src/app/api/intelligence/save-output/route.ts
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/workspace";
 import { requireEntitlement } from "@/lib/entitlements";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type EngineWire = "listing" | "seller" | "buyer" | "neighborhood";
 type ContextTypeWire = "listing" | "contact" | "none" | null | undefined;
@@ -15,30 +18,33 @@ interface SaveOutputBody {
   contextId?: string | null;
 }
 
-interface SessionUser {
-  id: string;
-  email?: string | null;
-  name?: string | null;
-  image?: string | null;
-}
-
 function mapEngineToEnum(engine: EngineWire): "LISTING" | "SELLER" | "BUYER" | "NEIGHBORHOOD" {
   switch (engine) {
-    case "listing": return "LISTING";
-    case "seller": return "SELLER";
-    case "buyer": return "BUYER";
-    case "neighborhood": return "NEIGHBORHOOD";
-    default: return "LISTING";
+    case "listing":
+      return "LISTING";
+    case "seller":
+      return "SELLER";
+    case "buyer":
+      return "BUYER";
+    case "neighborhood":
+      return "NEIGHBORHOOD";
+    default:
+      return "LISTING";
   }
 }
 
 function engineLabel(engine: EngineWire): string {
   switch (engine) {
-    case "listing": return "Listing Engine";
-    case "seller": return "Seller Studio";
-    case "buyer": return "Buyer Studio";
-    case "neighborhood": return "Neighborhood Engine";
-    default: return "Engine";
+    case "listing":
+      return "Listing Engine";
+    case "seller":
+      return "Seller Studio";
+    case "buyer":
+      return "Buyer Studio";
+    case "neighborhood":
+      return "Neighborhood Engine";
+    default:
+      return "Engine";
   }
 }
 
@@ -84,15 +90,38 @@ function derivePreview(engine: EngineWire, payload: unknown): string {
   return "";
 }
 
+async function validateContextInWorkspace(opts: {
+  workspaceId: string;
+  contextType?: ContextTypeWire;
+  contextId?: string | null;
+}) {
+  const { workspaceId, contextType, contextId } = opts;
+  if (!contextType || contextType === "none" || !contextId) return;
+
+  if (contextType === "listing") {
+    const ok = await prisma.listing.findFirst({
+      where: { id: contextId, workspaceId },
+      select: { id: true },
+    });
+    if (!ok) throw new Error("Invalid listing context");
+  }
+
+  if (contextType === "contact") {
+    const ok = await prisma.contact.findFirst({
+      where: { id: contextId, workspaceId },
+      select: { id: true },
+    });
+    if (!ok) throw new Error("Invalid contact context");
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    const userId = (session?.user as SessionUser | undefined)?.id;
+    const ctx = await requireWorkspace();
+    if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    // Pro-only
-    const gate = await requireEntitlement(userId, "INTELLIGENCE_SAVE");
+    // Pro-only entitlement (userId keyed)
+    const gate = await requireEntitlement(ctx.userId, "INTELLIGENCE_SAVE");
     if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
     let body: SaveOutputBody;
@@ -107,6 +136,17 @@ export async function POST(req: Request) {
     const allowedEngines: EngineWire[] = ["listing", "seller", "buyer", "neighborhood"];
     if (!engine || !allowedEngines.includes(engine)) {
       return NextResponse.json({ error: "Invalid engine type" }, { status: 400 });
+    }
+
+    // Validate context belongs to this workspace
+    try {
+      await validateContextInWorkspace({
+        workspaceId: ctx.workspaceId,
+        contextType,
+        contextId,
+      });
+    } catch {
+      return NextResponse.json({ error: "Invalid context" }, { status: 400 });
     }
 
     const cleanedPayload = deepClean(outputs) ?? {};
@@ -126,10 +166,13 @@ export async function POST(req: Request) {
 
     const created = await prisma.intelligenceOutput.create({
       data: {
-        userId,
+        workspaceId: ctx.workspaceId,
+        createdByUserId: ctx.userId,
+
         engine: engineEnum,
         listingId,
         contactId,
+
         engineInput: {
           prompt: userInput ?? null,
           contextType: contextType ?? "none",
@@ -139,6 +182,7 @@ export async function POST(req: Request) {
         payload: cleanedPayload,
         preview: preview || null,
       },
+      select: { id: true, createdAt: true },
     });
 
     return NextResponse.json(

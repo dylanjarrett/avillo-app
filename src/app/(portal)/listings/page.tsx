@@ -301,7 +301,7 @@ export default function ListingsPage() {
         const mapped: ContactOption[] = (data.contacts ?? []).map((c) => ({
           id: c.id,
           name: c.name ?? "Unnamed contact",
-          type: c.type ?? null,
+          type: c.clientRole ?? null,
           email: c.email ?? null,
           phone: c.phone ?? null,
         }));
@@ -486,16 +486,19 @@ export default function ListingsPage() {
     draft: draftCount,
   };
 
-  const sellerOptions = useMemo(
-    () =>
-      contacts.filter((c) => (c.type ?? "").toLowerCase().includes("seller")),
-    [contacts]
-  );
+  const sellerOptions = useMemo(() => {
+    return contacts.filter((c) => {
+      const role = (c.type ?? "").toLowerCase();
+      return role === "seller" || role === "both";
+    });
+  }, [contacts]);
 
-  const buyerOptions = useMemo(
-    () => contacts.filter((c) => (c.type ?? "").toLowerCase().includes("buyer")),
-    [contacts]
-  );
+  const buyerOptions = useMemo(() => {
+    return contacts.filter((c) => {
+      const role = (c.type ?? "").toLowerCase();
+      return role === "buyer" || role === "both";
+    });
+  }, [contacts]);
 
   const selectedBuyers = useMemo(() => {
     const ids = new Set(form.buyers.map((b) => b.contactId));

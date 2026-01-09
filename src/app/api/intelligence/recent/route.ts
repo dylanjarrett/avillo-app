@@ -1,14 +1,10 @@
+// src/app/api/intelligence/recent/route.ts
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/workspace";
 
-interface SessionUser {
-  id: string;
-  email?: string | null;
-  name?: string | null;
-  image?: string | null;
-}
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function engineLabelFromEnum(engine: string): string {
   switch (engine) {
@@ -44,115 +40,103 @@ function engineSlugFromEnum(
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    const userId = (session?.user as SessionUser | undefined)?.id;
-
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const ctx = await requireWorkspace();
+    if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
     const outputs = await prisma.intelligenceOutput.findMany({
-      where: { userId },
+      where: { workspaceId: ctx.workspaceId },
       orderBy: { createdAt: "desc" },
       take: 20,
+      select: {
+        id: true,
+        createdAt: true,
+        engine: true,
+        engineInput: true,
+        inputSummary: true,
+        preview: true,
+        listingId: true,
+        contactId: true,
+      },
     });
 
-    // Load attached listings / contacts for display
+    // Load attached listings / contacts for display (workspace-safe)
     const listingIds = Array.from(
-      new Set(
-        outputs
-          .map((o) => o.listingId)
-          .filter((id): id is string => Boolean(id))
-      )
+      new Set(outputs.map((o) => o.listingId).filter((id): id is string => Boolean(id)))
     );
     const contactIds = Array.from(
-      new Set(
-        outputs
-          .map((o) => o.contactId)
-          .filter((id): id is string => Boolean(id))
-      )
+      new Set(outputs.map((o) => o.contactId).filter((id): id is string => Boolean(id)))
     );
 
-    const listings =
-      listingIds.length > 0
-        ? await prisma.listing.findMany({
-            where: { id: { in: listingIds } },
+    const [listings, contacts] = await Promise.all([
+      listingIds.length
+        ? prisma.listing.findMany({
+            where: { id: { in: listingIds }, workspaceId: ctx.workspaceId },
             select: { id: true, address: true },
           })
-        : [];
-
-    const contacts =
-      contactIds.length > 0
-        ? await prisma.contact.findMany({
-            where: { id: { in: contactIds } },
-            select: { id: true, firstName: true, lastName: true },
+        : Promise.resolve([]),
+      contactIds.length
+        ? prisma.contact.findMany({
+            where: { id: { in: contactIds }, workspaceId: ctx.workspaceId },
+            select: { id: true, firstName: true, lastName: true, email: true },
           })
-        : [];
+        : Promise.resolve([]),
+    ]);
 
-    const listingMap = new Map(listings.map((l) => [l.id, l.address]));
+    const listingMap = new Map(listings.map((l) => [l.id, l.address ?? "Listing"]));
     const contactMap = new Map(
-  contacts.map(c => {
-    const fullName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim();
-    return [c.id, fullName];
-  })
-);
+      contacts.map((c) => {
+        const fullName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim();
+        return [c.id, fullName || c.email || "Contact"];
+      })
+    );
 
     const entries = outputs.map((o) => {
-  const label = engineLabelFromEnum(o.engine as string);
-  const slug = engineSlugFromEnum(o.engine as string);
+      const label = engineLabelFromEnum(String(o.engine));
+      const slug = engineSlugFromEnum(String(o.engine));
 
-  let rawPrompt: string | undefined;
-  if (o.engineInput && typeof o.engineInput === "object") {
-    const ei = o.engineInput as any;
-    if (typeof ei.prompt === "string" && ei.prompt.trim().length > 0) {
-      rawPrompt = ei.prompt.trim();
-    }
-  }
+      let rawPrompt: string | undefined;
+      if (o.engineInput && typeof o.engineInput === "object") {
+        const ei = o.engineInput as any;
+        if (typeof ei.prompt === "string" && ei.prompt.trim().length > 0) {
+          rawPrompt = ei.prompt.trim();
+        }
+      }
 
-  const snippetSource =
-    rawPrompt || o.inputSummary || o.preview || "";
+      const snippetSource = rawPrompt || o.inputSummary || o.preview || "";
+      const snippet = typeof snippetSource === "string" ? snippetSource.slice(0, 220) : "";
 
-  const snippet =
-    typeof snippetSource === "string"
-      ? snippetSource.slice(0, 220)
-      : "";
+      let contextType: "listing" | "contact" | "none" = "none";
+      let contextLabel: string | null = null;
+      let contextId: string | null = null;
 
-  let contextType: "listing" | "contact" | "none" = "none";
-  let contextLabel: string | null = null;
-  let contextId: string | null = null;
+      // Only show context if the related object is found within workspace scope
+      if (o.listingId) {
+        contextType = "listing";
+        contextId = o.listingId;
+        contextLabel = listingMap.get(o.listingId) ?? null;
+      } else if (o.contactId) {
+        contextType = "contact";
+        contextId = o.contactId;
+        contextLabel = contactMap.get(o.contactId) ?? null;
+      }
 
-  if (o.listingId) {
-    contextType = "listing";
-    contextId = o.listingId;
-    contextLabel = listingMap.get(o.listingId) ?? null;
-  } else if (o.contactId) {
-    contextType = "contact";
-    contextId = o.contactId;
-    contextLabel = contactMap.get(o.contactId) ?? null;
-  }
-
-  return {
-    id: o.id,
-    createdAt: o.createdAt,
-    engine: label,
-    engineSlug: slug,
-    // IMPORTANT: title is now just the engine label,
-    // not the user input summary
-    title: label,
-    snippet,
-    prompt: rawPrompt || "",
-    contextType,
-    contextId,
-    contextLabel,
-  };
-});
+      return {
+        id: o.id,
+        createdAt: o.createdAt,
+        engine: label,
+        engineSlug: slug,
+        title: label,
+        snippet,
+        prompt: rawPrompt || "",
+        contextType,
+        contextId,
+        contextLabel,
+      };
+    });
 
     return NextResponse.json({ entries });
   } catch (err) {
     console.error("Intelligence recent error", err);
-    return NextResponse.json(
-      { error: "Failed to load recent AI activity" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to load recent AI activity" }, { status: 500 });
   }
 }

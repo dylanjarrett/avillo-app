@@ -1,65 +1,38 @@
 // src/app/api/listings/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function safeLower(v: any) {
+  return String(v ?? "").toLowerCase().trim();
+}
+
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-
-    if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: "Not authenticated." },
-        { status: 401 }
-      );
-    }
-
-    const { prisma } = await import("@/lib/prisma");
-
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
-    }
+    const ctx = await requireWorkspace();
+    if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
     const url = new URL(req.url);
-    const statusParamRaw = url.searchParams.get("status"); // e.g. "active", "draft", "closed"
-    const statusParam = statusParamRaw
-      ? statusParamRaw.toLowerCase()
-      : null;
-    const q = url.searchParams.get("q")?.trim().toLowerCase() || "";
+    const statusParam = safeLower(url.searchParams.get("status"));
+    const q = safeLower(url.searchParams.get("q"));
 
-    // Map "active" → not draft/closed, etc. (simple starter logic)
-    let statusFilter: string | undefined;
-    if (statusParam && statusParam !== "all") {
-      statusFilter = statusParam; // DB now stores lowercase
-    }
+    const statusFilter = statusParam && statusParam !== "all" ? statusParam : undefined;
 
     const listings = await prisma.listing.findMany({
       where: {
-        userId: user.id,
+        workspaceId: ctx.workspaceId,
         ...(statusFilter ? { status: statusFilter } : {}),
       },
       orderBy: { createdAt: "desc" },
       include: {
         seller: true,
-        buyers: {
-          include: {
-            contact: true,
-          },
-        },
-        photos: {
-          orderBy: { sortOrder: "asc" },
-        },
+        buyers: { include: { contact: true } },
+        photos: { orderBy: { sortOrder: "asc" } },
       },
+      take: 500,
     });
 
     const filtered = listings.filter((l) => {
@@ -68,39 +41,31 @@ export async function GET(req: NextRequest) {
         l.address,
         l.mlsId ?? "",
         l.description ?? "",
-        l.seller
-          ? `${l.seller.firstName ?? ""} ${l.seller.lastName ?? ""}`
-          : "",
+        l.seller ? `${l.seller.firstName ?? ""} ${l.seller.lastName ?? ""}` : "",
       ]
         .join(" ")
         .toLowerCase();
-
       return haystack.includes(q);
     });
 
     const payload = filtered.map((l) => {
       const sellerName = l.seller
-        ? `${l.seller.firstName ?? ""} ${l.seller.lastName ?? ""}`.trim() ||
-          l.seller.email ||
-          ""
+        ? `${l.seller.firstName ?? ""} ${l.seller.lastName ?? ""}`.trim() || l.seller.email || ""
         : null;
 
-      const photoCount = l.photos.length;
-      const coverPhoto =
-        l.photos.find((p) => p.isCover) ?? l.photos[0] ?? null;
+      const coverPhoto = l.photos.find((p) => p.isCover) ?? l.photos[0] ?? null;
 
       return {
         id: l.id,
         address: l.address,
         mlsId: l.mlsId,
         price: l.price,
-        status: l.status, // lowercase in DB, UI will pretty-format
+        status: l.status,
         description: l.description,
         aiCopy: l.aiCopy,
         aiNotes: l.aiNotes,
 
-        // ---- photos for gallery + workspace ----
-        photoCount,
+        photoCount: l.photos.length,
         coverPhotoUrl: coverPhoto ? coverPhoto.url : null,
         photos: l.photos.map((p) => ({
           id: p.id,
@@ -120,11 +85,7 @@ export async function GET(req: NextRequest) {
 
         buyers: l.buyers.map((b) => {
           const c = b.contact;
-          const buyerName = c
-            ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() ||
-              c.email ||
-              ""
-            : "";
+          const buyerName = c ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || c.email || "" : "";
           return {
             id: b.id,
             role: b.role,
@@ -138,17 +99,11 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({
-      success: true,
-      listings: payload,
-    });
+    return NextResponse.json({ success: true, listings: payload });
   } catch (err) {
     console.error("listings GET error:", err);
     return NextResponse.json(
-      {
-        error:
-          "We couldn’t load your listings. Try again, or contact support@avillo.io.",
-      },
+      { error: "We couldn’t load your listings. Try again, or contact support@avillo.io." },
       { status: 500 }
     );
   }

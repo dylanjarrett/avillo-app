@@ -1,94 +1,116 @@
+// src/app/api/automations/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getUser } from "@/lib/auth";
 import { requireEntitlement, getEntitlementsForUserId } from "@/lib/entitlements";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-// GET → all automations for logged-in user (Starter OK: read-only)
+function safeString(v: any, max = 200) {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function safeJsonObject(v: any) {
+  if (v && typeof v === "object" && !Array.isArray(v)) return v;
+  return {};
+}
+
 export async function GET() {
-  const user = await getUser();
-  if (!user) return NextResponse.json([], { status: 200 });
+  const ctx = await requireWorkspace();
 
-  // Compute entitlement once for this user
-  const ent = await getEntitlementsForUserId(user.id);
+  // Safer during rebuild: let errors surface with the right status
+  if (!ctx.ok) {
+    return NextResponse.json(ctx.error ?? [], { status: ctx.status ?? 401 });
+  }
+
+  const ent = await getEntitlementsForUserId(ctx.userId);
   const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
 
   const automations = await prisma.automation.findMany({
-    where: { userId: user.id },
+    where: { workspaceId: ctx.workspaceId },
     include: { steps: true },
     orderBy: { createdAt: "desc" },
   });
 
-  // Add visual/derived fields without changing DB state
-  const mapped = automations.map((a) => ({
-    ...a,
-    effectiveActive: canRun ? a.active : false,
-    lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
-  }));
-
-  return NextResponse.json(mapped);
+  return NextResponse.json(
+    automations.map((a) => ({
+      ...a,
+      effectiveActive: canRun ? a.active : false,
+      lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+    }))
+  );
 }
 
-// POST → create a new automation (Pro required)
 export async function POST(req: Request) {
-  const user = await getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const ctx = await requireWorkspace();
+  if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-  const gate = await requireEntitlement(user.id, "AUTOMATIONS_WRITE");
+  const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_WRITE");
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
-  const body = await req.json();
-  const {
-    name,
-    description,
-    trigger,
-    triggerConfig = {},
-    entryConditions = {},
-    exitConditions = {},
-    schedule = {},
-    active = true,
-    status = "draft",
-    reEnroll = true,
-    timezone,
-    folder,
-    steps = [],
-  } = body;
+  const body = await req.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
 
-  const automation = await prisma.automation.create({
-    data: {
-      userId: user.id,
-      name,
-      description,
-      trigger,
-      triggerConfig,
-      entryConditions,
-      exitConditions,
-      schedule,
-      folder,
-      active,
-      status,
-      reEnroll,
-      timezone,
-    },
-  });
+  const name = safeString(body.name, 120);
+  const trigger = safeString(body.trigger, 80);
 
-  await prisma.automationStepGroup.create({
-    data: { automationId: automation.id, steps },
+  if (!name) return NextResponse.json({ error: "Missing name" }, { status: 400 });
+  if (!trigger) return NextResponse.json({ error: "Missing trigger" }, { status: 400 });
+
+  const steps = body.steps;
+  if (!Array.isArray(steps)) {
+    return NextResponse.json({ error: "steps must be an array." }, { status: 400 });
+  }
+
+  const created = await prisma.$transaction(async (tx) => {
+    const automation = await tx.automation.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        createdByUserId: ctx.userId,
+
+        name,
+        description: body.description != null ? safeString(body.description, 500) || null : null,
+
+        trigger,
+        triggerConfig: safeJsonObject(body.triggerConfig),
+        entryConditions: safeJsonObject(body.entryConditions),
+        exitConditions: safeJsonObject(body.exitConditions),
+        schedule: safeJsonObject(body.schedule),
+
+        folder: body.folder != null ? safeString(body.folder, 120) || null : null,
+        active: typeof body.active === "boolean" ? body.active : true,
+        status: safeString(body.status, 40) || "draft",
+        reEnroll: typeof body.reEnroll === "boolean" ? body.reEnroll : true,
+        timezone: body.timezone != null ? safeString(body.timezone, 80) || null : null,
+      },
+      select: { id: true },
+    });
+
+    await tx.automationStepGroup.create({
+      data: { automationId: automation.id, steps },
+    });
+
+    return automation;
   });
 
   const full = await prisma.automation.findFirst({
-    where: { id: automation.id, userId: user.id },
+    where: { id: created.id, workspaceId: ctx.workspaceId },
     include: { steps: true },
   });
 
-  // Also include the derived fields for immediate UI consistency
-  const ent = await getEntitlementsForUserId(user.id);
+  if (!full) {
+    return NextResponse.json({ error: "Failed to load created automation." }, { status: 500 });
+  }
+
+  const ent = await getEntitlementsForUserId(ctx.userId);
   const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
 
   return NextResponse.json({
     ...full,
-    effectiveActive: canRun ? (full as any)?.active : false,
+    effectiveActive: canRun ? full.active : false,
     lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
   });
 }

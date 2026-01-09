@@ -1,80 +1,159 @@
 // src/lib/tasks/createAutopilotTask.ts
+import type { Task, TaskSource, TaskStatus } from "@prisma/client";
 
 type AutopilotTaskInput = {
-  userId: string;
+  userId: string; // actor (runner)
+  workspaceId: string;
+
   title: string;
   notes?: string | null;
   dueAt?: Date | null;
+
   contactId?: string | null;
   listingId?: string | null;
 
-  // prevents spam if automation re-runs quickly
   dedupeWindowMinutes?: number; // default 60
+  normalizeDueAtToMinute?: boolean; // default true
+
+  /**
+   * Optional: assign to someone else. Defaults to current user (runner).
+   */
+  assignedToUserId?: string | null;
 };
 
-export async function createAutopilotTask(input: AutopilotTaskInput) {
-  const { prisma } = await import("@/lib/prisma");
+function cleanText(v: any) {
+  const s = String(v ?? "").trim();
+  return s.length ? s : "";
+}
 
-  const title = (input.title || "").trim();
+function clampInt(n: any, min: number, max: number, fallback: number) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(x)));
+}
+
+function normalizeToMinute(d: Date) {
+  const x = new Date(d);
+  x.setSeconds(0, 0);
+  return x;
+}
+
+async function getPrisma() {
+  const { prisma } = await import("@/lib/prisma");
+  return prisma;
+}
+
+export async function createAutopilotTask(input: AutopilotTaskInput): Promise<Task | null> {
+  const prisma = await getPrisma();
+
+  const actorUserId = String(input.userId ?? "").trim();
+  const workspaceId = String(input.workspaceId ?? "").trim();
+
+  const title = cleanText(input.title);
+  const notes = cleanText(input.notes);
+
+  if (!actorUserId || !workspaceId) return null;
   if (!title) return null;
 
-  const dueAt = input.dueAt ?? null;
+  const assignedToUserId = (input.assignedToUserId ?? actorUserId) || actorUserId;
+
   const contactId = input.contactId ?? null;
   const listingId = input.listingId ?? null;
 
-  const windowMinutes = input.dedupeWindowMinutes ?? 60;
-  const since = new Date(Date.now() - windowMinutes * 60 * 1000);
+  const normalizeDue = input.normalizeDueAtToMinute ?? true;
+  const dueAtRaw = input.dueAt ?? null;
+  const dueAt = dueAtRaw ? (normalizeDue ? normalizeToMinute(dueAtRaw) : dueAtRaw) : null;
 
-  // light de-dupe: same title + same contact/listing + recent OPEN autopilot task
+  const dedupeWindowMinutes = clampInt(input.dedupeWindowMinutes, 1, 1440, 60);
+  const since = new Date(Date.now() - dedupeWindowMinutes * 60 * 1000);
+
+  // Safety: actor must belong to workspace
+  const membership = await prisma.workspaceUser.findUnique({
+    where: { workspaceId_userId: { workspaceId, userId: actorUserId } },
+    select: { id: true },
+  });
+  if (!membership) return null;
+
+  // Validate references belong to workspace
+  if (contactId) {
+    const c = await prisma.contact.findFirst({
+      where: { id: contactId, workspaceId },
+      select: { id: true, relationshipType: true },
+    });
+    if (!c) return null;
+    // Guardrail: partner contacts shouldn’t get autopilot tasks
+    if (String(c.relationshipType) === "PARTNER") return null;
+  }
+
+  if (listingId) {
+    const l = await prisma.listing.findFirst({
+      where: { id: listingId, workspaceId },
+      select: { id: true },
+    });
+    if (!l) return null;
+  }
+
+  // Dedupe: same title + refs + dueAt + recent OPEN autopilot + not deleted
   const existing = await prisma.task.findFirst({
     where: {
-      userId: input.userId,
-      source: "AUTOPILOT",
-      status: "OPEN",
+      workspaceId,
+      assignedToUserId,
+      source: "AUTOPILOT" satisfies TaskSource,
+      status: "OPEN" satisfies TaskStatus,
       title,
       contactId,
       listingId,
       createdAt: { gte: since },
-      ...(dueAt ? { dueAt } : {}),
+      deletedAt: null,
+      ...(dueAt ? { dueAt } : { dueAt: null }),
     },
-    select: { id: true },
+    orderBy: { createdAt: "desc" },
   });
 
   if (existing) return existing;
 
-  const created = await prisma.task.create({
-    data: {
-      userId: input.userId,
-      contactId,
-      listingId,
-      title,
-      notes: (input.notes || "").trim() || null,
-      dueAt,
-      source: "AUTOPILOT",
-      status: "OPEN",
-    },
-  });
-
-  // --- CRM TIMELINE LOG ---
-  // Only log if this task is tied to a contact (so it can show on their timeline).
-  // We log to CRMActivity (not ContactNote) so the notes area stays human-authored.
-  if (created.contactId) {
-    await prisma.cRMActivity.create({
+  const created = await prisma.$transaction(async (tx) => {
+    const task = await tx.task.create({
       data: {
-        userId: created.userId,
-        contactId: created.contactId,
-        type: "task_created",
-        summary: `Autopilot task created: ${created.title}`,
-        data: {
-          source: "AUTOPILOT",
-          taskId: created.id,
-          title: created.title,
-          dueAt: created.dueAt ? created.dueAt.toISOString() : null,
-          listingId: created.listingId ?? null,
-        },
+        workspaceId,
+        createdByUserId: actorUserId,
+        assignedToUserId,
+
+        contactId,
+        listingId,
+
+        title,
+        notes: notes || null,
+        dueAt,
+
+        source: "AUTOPILOT",
+        status: "OPEN",
       },
     });
-  }
+
+    if (task.contactId) {
+      await tx.cRMActivity.create({
+        data: {
+          workspaceId,
+          actorUserId,
+
+          contactId: task.contactId,
+          type: "task_created",
+          summary: `Autopilot task created: ${task.title}`,
+          data: {
+            source: "AUTOPILOT",
+            taskId: task.id,
+            title: task.title,
+            dueAt: task.dueAt ? task.dueAt.toISOString() : null,
+            listingId: task.listingId ?? null,
+            assignedToUserId,
+          },
+        },
+      });
+    }
+
+    return task;
+  });
 
   return created;
 }
