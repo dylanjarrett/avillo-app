@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import PageHeader from "@/components/layout/page-header";
 import { useCrmMobileWorkspaceScroll } from "@/hooks/useCrmMobileWorkspaceScroll";
 import { FilterPill } from "@/components/ui/filter-pill";
+import PeoplePins from "@/components/people/pins";
 
 /* ------------------------------------
  * Types
@@ -1977,28 +1978,24 @@ export default function CrmPage() {
 
 {/* ----------------------------
     PINS TAB (ALL CONTACTS)
+    (kept mounted — no remount, no refetch spam)
 ---------------------------- */}
-{activeTab === "pins" && (
-  <div className="space-y-4">
-    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-      <p className="text-[11px] font-semibold text-amber-100/90">Pins</p>
-      <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-        Pins will let you create custom tags and attributes you can attach directly to
-        a contact. Whether it’s price ranges, veteran status, preferences, or internal
-        notes — if you can describe it, you’ll be able to pin it.
-      </p>
-
-      <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
-        <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
-          Pins are currently in development.
-        </p>
-        <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-          For now, continue tracking touchpoints in Activity.
-        </p>
-      </div>
+    <div className={activeTab === "pins" ? "block" : "hidden"}>
+      {activeContact ? (
+        <PeoplePins
+          contactId={activeContact.id}
+          disabled={saving || deleting}
+          onRequiresSave={() => {
+            // Silent save so Pins can attach immediately
+            void handleSave(true);
+          }}
+        />
+      ) : (
+        <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3 text-[11px] text-[var(--avillo-cream-muted)]">
+          Select a contact to start pinning.
+        </div>
+      )}
     </div>
-  </div>
-)}
 
         {/* Footer buttons — match Listings */}
         <div className="flex items-center justify-between gap-3 pb-1">

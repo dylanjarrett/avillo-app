@@ -150,8 +150,11 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  createdPins        Pin[]        @relation("PinCreatedBy")
+  createdContactPins ContactPin[] @relation("ContactPinCreatedBy")
 }
 
 // ---------------------------
@@ -181,6 +184,8 @@ model Workspace {
   automationRuns       AutomationRun[]
   smsMessages          SmsMessage[]
   smsSuppressions      SmsSuppression[]
+  pins                 Pin[]
+  contactPins          ContactPin[]
 
   @@index([ownerId])
 }
@@ -238,7 +243,7 @@ model Contact {
   label      String?
 
   // Common attributes
-  tags   String[] @default([])
+  pins ContactPin[]
   notes  String?
   source String?
 
@@ -290,6 +295,71 @@ model PartnerProfile {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+
+// ---------------------------
+// PINS (WORKSPACE-WIDE BANK)
+// ---------------------------
+model Pin {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Display label (keep casing for UI)
+  name String
+
+  // Normalized label (lowercase/trim) used for uniqueness + reuse
+  nameKey String
+
+  createdByUserId String?
+  createdByUser   User? @relation("PinCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contactPins ContactPin[]
+
+  // Case-insensitive uniqueness per workspace
+  @@unique([workspaceId, nameKey])
+  @@index([workspaceId])
+  @@index([workspaceId, name])
+  @@index([createdByUserId])
+}
+
+// ---------------------------
+// CONTACT ↔ PIN (ATTACHMENT)
+// ---------------------------
+model ContactPin {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict) — denormalized for fast + safe filtering
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  pinId String
+  pin   Pin @relation(fields: [pinId], references: [id], onDelete: Cascade)
+
+  createdByUserId String?
+  createdByUser   User? @relation("ContactPinCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  // Prevent duplicate attachments
+  @@unique([contactId, pinId])
+  @@index([workspaceId, contactId, pinId])
+
+  // Fast queries for filters/search
+  @@index([workspaceId, contactId])
+  @@index([workspaceId, pinId])
+  @@index([createdByUserId])
+}
+
 
 // ---------------------------
 // LISTINGS
