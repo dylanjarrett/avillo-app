@@ -1,9 +1,9 @@
 // src/app/api/account/change-password/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { compare, hash } from "bcryptjs";
+import { requireWorkspace } from "@/lib/workspace"; // <-- adjust path if needed
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -11,27 +11,14 @@ const MIN_PASSWORD_LENGTH = 8;
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const ws = await requireWorkspace();
+    if (!ws.ok) return NextResponse.json(ws.error, { status: ws.status });
 
-    if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: "Not authenticated." },
-        { status: 401 }
-      );
-    }
-
-    let body: {
-      currentPassword?: string;
-      newPassword?: string;
-    } = {};
-
+    let body: { currentPassword?: string; newPassword?: string } = {};
     try {
       body = await req.json();
     } catch {
-      return NextResponse.json(
-        { error: "Invalid request body." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
     }
 
     const currentPassword = body.currentPassword ?? "";
@@ -46,25 +33,18 @@ export async function POST(req: NextRequest) {
 
     if (newPassword.length < MIN_PASSWORD_LENGTH) {
       return NextResponse.json(
-        {
-          error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
-        },
+        { error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters long.` },
         { status: 400 }
       );
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
+    const user = await prisma.user.findUnique({ where: { id: ws.userId } });
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Account not found." }, { status: 404 });
     }
 
-    if (!("passwordHash" in user) || !user.passwordHash) {
+    if (!user.passwordHash) {
       return NextResponse.json(
         {
           error:
@@ -76,10 +56,7 @@ export async function POST(req: NextRequest) {
 
     const isValidPassword = await compare(currentPassword, user.passwordHash);
     if (!isValidPassword) {
-      return NextResponse.json(
-        { error: "Current password is incorrect." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Current password is incorrect." }, { status: 400 });
     }
 
     const hashed = await hash(newPassword, 10);
@@ -90,10 +67,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      {
-        success: true,
-        message: "Password updated successfully.",
-      },
+      { success: true, message: "Password updated successfully." },
       { status: 200 }
     );
   } catch (err) {

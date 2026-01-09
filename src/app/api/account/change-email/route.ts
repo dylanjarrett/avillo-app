@@ -1,31 +1,22 @@
 // src/app/api/account/change-email/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { compare } from "bcryptjs";
+import { requireWorkspace } from "@/lib/workspace"; // <-- adjust path if needed
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-
-    if (!session?.user?.email) {
-      return NextResponse.json(
-        { error: "Not authenticated." },
-        { status: 401 }
-      );
-    }
+    const ws = await requireWorkspace();
+    if (!ws.ok) return NextResponse.json(ws.error, { status: ws.status });
 
     let body: { newEmail?: string; password?: string } = {};
     try {
       body = await req.json();
     } catch {
-      return NextResponse.json(
-        { error: "Invalid request body." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
     }
 
     const newEmail = (body.newEmail ?? "").trim().toLowerCase();
@@ -39,26 +30,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (!newEmail.includes("@") || newEmail.length > 120) {
-      return NextResponse.json(
-        { error: "Please enter a valid email address." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Please enter a valid email address." }, { status: 400 });
     }
 
-    // Load user
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
+    const user = await prisma.user.findUnique({ where: { id: ws.userId } });
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Account not found." }, { status: 404 });
     }
 
-    // SSO-only account has no passwordHash
-    if (!("passwordHash" in user) || !user.passwordHash) {
+    // Google-only / SSO-only user has no passwordHash
+    if (!user.passwordHash) {
       return NextResponse.json(
         {
           error:
@@ -70,24 +52,14 @@ export async function POST(req: NextRequest) {
 
     const isValidPassword = await compare(password, user.passwordHash);
     if (!isValidPassword) {
-      return NextResponse.json(
-        { error: "Current password is incorrect." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Current password is incorrect." }, { status: 400 });
     }
 
     if (newEmail === user.email.toLowerCase()) {
-      return NextResponse.json(
-        { error: "That’s already your current email." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "That’s already your current email." }, { status: 400 });
     }
 
-    // Check if target email already exists
-    const existing = await prisma.user.findUnique({
-      where: { email: newEmail },
-    });
-
+    const existing = await prisma.user.findUnique({ where: { email: newEmail } });
     if (existing) {
       return NextResponse.json(
         {
