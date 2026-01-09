@@ -121,26 +121,35 @@ export async function POST(req: NextRequest) {
     }
 
     // ---------------------------
-    // Fire-and-forget welcome email
-    // ---------------------------
-    const appUrl = process.env.NEXTAUTH_URL || "https://app.avillo.io";
-    const logoUrl = process.env.AVILLO_LOGO_URL || "https://app.avillo.io/avillo-logo-cream.png";
+// Fire-and-forget welcome email (feature-flagged)
+// ---------------------------
+const appUrl = process.env.NEXTAUTH_URL || "https://app.avillo.io";
+const logoUrl =
+  process.env.AVILLO_LOGO_URL || "https://app.avillo.io/avillo-logo-cream.png";
 
-    void (async () => {
-      try {
-        await sendEmail({
-          to: created.user.email,
-          subject: "Welcome to Avillo",
-          html: buildWelcomeEmailHtml({
-            name: created.user.name,
-            appUrl,
-            logoUrl,
-          }),
-        });
-      } catch (err) {
-        console.error("[signup] Welcome email failed (non-blocking):", err);
-      }
-    })();
+const welcomeDisabled =
+  process.env.DISABLE_WELCOME_EMAIL === "true" ||
+  process.env.DISABLE_BETA_EMAILS === "true"; // optional extra flag
+
+if (welcomeDisabled) {
+  console.info("[signup] Welcome email disabled — skipping send.");
+} else {
+  void (async () => {
+    try {
+      await sendEmail({
+        to: created.user.email,
+        subject: "Welcome to Avillo",
+        html: buildWelcomeEmailHtml({
+          name: created.user.name,
+          appUrl,
+          logoUrl,
+        }),
+      });
+    } catch (err) {
+      console.error("[signup] Welcome email failed (non-blocking):", err);
+    }
+  })();
+}
 
     // ---------------------------
     // Response
