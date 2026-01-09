@@ -1,9 +1,14 @@
-// src/app/api/admin/users/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { UserRole, SubscriptionPlan, SubscriptionStatus, AccessLevel } from "@prisma/client";
+import {
+  UserRole,
+  SubscriptionPlan,
+  SubscriptionStatus,
+  AccessLevel,
+  WorkspaceRole,
+} from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,9 +17,7 @@ async function requireAdmin() {
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.email) {
-    return {
-      errorResponse: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
-    };
+    return { errorResponse: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
 
   const dbUser = await prisma.user.findUnique({
@@ -23,12 +26,10 @@ async function requireAdmin() {
   });
 
   if (!dbUser || dbUser.role !== "ADMIN") {
-    return {
-      errorResponse: NextResponse.json({ error: "Forbidden" }, { status: 403 }),
-    };
+    return { errorResponse: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
 
-  return { dbUser };
+  return { ok: true as const, dbUser };
 }
 
 function toIso(d: Date | null | undefined) {
@@ -36,6 +37,17 @@ function toIso(d: Date | null | undefined) {
 }
 
 function buildUserPayload(u: any) {
+  const memberships =
+    (u.workspaceMemberships || []).map((wm: any) => ({
+      workspaceId: wm.workspace?.id as string,
+      workspaceName: (wm.workspace?.name as string) ?? "Untitled workspace",
+      workspaceCreatedAt: wm.workspace?.createdAt
+        ? new Date(wm.workspace.createdAt).toISOString()
+        : null,
+      role: wm.role as WorkspaceRole,
+      joinedAt: toIso(wm.createdAt ?? null),
+    })) ?? [];
+
   return {
     id: u.id,
     name: u.name ?? "",
@@ -57,17 +69,29 @@ function buildUserPayload(u: any) {
     openAITokensUsed: u.openAITokensUsed ?? 0,
     lastLoginAt: toIso(u.lastLoginAt ?? null),
     createdAt: u.createdAt.toISOString(),
+
+    // NEW (workspace footprint)
+    workspaceCount: memberships.length,
+    memberships,
   };
 }
 
-// GET all users
-export async function GET(req: NextRequest) {
-  const authCheck = await requireAdmin();
-  if ("errorResponse" in authCheck) return authCheck.errorResponse;
+// GET all users (with workspace memberships)
+export async function GET() {
+  const auth = await requireAdmin();
+  if ("errorResponse" in auth) return auth.errorResponse;
 
   try {
     const users = await prisma.user.findMany({
       orderBy: { createdAt: "asc" },
+      include: {
+        workspaceMemberships: {
+          include: {
+            workspace: { select: { id: true, name: true, createdAt: true } },
+          },
+          orderBy: { createdAt: "asc" },
+        },
+      },
     });
 
     return NextResponse.json({ users: users.map(buildUserPayload) });
@@ -79,8 +103,8 @@ export async function GET(req: NextRequest) {
 
 // PATCH update role/plan/status/accessLevel OR run actions
 export async function PATCH(req: NextRequest) {
-  const authCheck = await requireAdmin();
-  if ("errorResponse" in authCheck) return authCheck.errorResponse;
+  const auth = await requireAdmin();
+  if ("errorResponse" in auth) return auth.errorResponse;
 
   try {
     const body = await req.json().catch(() => ({}));
@@ -95,16 +119,17 @@ export async function PATCH(req: NextRequest) {
       const updated = await prisma.user.update({
         where: { id: userId },
         data: {
-          accessLevel: "PAID" as any,
-          plan: "FOUNDING_PRO" as any,
-          subscriptionStatus: "ACTIVE" as any,
-
-          // internal grants: no trial / no period end
-          trialEndsAt: null as any,
-          currentPeriodEnd: null as any,
-
-          // do NOT wipe Stripe ids
+          accessLevel: "PAID",
+          plan: "FOUNDING_PRO",
+          subscriptionStatus: "ACTIVE",
+          trialEndsAt: null,
+          currentPeriodEnd: null,
         } as any,
+        include: {
+          workspaceMemberships: {
+            include: { workspace: { select: { id: true, name: true, createdAt: true } } },
+          },
+        },
       });
 
       return NextResponse.json({ user: buildUserPayload(updated) });
@@ -115,23 +140,29 @@ export async function PATCH(req: NextRequest) {
       const updated = await prisma.user.update({
         where: { id: userId },
         data: {
-          accessLevel: "BETA" as any,
-          // keep billing fields as-is; beta is an override
-          // (optionally you can force NONE to avoid confusion)
-          subscriptionStatus: "NONE" as any,
+          accessLevel: "BETA",
+          subscriptionStatus: "NONE",
         } as any,
+        include: {
+          workspaceMemberships: {
+            include: { workspace: { select: { id: true, name: true, createdAt: true } } },
+          },
+        },
       });
 
       return NextResponse.json({ user: buildUserPayload(updated) });
     }
 
-    // One-click action: expire access (forces upgrade modal gating)
+    // One-click action: expire access
     if (action === "EXPIRE_ACCESS") {
       const updated = await prisma.user.update({
         where: { id: userId },
-        data: {
-          accessLevel: "EXPIRED" as any,
-        } as any,
+        data: { accessLevel: "EXPIRED" } as any,
+        include: {
+          workspaceMemberships: {
+            include: { workspace: { select: { id: true, name: true, createdAt: true } } },
+          },
+        },
       });
 
       return NextResponse.json({ user: buildUserPayload(updated) });
@@ -174,6 +205,11 @@ export async function PATCH(req: NextRequest) {
     const updated = await prisma.user.update({
       where: { id: userId },
       data,
+      include: {
+        workspaceMemberships: {
+          include: { workspace: { select: { id: true, name: true, createdAt: true } } },
+        },
+      },
     });
 
     return NextResponse.json({ user: buildUserPayload(updated) });

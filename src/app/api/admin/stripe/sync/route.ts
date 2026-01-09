@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import type { WorkspaceRole } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +32,7 @@ async function requireAdmin() {
     return { errorResponse: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
 
-  return { ok: true };
+  return { ok: true as const };
 }
 
 function toIso(d: Date | null | undefined) {
@@ -52,14 +53,20 @@ function getUnixField(obj: unknown, key: string): number | null {
 function planFromPriceId(priceId?: string | null): Plan | null {
   if (!priceId) return null;
 
-  const starterMonthly = process.env.STRIPE_STARTER_MONTHLY_PRICE_ID ?? "price_1SeSegPuU4fMjEPuYJkTyNGf";
-  const starterAnnual = process.env.STRIPE_STARTER_ANNUAL_PRICE_ID ?? "price_1SeSegPuU4fMjEPubZKAdkNu";
+  const starterMonthly =
+    process.env.STRIPE_STARTER_MONTHLY_PRICE_ID ?? "price_1SeSegPuU4fMjEPuYJkTyNGf";
+  const starterAnnual =
+    process.env.STRIPE_STARTER_ANNUAL_PRICE_ID ?? "price_1SeSegPuU4fMjEPubZKAdkNu";
 
-  const proMonthly = process.env.STRIPE_PRO_MONTHLY_PRICE_ID ?? "price_1SeSgXPuU4fMjEPuoyfcpKQ3";
-  const proAnnual = process.env.STRIPE_PRO_ANNUAL_PRICE_ID ?? "price_1SeSflPuU4fMjEPuWLykKHPr";
+  const proMonthly =
+    process.env.STRIPE_PRO_MONTHLY_PRICE_ID ?? "price_1SeSgXPuU4fMjEPuoyfcpKQ3";
+  const proAnnual =
+    process.env.STRIPE_PRO_ANNUAL_PRICE_ID ?? "price_1SeSflPuU4fMjEPuWLykKHPr";
 
-  const foundingMonthly = process.env.STRIPE_FOUNDING_PRO_MONTHLY_PRICE_ID ?? "price_1SeShcPuU4fMjEPuwuE9sIxf";
-  const foundingAnnual = process.env.STRIPE_FOUNDING_PRO_ANNUAL_PRICE_ID ?? "price_1SeShQPuU4fMjEPug2u9Z3KP";
+  const foundingMonthly =
+    process.env.STRIPE_FOUNDING_PRO_MONTHLY_PRICE_ID ?? "price_1SeShcPuU4fMjEPuwuE9sIxf";
+  const foundingAnnual =
+    process.env.STRIPE_FOUNDING_PRO_ANNUAL_PRICE_ID ?? "price_1SeShQPuU4fMjEPug2u9Z3KP";
 
   if (priceId === starterMonthly || priceId === starterAnnual) return "STARTER";
   if (priceId === proMonthly || priceId === proAnnual) return "PRO";
@@ -88,22 +95,40 @@ function getPrimaryPriceId(sub: Stripe.Subscription): string | null {
 }
 
 function buildUserPayload(u: any) {
+  const memberships =
+    (u.workspaceMemberships || []).map((wm: any) => ({
+      workspaceId: wm.workspace?.id as string,
+      workspaceName: (wm.workspace?.name as string) ?? "Untitled workspace",
+      workspaceCreatedAt: wm.workspace?.createdAt
+        ? new Date(wm.workspace.createdAt).toISOString()
+        : null,
+      role: wm.role as WorkspaceRole,
+      joinedAt: toIso(wm.createdAt ?? null),
+    })) ?? [];
+
   return {
     id: u.id,
     name: u.name ?? "",
     email: u.email,
     brokerage: u.brokerage ?? "",
     role: u.role,
+
+    accessLevel: u.accessLevel,
     plan: u.plan,
     subscriptionStatus: u.subscriptionStatus ?? null,
     trialEndsAt: toIso(u.trialEndsAt ?? null),
     currentPeriodEnd: toIso(u.currentPeriodEnd ?? null),
+
     stripeCustomerId: u.stripeCustomerId ?? null,
     stripeSubscriptionId: u.stripeSubscriptionId ?? null,
     stripePriceId: u.stripePriceId ?? null,
+
     openAITokensUsed: u.openAITokensUsed ?? 0,
     lastLoginAt: toIso(u.lastLoginAt ?? null),
     createdAt: u.createdAt.toISOString(),
+
+    workspaceCount: memberships.length,
+    memberships,
   };
 }
 
@@ -119,15 +144,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing userId" }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    const stripeCustomerId = (user as any).stripeCustomerId as string | null | undefined;
+    const stripeCustomerId = user.stripeCustomerId;
     if (!stripeCustomerId) {
       return NextResponse.json(
         { error: "User has no stripeCustomerId (cannot sync)." },
@@ -135,8 +155,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prefer stored subscription id; otherwise grab most recent subscription for this customer.
-    const storedSubId = (user as any).stripeSubscriptionId as string | null | undefined;
+    const storedSubId = user.stripeSubscriptionId;
 
     let subscription: Stripe.Subscription | null = null;
 
@@ -151,7 +170,6 @@ export async function POST(req: NextRequest) {
         status: "all",
       });
 
-      // pick best candidate: active/trialing/past_due/unpaid, else most recent
       const preferred = subs.data.find((s) =>
         ["active", "trialing", "past_due", "unpaid"].includes(s.status)
       );
@@ -159,17 +177,20 @@ export async function POST(req: NextRequest) {
     }
 
     if (!subscription) {
-      // no subscriptions on Stripe -> treat as NONE
       const updated = await prisma.user.update({
         where: { id: userId },
         data: {
           subscriptionStatus: "NONE" as any,
-          stripeSubscriptionId: null as any,
-          stripePriceId: null as any,
-          trialEndsAt: null as any,
-          currentPeriodEnd: null as any,
-          // don’t change plan here—admin may have manually set it
+          stripeSubscriptionId: null,
+          stripePriceId: null,
+          trialEndsAt: null,
+          currentPeriodEnd: null,
         } as any,
+        include: {
+          workspaceMemberships: {
+            include: { workspace: { select: { id: true, name: true, createdAt: true } } },
+          },
+        },
       });
 
       return NextResponse.json({ user: buildUserPayload(updated) });
@@ -194,15 +215,17 @@ export async function POST(req: NextRequest) {
       stripePriceId: priceId ?? null,
     };
 
-    // Only update plan if we can confidently map from Stripe price
-    // (avoids overwriting internal Founding Pro grants)
-    if (mappedPlan) {
-      data.plan = mappedPlan as any;
-    }
+    // Only update plan if we can map from Stripe price id (prevents overwriting manual grants)
+    if (mappedPlan) data.plan = mappedPlan as any;
 
     const updated = await prisma.user.update({
       where: { id: userId },
       data,
+      include: {
+        workspaceMemberships: {
+          include: { workspace: { select: { id: true, name: true, createdAt: true } } },
+        },
+      },
     });
 
     return NextResponse.json({ user: buildUserPayload(updated) });

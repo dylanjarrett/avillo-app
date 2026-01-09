@@ -9,11 +9,19 @@ import type {
   AccessLevel,
 } from "@prisma/client";
 
+type WorkspaceMembership = {
+  workspaceId: string;
+  workspaceName: string;
+  workspaceCreatedAt: string;
+  role: "OWNER" | "ADMIN" | "AGENT";
+  joinedAt: string | null;
+};
+
 type AdminUser = {
   id: string;
   name: string;
   email: string;
-  brokerage: string;
+  brokerage: string | null;
   role: UserRole;
 
   accessLevel: AccessLevel;
@@ -29,7 +37,12 @@ type AdminUser = {
 
   lastLoginAt: string | null;
   createdAt: string;
+
   openAITokensUsed: number;
+
+  // NEW: workspace footprint
+  workspaceCount: number;
+  memberships: WorkspaceMembership[];
 };
 
 type Metrics = {
@@ -37,6 +50,10 @@ type Metrics = {
     totalUsers: number;
     adminCount: number;
     activePaidCount: number;
+
+    // NEW
+    totalWorkspaces: number;
+    totalSeats: number;
   };
   statuses: Record<string, number>;
   revenue: { mrrUsd: number };
@@ -82,7 +99,6 @@ export default function AdminPage() {
 
   const [loading, setLoading] = useState(true);
   const [loadingMetrics, setLoadingMetrics] = useState(true);
-
   const [error, setError] = useState<string | null>(null);
 
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
@@ -91,6 +107,7 @@ export default function AdminPage() {
   const [closingBeta, setClosingBeta] = useState(false);
 
   const [query, setQuery] = useState("");
+  const [expandedUserIds, setExpandedUserIds] = useState<Record<string, boolean>>({});
 
   async function loadUsers() {
     try {
@@ -134,6 +151,11 @@ export default function AdminPage() {
     if (!q) return users;
 
     return users.filter((u) => {
+      const membershipsText = (u.memberships || [])
+        .map((m) => `${m.workspaceName} ${m.workspaceId} ${m.role}`)
+        .join(" ")
+        .toLowerCase();
+
       return (
         (u.name || "").toLowerCase().includes(q) ||
         u.email.toLowerCase().includes(q) ||
@@ -141,7 +163,8 @@ export default function AdminPage() {
         (u.accessLevel || "").toLowerCase().includes(q) ||
         (u.plan || "").toLowerCase().includes(q) ||
         (u.subscriptionStatus || "").toLowerCase().includes(q) ||
-        (u.stripeCustomerId || "").toLowerCase().includes(q)
+        (u.stripeCustomerId || "").toLowerCase().includes(q) ||
+        membershipsText.includes(q)
       );
     });
   }, [users, query]);
@@ -238,11 +261,9 @@ export default function AdminPage() {
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "Failed to close beta");
 
-      // Refresh users + metrics so the table reflects EXPIRED
       await loadUsers();
       await loadMetrics();
 
-      // Small, visible confirmation
       alert(data?.message || "Beta closed.");
     } catch (err: any) {
       console.error("Close beta error", err);
@@ -257,11 +278,11 @@ export default function AdminPage() {
       <PageHeader
         eyebrow="Admin"
         title="Avillo control panel"
-        subtitle="Manage users, access levels, live Stripe sync, and revenue snapshots."
+        subtitle="Manage users, access, Stripe sync, and workspace membership across the platform."
       />
 
       {/* Metrics */}
-      <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <section className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4">
           <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Total users</p>
           <p className="mt-2 text-2xl font-semibold text-slate-100">
@@ -269,6 +290,16 @@ export default function AdminPage() {
           </p>
           <p className="mt-1 text-[11px] text-slate-400">
             Admins: {loadingMetrics ? "…" : metrics?.totals.adminCount ?? "—"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4">
+          <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Workspaces</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">
+            {loadingMetrics ? "…" : metrics?.totals.totalWorkspaces ?? "—"}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Seats: {loadingMetrics ? "…" : metrics?.totals.totalSeats ?? "—"}
           </p>
         </div>
 
@@ -296,10 +327,10 @@ export default function AdminPage() {
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-              Users &amp; access
+              Users, billing &amp; workspaces
             </p>
             <p className="mt-1 text-[11px] text-slate-300/80">
-              Search by name/email/brokerage/access/plan/status/customer id.
+              Search name/email/brokerage/access/plan/status/customer id or workspace name/id.
             </p>
           </div>
 
@@ -307,8 +338,8 @@ export default function AdminPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search users…"
-              className="avillo-input w-full sm:w-80"
+              placeholder="Search…"
+              className="avillo-input w-full sm:w-96"
             />
 
             <button
@@ -333,9 +364,7 @@ export default function AdminPage() {
         {error && <p className="mb-3 text-[11px] text-red-300">{error}</p>}
 
         {!loading && !error && users.length === 0 && (
-          <p className="text-[11px] text-slate-400">
-            No users found yet. Accounts will appear here as they sign up.
-          </p>
+          <p className="text-[11px] text-slate-400">No users found yet.</p>
         )}
 
         {!loading && users.length > 0 && (
@@ -349,6 +378,8 @@ export default function AdminPage() {
               ) : (
                 <UserTable
                   users={admins}
+                  expandedUserIds={expandedUserIds}
+                  setExpandedUserIds={setExpandedUserIds}
                   savingUserId={savingUserId}
                   syncingUserId={syncingUserId}
                   onChangeRole={(id, role) => patchUser(id, { role })}
@@ -372,6 +403,8 @@ export default function AdminPage() {
               ) : (
                 <UserTable
                   users={nonAdmins}
+                  expandedUserIds={expandedUserIds}
+                  setExpandedUserIds={setExpandedUserIds}
                   savingUserId={savingUserId}
                   syncingUserId={syncingUserId}
                   onChangeRole={(id, role) => patchUser(id, { role })}
@@ -394,6 +427,8 @@ export default function AdminPage() {
 
 function UserTable({
   users,
+  expandedUserIds,
+  setExpandedUserIds,
   savingUserId,
   syncingUserId,
   onChangeRole,
@@ -406,6 +441,8 @@ function UserTable({
   onSyncStripe,
 }: {
   users: AdminUser[];
+  expandedUserIds: Record<string, boolean>;
+  setExpandedUserIds: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   savingUserId: string | null;
   syncingUserId: string | null;
   onChangeRole: (userId: string, role: UserRole) => void;
@@ -419,7 +456,7 @@ function UserTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/60">
-      <table className="min-w-[1650px] w-full text-left text-sm text-slate-200">
+      <table className="min-w-[1850px] w-full text-left text-sm text-slate-200">
         <thead>
           <tr className="text-[11px] uppercase text-slate-400 border-b border-slate-800/80 bg-slate-950/80">
             <th className="px-4 py-2">User</th>
@@ -431,6 +468,7 @@ function UserTable({
             <th className="px-4 py-2">Status</th>
             <th className="px-4 py-2">Trial ends</th>
             <th className="px-4 py-2">Period end</th>
+            <th className="px-4 py-2">Workspaces</th>
             <th className="px-4 py-2">Stripe sync</th>
             <th className="px-4 py-2">Stripe</th>
             <th className="px-4 py-2">Actions</th>
@@ -458,160 +496,229 @@ function UserTable({
                 ? "bg-amber-500/10 text-amber-200 border-amber-400/30"
                 : "bg-red-500/10 text-red-200 border-red-400/30";
 
+            const isExpanded = !!expandedUserIds[u.id];
+
             return (
-              <tr
-                key={u.id}
-                className={
-                  "border-b border-slate-800/60 text-[13px] " +
-                  (idx % 2 === 0 ? "bg-slate-950/40" : "bg-slate-950/20")
-                }
-              >
-                <td className="px-4 py-2">{u.name || "—"}</td>
-                <td className="px-4 py-2">{u.email}</td>
-                <td className="px-4 py-2">{u.brokerage || "—"}</td>
+              <>
+                <tr
+                  key={u.id}
+                  className={
+                    "border-b border-slate-800/60 text-[13px] " +
+                    (idx % 2 === 0 ? "bg-slate-950/40" : "bg-slate-950/20")
+                  }
+                >
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-900"
+                        onClick={() =>
+                          setExpandedUserIds((prev) => ({ ...prev, [u.id]: !prev[u.id] }))
+                        }
+                        title="Toggle workspace details"
+                      >
+                        {isExpanded ? "–" : "+"}
+                      </button>
+                      <span>{u.name || "—"}</span>
+                    </div>
+                  </td>
 
-                <td className="px-4 py-2">
-                  <select
-                    disabled={savingUserId === u.id}
-                    value={u.role}
-                    onChange={(e) => onChangeRole(u.id, e.target.value as UserRole)}
-                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px]"
-                  >
-                    <option value="USER">USER</option>
-                    <option value="ADMIN">ADMIN</option>
-                  </select>
-                </td>
+                  <td className="px-4 py-2">{u.email}</td>
+                  <td className="px-4 py-2">{u.brokerage || "—"}</td>
 
-                <td className="px-4 py-2">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold ${accessClass}`}
-                      title="Access override"
-                    >
-                      {a.label}
-                    </span>
-
+                  <td className="px-4 py-2">
                     <select
                       disabled={savingUserId === u.id}
-                      value={u.accessLevel}
-                      onChange={(e) => onChangeAccess(u.id, e.target.value as AccessLevel)}
+                      value={u.role}
+                      onChange={(e) => onChangeRole(u.id, e.target.value as UserRole)}
                       className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px]"
                     >
-                      <option value="PAID">PAID</option>
-                      <option value="BETA">BETA</option>
-                      <option value="EXPIRED">EXPIRED</option>
+                      <option value="USER">USER</option>
+                      <option value="ADMIN">ADMIN</option>
                     </select>
-                  </div>
-                </td>
+                  </td>
 
-                <td className="px-4 py-2">
-                  <select
-                    disabled={savingUserId === u.id}
-                    value={u.plan}
-                    onChange={(e) => onChangePlan(u.id, e.target.value as SubscriptionPlan)}
-                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px]"
-                  >
-                    <option value="STARTER">STARTER</option>
-                    <option value="PRO">PRO</option>
-                    <option value="FOUNDING_PRO">FOUNDING_PRO</option>
-                  </select>
-                </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold ${accessClass}`}
+                        title="Access override"
+                      >
+                        {a.label}
+                      </span>
 
-                <td className="px-4 py-2">{u.subscriptionStatus ?? "—"}</td>
-                <td className="px-4 py-2">{formatDateTime(u.trialEndsAt)}</td>
-                <td className="px-4 py-2">{formatDateTime(u.currentPeriodEnd)}</td>
+                      <select
+                        disabled={savingUserId === u.id}
+                        value={u.accessLevel}
+                        onChange={(e) => onChangeAccess(u.id, e.target.value as AccessLevel)}
+                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px]"
+                      >
+                        <option value="PAID">PAID</option>
+                        <option value="BETA">BETA</option>
+                        <option value="EXPIRED">EXPIRED</option>
+                      </select>
+                    </div>
+                  </td>
 
-                <td className="px-4 py-2">
-                  <span
-                    className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${stripeBadgeClass}`}
-                  >
-                    {stripeBadge.label}
-                  </span>
-                </td>
-
-                <td className="px-4 py-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => onOpenStripe(u.stripeCustomerId)}
-                      disabled={!u.stripeCustomerId}
-                      className={
-                        "rounded px-2 py-1 text-[11px] font-semibold border " +
-                        (u.stripeCustomerId
-                          ? "bg-indigo-500/10 text-indigo-200 border-indigo-400/30 hover:bg-indigo-500/20"
-                          : "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed")
-                      }
-                    >
-                      Portal
-                    </button>
-
-                    <button
-                      onClick={() => onSyncStripe(u.id)}
-                      disabled={!u.stripeCustomerId || syncingUserId === u.id}
-                      className={
-                        "rounded px-2 py-1 text-[11px] font-semibold border " +
-                        (!u.stripeCustomerId || syncingUserId === u.id
-                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
-                          : "bg-sky-500/10 text-sky-200 border-sky-400/30 hover:bg-sky-500/20")
-                      }
-                    >
-                      {syncingUserId === u.id ? "Syncing…" : "Sync"}
-                    </button>
-                  </div>
-
-                  <div className="mt-1 text-[10px] text-slate-500">
-                    {u.stripeCustomerId ? `cus: …${u.stripeCustomerId.slice(-6)}` : "no customer"}
-                  </div>
-                </td>
-
-                <td className="px-4 py-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={() => onGrantBeta(u.id)}
+                  <td className="px-4 py-2">
+                    <select
                       disabled={savingUserId === u.id}
-                      className={
-                        "rounded px-2 py-1 text-[11px] font-semibold border " +
-                        (savingUserId === u.id
-                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
-                          : "bg-sky-500/10 text-sky-200 border-sky-400/30 hover:bg-sky-500/20")
-                      }
-                      title="Set accessLevel=BETA (no Stripe required)"
+                      value={u.plan}
+                      onChange={(e) => onChangePlan(u.id, e.target.value as SubscriptionPlan)}
+                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px]"
                     >
-                      Grant Beta
-                    </button>
+                      <option value="STARTER">STARTER</option>
+                      <option value="PRO">PRO</option>
+                      <option value="FOUNDING_PRO">FOUNDING_PRO</option>
+                    </select>
+                  </td>
 
-                    <button
-                      onClick={() => onExpireAccess(u.id)}
-                      disabled={savingUserId === u.id}
-                      className={
-                        "rounded px-2 py-1 text-[11px] font-semibold border " +
-                        (savingUserId === u.id
-                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
-                          : "bg-rose-500/10 text-rose-200 border-rose-400/30 hover:bg-rose-500/20")
-                      }
-                      title="Set accessLevel=EXPIRED (forces upgrade modal gating)"
+                  <td className="px-4 py-2">{u.subscriptionStatus ?? "—"}</td>
+                  <td className="px-4 py-2">{formatDateTime(u.trialEndsAt)}</td>
+                  <td className="px-4 py-2">{formatDateTime(u.currentPeriodEnd)}</td>
+
+                  <td className="px-4 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[12px] text-slate-200">{u.workspaceCount}</span>
+                      <span className="text-[10px] text-slate-500">{u.workspaceCount === 1 ? "workspace" : "workspaces"}</span>
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-2">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${stripeBadgeClass}`}
                     >
-                      Expire
-                    </button>
+                      {stripeBadge.label}
+                    </span>
+                  </td>
 
-                    <button
-                      onClick={() => onGrantFoundingPro(u.id)}
-                      disabled={savingUserId === u.id}
-                      className={
-                        "rounded px-2 py-1 text-[11px] font-semibold border " +
-                        (savingUserId === u.id
-                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
-                          : "bg-amber-500/10 text-amber-200 border-amber-400/30 hover:bg-amber-500/20")
-                      }
-                    >
-                      Grant Founding Pro
-                    </button>
-                  </div>
-                </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onOpenStripe(u.stripeCustomerId)}
+                        disabled={!u.stripeCustomerId}
+                        className={
+                          "rounded px-2 py-1 text-[11px] font-semibold border " +
+                          (u.stripeCustomerId
+                            ? "bg-indigo-500/10 text-indigo-200 border-indigo-400/30 hover:bg-indigo-500/20"
+                            : "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed")
+                        }
+                      >
+                        Portal
+                      </button>
 
-                <td className="px-4 py-2">{u.openAITokensUsed}</td>
-                <td className="px-4 py-2">{formatDateTime(u.lastLoginAt)}</td>
-                <td className="px-4 py-2">{formatDateOnly(u.createdAt)}</td>
-              </tr>
+                      <button
+                        onClick={() => onSyncStripe(u.id)}
+                        disabled={!u.stripeCustomerId || syncingUserId === u.id}
+                        className={
+                          "rounded px-2 py-1 text-[11px] font-semibold border " +
+                          (!u.stripeCustomerId || syncingUserId === u.id
+                            ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
+                            : "bg-sky-500/10 text-sky-200 border-sky-400/30 hover:bg-sky-500/20")
+                        }
+                      >
+                        {syncingUserId === u.id ? "Syncing…" : "Sync"}
+                      </button>
+                    </div>
+
+                    <div className="mt-1 text-[10px] text-slate-500">
+                      {u.stripeCustomerId ? `cus: …${u.stripeCustomerId.slice(-6)}` : "no customer"}
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => onGrantBeta(u.id)}
+                        disabled={savingUserId === u.id}
+                        className={
+                          "rounded px-2 py-1 text-[11px] font-semibold border " +
+                          (savingUserId === u.id
+                            ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
+                            : "bg-sky-500/10 text-sky-200 border-sky-400/30 hover:bg-sky-500/20")
+                        }
+                        title="Set accessLevel=BETA (no Stripe required)"
+                      >
+                        Grant Beta
+                      </button>
+
+                      <button
+                        onClick={() => onExpireAccess(u.id)}
+                        disabled={savingUserId === u.id}
+                        className={
+                          "rounded px-2 py-1 text-[11px] font-semibold border " +
+                          (savingUserId === u.id
+                            ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
+                            : "bg-rose-500/10 text-rose-200 border-rose-400/30 hover:bg-rose-500/20")
+                        }
+                        title="Set accessLevel=EXPIRED"
+                      >
+                        Expire
+                      </button>
+
+                      <button
+                        onClick={() => onGrantFoundingPro(u.id)}
+                        disabled={savingUserId === u.id}
+                        className={
+                          "rounded px-2 py-1 text-[11px] font-semibold border " +
+                          (savingUserId === u.id
+                            ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
+                            : "bg-amber-500/10 text-amber-200 border-amber-400/30 hover:bg-amber-500/20")
+                        }
+                      >
+                        Grant Founding Pro
+                      </button>
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-2">{u.openAITokensUsed}</td>
+                  <td className="px-4 py-2">{formatDateTime(u.lastLoginAt)}</td>
+                  <td className="px-4 py-2">{formatDateOnly(u.createdAt)}</td>
+                </tr>
+
+                {isExpanded && (
+                  <tr className="border-b border-slate-800/60 bg-slate-950/70">
+                    <td colSpan={16} className="px-4 py-3">
+                      <div className="rounded-xl border border-slate-800/80 bg-slate-950/40 px-4 py-3">
+                        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">
+                          Workspace memberships
+                        </p>
+
+                        {u.memberships.length === 0 ? (
+                          <p className="mt-2 text-[12px] text-slate-400">No workspace memberships.</p>
+                        ) : (
+                          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                            {u.memberships.map((m) => (
+                              <div
+                                key={`${u.id}:${m.workspaceId}:${m.role}`}
+                                className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-[12px] font-semibold text-slate-100">
+                                      {m.workspaceName}
+                                    </p>
+                                    <p className="text-[10px] text-slate-500">
+                                      ws: …{m.workspaceId.slice(-8)} • created{" "}
+                                      {formatDateOnly(m.workspaceCreatedAt)}
+                                    </p>
+                                  </div>
+                                  <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-200">
+                                    {m.role}
+                                  </span>
+                                </div>
+                                <p className="mt-2 text-[10px] text-slate-500">
+                                  Joined: {m.joinedAt ? formatDateTime(m.joinedAt) : "—"}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
             );
           })}
         </tbody>

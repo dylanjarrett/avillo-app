@@ -1,4 +1,3 @@
-// src/app/api/admin/metrics/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getServerSession } from "next-auth";
@@ -30,7 +29,7 @@ async function requireAdmin() {
     return { errorResponse: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
 
-  return { ok: true };
+  return { ok: true as const };
 }
 
 type MetricsUserRow = {
@@ -44,9 +43,8 @@ async function priceToMonthlyUsd(priceId: string) {
   const price = await stripe.prices.retrieve(priceId);
   const unit = (price.unit_amount ?? 0) / 100;
   const interval = price.recurring?.interval;
-
   if (interval === "year") return unit / 12;
-  return unit; // month or anything else treated as monthly
+  return unit;
 }
 
 export async function GET(req: NextRequest) {
@@ -85,13 +83,24 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    const mrr = activePaid.reduce((sum, u) => sum + (priceMonthly.get(u.stripePriceId!) ?? 0), 0);
+    const mrr = activePaid.reduce(
+      (sum, u) => sum + (priceMonthly.get(u.stripePriceId!) ?? 0),
+      0
+    );
+
+    // Workspace footprint (correct model names)
+    const [totalWorkspaces, totalSeats] = await Promise.all([
+      prisma.workspace.count(),
+      prisma.workspaceUser.count(),
+    ]);
 
     return NextResponse.json({
       totals: {
         totalUsers,
         adminCount,
         activePaidCount: activePaid.length,
+        totalWorkspaces,
+        totalSeats,
       },
       statuses,
       revenue: {

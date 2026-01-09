@@ -1,16 +1,9 @@
-// src/app/api/admin/beta/close/route.ts
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type SessionUser = {
-  id: string;
-  email?: string | null;
-  name?: string | null;
-};
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
@@ -26,7 +19,7 @@ async function requireAdmin() {
 
   const dbUser = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { id: true, role: true, email: true },
+    select: { id: true, role: true },
   });
 
   if (!dbUser || dbUser.role !== "ADMIN") {
@@ -36,15 +29,13 @@ async function requireAdmin() {
     };
   }
 
-  return { ok: true as const, session, dbUser };
+  return { ok: true as const, dbUser };
 }
 
 /**
  * POST /api/admin/beta/close
- * Flips all beta users to expired (forces upgrade modal / gating everywhere).
- *
- * Safe + idempotent:
- * - Running it multiple times is fine; subsequent runs will update 0 users.
+ * Flips all BETA users to EXPIRED (forces upgrade gating everywhere).
+ * Safe + idempotent.
  */
 export async function POST() {
   const auth = await requireAdmin();
@@ -57,23 +48,6 @@ export async function POST() {
       where: { accessLevel: "BETA" as any },
       data: { accessLevel: "EXPIRED" as any },
     });
-
-    // Optional: write an audit event (non-blocking)
-    try {
-      await prisma.cRMActivity.create({
-        data: {
-          userId: auth.dbUser.id,
-          type: "beta_closed",
-          summary: "Beta closed globally (BETA → EXPIRED)",
-          data: {
-            updatedCount: result.count,
-            at: new Date().toISOString(),
-          },
-        },
-      });
-    } catch (e) {
-      console.warn("[admin-beta-close] Failed to write audit:", e);
-    }
 
     return NextResponse.json({
       ok: true,
