@@ -1,3 +1,4 @@
+// src/app/api/twilio/inbound/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import twilio from "twilio";
 import { prisma } from "@/lib/prisma";
@@ -28,18 +29,32 @@ export async function POST(req: NextRequest) {
   const msg = (params.get("Body") || "").trim();
   const upper = msg.toUpperCase();
 
-  // Single-tenant shortcut for now:
-  const userId = process.env.SMS_DEFAULT_USER_ID;
+  /**
+   * Workspace-first routing:
+   * - We need a workspaceId to satisfy schema constraints.
+   * - If you have multiple Twilio numbers per workspace later, map "to" => workspaceId.
+   * - For now, we support a single default workspace.
+   */
+  const workspaceId = process.env.SMS_DEFAULT_WORKSPACE_ID || "";
+  const createdByUserId = process.env.SMS_DEFAULT_USER_ID || null; // optional audit actor
 
-  if (!userId) {
+  if (!workspaceId) {
     const xml = buildTwiml("Thanks! SMS webhook not configured yet.");
     return new NextResponse(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
   }
 
-  // Log inbound
+  // Find a contact in this workspace by phone (optional; helps link inbound to a person)
+  const contact = await prisma.contact.findFirst({
+    where: { workspaceId, phone: from },
+    select: { id: true },
+  });
+
+  // Log inbound SMS (workspace-scoped)
   await prisma.smsMessage.create({
     data: {
-      userId,
+      workspaceId,
+      createdByUserId, // nullable is fine
+      contactId: contact?.id ?? null,
       direction: "INBOUND",
       fromNumber: from,
       toNumber: to,
@@ -49,17 +64,26 @@ export async function POST(req: NextRequest) {
   });
 
   const isStop =
-    upper === "STOP" || upper === "UNSUBSCRIBE" || upper === "CANCEL" || upper === "END" || upper === "QUIT";
+    upper === "STOP" ||
+    upper === "UNSUBSCRIBE" ||
+    upper === "CANCEL" ||
+    upper === "END" ||
+    upper === "QUIT";
 
   if (isStop) {
     await prisma.smsSuppression.upsert({
-      where: { userId_phone: { userId, phone: from } },
+      where: { workspaceId_phone: { workspaceId, phone: from } },
       update: { reason: "STOP" },
-      create: { userId, phone: from, reason: "STOP" },
+      create: {
+        workspaceId,
+        createdByUserId,
+        phone: from,
+        reason: "STOP",
+      },
     });
 
     await prisma.contact.updateMany({
-      where: { userId, phone: from },
+      where: { workspaceId, phone: from },
       data: { smsOptedOutAt: new Date() },
     });
 
@@ -68,10 +92,12 @@ export async function POST(req: NextRequest) {
   }
 
   if (upper === "START" || upper === "YES") {
-    await prisma.smsSuppression.deleteMany({ where: { userId, phone: from } });
+    await prisma.smsSuppression.deleteMany({
+      where: { workspaceId, phone: from },
+    });
 
     await prisma.contact.updateMany({
-      where: { userId, phone: from },
+      where: { workspaceId, phone: from },
       data: { smsOptedOutAt: null },
     });
 

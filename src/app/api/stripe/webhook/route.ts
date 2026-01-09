@@ -90,7 +90,7 @@ function isProPlan(plan: Plan | null | undefined) {
   return plan === "PRO" || plan === "FOUNDING_PRO";
 }
 
-async function pauseAllAutomationsForUser(params: {
+async function pauseAutomationsForUserAcrossWorkspaces(params: {
   userId: string;
   reason: string;
   fromPlan?: Plan | null;
@@ -101,8 +101,17 @@ async function pauseAllAutomationsForUser(params: {
   const { prisma } = await import("@/lib/prisma");
   const { userId, reason, fromPlan, toPlan, fromStatus, toStatus } = params;
 
+  // Find all workspaces this user belongs to (including owned ones via membership table)
+  const memberships = await prisma.workspaceUser.findMany({
+    where: { userId },
+    select: { workspaceId: true },
+  });
+
+  const workspaceIds = memberships.map((m) => m.workspaceId);
+  if (workspaceIds.length === 0) return;
+
   const paused = await prisma.automation.updateMany({
-    where: { userId, active: true },
+    where: { workspaceId: { in: workspaceIds }, active: true },
     data: {
       active: false,
       status: "paused",
@@ -110,27 +119,33 @@ async function pauseAllAutomationsForUser(params: {
     },
   });
 
+  // Audit: write one CRMActivity per workspace (safe + explicit tenant boundary)
   if (paused.count > 0) {
-    try {
-      await prisma.cRMActivity.create({
-        data: {
-          userId,
-          type: "automation_paused",
-          summary: "Automations paused due to plan change",
-          data: {
-            reason,
-            fromPlan,
-            toPlan,
-            fromStatus,
-            toStatus,
-            at: new Date().toISOString(),
-            pausedCount: paused.count,
-          },
-        },
-      });
-    } catch (e) {
-      console.warn("[stripe-webhook] Failed to write CRMActivity audit:", e);
-    }
+    await Promise.all(
+      workspaceIds.map(async (workspaceId) => {
+        try {
+          await prisma.cRMActivity.create({
+            data: {
+              workspaceId,
+              actorUserId: userId,
+              type: "automation_paused",
+              summary: "Automations paused due to plan change",
+              data: {
+                reason,
+                fromPlan,
+                toPlan,
+                fromStatus,
+                toStatus,
+                at: new Date().toISOString(),
+                pausedCount: paused.count,
+              },
+            },
+          });
+        } catch (e) {
+          console.warn("[stripe-webhook] Failed to write CRMActivity audit:", e);
+        }
+      })
+    );
   }
 }
 
@@ -176,21 +191,18 @@ async function updateUserBilling(params: {
   const prevPlan = (user.plan as Plan) ?? "STARTER";
   const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
 
-  // ✅ Any paid checkout / subscription means the workspace is "PAID" access (not EXPIRED).
+  // Any paid checkout/sub update => user accessLevel PAID (your platform gating is user-level)
   await prisma.user.update({
     where: { id: user.id },
     data: {
-      accessLevel: "PAID" as any,
-
+      accessLevel: "PAID",
       plan: plan as any,
       subscriptionStatus: status as any,
-      trialEndsAt: trialEndsAt ?? undefined,
-      currentPeriodEnd: currentPeriodEnd ?? undefined,
-
-      // Ensure ids are always saved
-      stripeCustomerId: stripeCustomerId ?? undefined,
+      trialEndsAt: trialEndsAt ?? null,
+      currentPeriodEnd: currentPeriodEnd ?? null,
+      stripeCustomerId: stripeCustomerId ?? null,
       stripeSubscriptionId: subscription.id,
-      stripePriceId: priceId ?? undefined,
+      stripePriceId: priceId ?? null,
     } as any,
   });
 
@@ -201,7 +213,7 @@ async function updateUserBilling(params: {
     hadPro && (status === "PAST_DUE" || status === "CANCELED" || status === "NONE");
 
   if (lostProByPlan || lostProByStatus) {
-    await pauseAllAutomationsForUser({
+    await pauseAutomationsForUserAcrossWorkspaces({
       userId: user.id,
       reason: lostProByPlan ? "DOWNGRADED_TO_STARTER" : "SUBSCRIPTION_NOT_ACTIVE",
       fromPlan: prevPlan,
@@ -238,11 +250,11 @@ async function handleCanceled(params: { userId?: string | null; stripeCustomerId
   const prevPlan = (user.plan as Plan) ?? "STARTER";
   const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
 
+  // When canceled, you said: keep accessLevel PAID but remove Pro capabilities via plan/status.
   await prisma.user.update({
     where: { id: user.id },
     data: {
-      accessLevel: "PAID" as any, // keep PAID; plan/status control features
-
+      accessLevel: "PAID",
       plan: "STARTER" as any,
       subscriptionStatus: "CANCELED" as any,
       trialEndsAt: null,
@@ -252,7 +264,7 @@ async function handleCanceled(params: { userId?: string | null; stripeCustomerId
     } as any,
   });
 
-  await pauseAllAutomationsForUser({
+  await pauseAutomationsForUserAcrossWorkspaces({
     userId: user.id,
     reason: "SUBSCRIPTION_CANCELED",
     fromPlan: prevPlan,
@@ -284,7 +296,7 @@ export async function POST(req: NextRequest) {
         const stripeCustomerId = getCustomerId(session.customer as any);
         const subscriptionId = getSubscriptionId(session.subscription as any);
 
-        // ✅ Prefer linking by userId
+        // Prefer linking by userId (client_reference_id or metadata)
         const userId =
           (session.client_reference_id as string | null | undefined) ??
           ((session.metadata as any)?.userId as string | null | undefined) ??
@@ -308,7 +320,6 @@ export async function POST(req: NextRequest) {
         const subscription = event.data.object as Stripe.Subscription;
         const stripeCustomerId = getCustomerId(subscription.customer as any);
 
-        // ✅ Also support userId on subscription metadata (if set)
         const userId = ((subscription.metadata as any)?.userId as string | null | undefined) ?? null;
 
         if (!stripeCustomerId && !userId) break;
