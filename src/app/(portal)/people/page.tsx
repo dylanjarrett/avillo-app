@@ -45,6 +45,13 @@ type PartnerProfile = {
   profileUrl: string;
 };
 
+type ContactPin = {
+  id: string;
+  name: string;
+  nameKey?: string;
+  attachedAt?: string | null;
+};
+
 type Contact = {
   id?: string;
   name: string;
@@ -55,17 +62,19 @@ type Contact = {
   stage: Stage | null;
   clientRole: ClientRole;
 
-
   priceRange: string;
   areas: string;
   timeline: string;
   source: string;
   email: string;
   phone: string;
+
   notes: ContactNote[];
   linkedListings: LinkedListing[];
 
   partnerProfile?: PartnerProfile | null;
+
+  pins: ContactPin[];
 };
 
 
@@ -324,10 +333,9 @@ export default function CrmPage() {
             email: c.email ?? "",
             phone: c.phone ?? "",
             notes: Array.isArray(c.notes) ? c.notes : [],
-            linkedListings: Array.isArray(c.linkedListings)
-              ? c.linkedListings
-              : [],
+            linkedListings: Array.isArray(c.linkedListings) ? c.linkedListings : [],
             partnerProfile: c.partnerProfile ?? null,
+            pins: Array.isArray(c.pins) ? c.pins : [],
           };
         });
 
@@ -424,13 +432,19 @@ export default function CrmPage() {
           c.partnerProfile?.profileUrl,
         ].filter(Boolean).join(" ").toLowerCase();
 
+        const pinsText = (c.pins ?? [])
+          .map((p) => p.name)
+          .join(" ")
+          .toLowerCase();
+
         return (
           c.name.toLowerCase().includes(q) ||
           c.areas.toLowerCase().includes(q) ||
           c.priceRange.toLowerCase().includes(q) ||
           partnerText.includes(q) ||
           notesText.includes(q) ||
-          linkedListingAddresses.includes(q)
+          linkedListingAddresses.includes(q) ||
+          pinsText.includes(q) 
         );
       });
     }
@@ -546,6 +560,7 @@ export default function CrmPage() {
             profileUrl: "",
           }
         : null,
+      pins: [],
     };
 
     setSelectedId("new");
@@ -749,21 +764,22 @@ export default function CrmPage() {
 
       const data = await res.json();
 
-      const saved: Contact = {
+     const saved: Contact = {
         id: data.contact.id,
         name: data.contact.name ?? "",
         label: data.contact.label ?? "",
         relationshipType:
           (data.contact.relationshipType === "partner" ? "partner" : "client") as RelationshipType,
         partnerProfile: data.contact.partnerProfile ?? null,
-        
+
         stage:
-      data.contact.relationshipType === "partner"
-        ? null
-        : (data.contact.stage as Stage) &&
-          ["new", "warm", "hot", "past"].includes(data.contact.stage)
-        ? (data.contact.stage as Stage)
-        : "new",
+          data.contact.relationshipType === "partner"
+            ? null
+            : (data.contact.stage as Stage) &&
+              ["new", "warm", "hot", "past"].includes(data.contact.stage)
+            ? (data.contact.stage as Stage)
+            : "new",
+
         clientRole: normalizeClientRole(data.contact.clientRole),
         priceRange: data.contact.priceRange ?? "",
         areas: data.contact.areas ?? "",
@@ -775,6 +791,8 @@ export default function CrmPage() {
         linkedListings: Array.isArray(data.contact.linkedListings)
           ? data.contact.linkedListings
           : (activeContact.linkedListings ?? []),
+
+        pins: Array.isArray(data.contact.pins) ? data.contact.pins : (activeContact.pins ?? []),
       };
 
       // Update local list
@@ -921,10 +939,9 @@ export default function CrmPage() {
           email: c.email ?? "",
           phone: c.phone ?? "",
           notes: Array.isArray(c.notes) ? c.notes : [],
-          linkedListings: Array.isArray(c.linkedListings)
-            ? c.linkedListings
-            : [],
+          linkedListings: Array.isArray(c.linkedListings) ? c.linkedListings : [],
           partnerProfile: c.partnerProfile ?? null,
+          pins: Array.isArray(c.pins) ? c.pins : [],
         };
       });
 
@@ -1128,7 +1145,7 @@ export default function CrmPage() {
         )}
 
         {/* Filters + search */}
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="flex flex-col gap-2">
             {/* NEW: Client / Partner filter (always visible) */}
             <div className="inline-flex flex-wrap gap-2 text-[11px]">
@@ -1164,14 +1181,18 @@ export default function CrmPage() {
                     label="All"
                     active={roleFilter === "all"}
                     variant="filter"
-                    onClick={() => {clearSelection(); setRoleFilter("all");
+                    onClick={() => {
+                      clearSelection();
+                      setRoleFilter("all");
                     }}
                   />
                   <FilterPill
                     label="Buyers"
                     active={roleFilter === "buyers"}
                     variant="filter"
-                    onClick={() => {clearSelection(); setRoleFilter("buyers");
+                    onClick={() => {
+                      clearSelection();
+                      setRoleFilter("buyers");
                     }}
                     count={buyersCount}
                   />
@@ -1179,7 +1200,9 @@ export default function CrmPage() {
                     label="Sellers"
                     active={roleFilter === "sellers"}
                     variant="filter"
-                    onClick={() => {clearSelection(); setRoleFilter("sellers");
+                    onClick={() => {
+                      clearSelection();
+                      setRoleFilter("sellers");
                     }}
                     count={sellersCount}
                   />
@@ -1191,28 +1214,36 @@ export default function CrmPage() {
                     label="New"
                     active={stageFilter === "new"}
                     badgeColor="new"
-                    onClick={() => {clearSelection(); handleStageFilterClick("new");
+                    onClick={() => {
+                      clearSelection();
+                      handleStageFilterClick("new");
                     }}
                   />
                   <FilterPill
                     label="Warm"
                     active={stageFilter === "warm"}
                     badgeColor="warm"
-                    onClick={() => {clearSelection(); handleStageFilterClick("warm");
+                    onClick={() => {
+                      clearSelection();
+                      handleStageFilterClick("warm");
                     }}
                   />
                   <FilterPill
                     label="Hot"
                     active={stageFilter === "hot"}
                     badgeColor="hot"
-                    onClick={() => {clearSelection(); handleStageFilterClick("hot");
+                    onClick={() => {
+                      clearSelection();
+                      handleStageFilterClick("hot");
                     }}
                   />
                   <FilterPill
                     label="Past / sphere"
                     active={stageFilter === "past"}
                     badgeColor="past"
-                    onClick={() => {clearSelection(); handleStageFilterClick("past");
+                    onClick={() => {
+                      clearSelection();
+                      handleStageFilterClick("past");
                     }}
                   />
                 </div>
@@ -1220,11 +1251,11 @@ export default function CrmPage() {
             )}
           </div>
 
-          <div className="w-full md:w-72">
+          <div className="w-full md:w-72 md:pt-[2px]">
             <input
               value={search}
-              onChange={(e) => {clearSelection(); setSearch(e.target.value);}}
-              placeholder="Search by name, area, notes..."
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name, area, pins..."
               className="avillo-input w-full text-slate-50"
             />
           </div>
@@ -1981,7 +2012,7 @@ export default function CrmPage() {
     (kept mounted — no remount, no refetch spam)
 ---------------------------- */}
     <div className={activeTab === "pins" ? "block" : "hidden"}>
-      {activeContact ? (
+      {activeContact?.id ? (
         <PeoplePins
           contactId={activeContact.id}
           disabled={saving || deleting}
@@ -1992,7 +2023,7 @@ export default function CrmPage() {
         />
       ) : (
         <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3 text-[11px] text-[var(--avillo-cream-muted)]">
-          Select a contact to start pinning.
+          Save this contact first, then you can add pins.
         </div>
       )}
     </div>

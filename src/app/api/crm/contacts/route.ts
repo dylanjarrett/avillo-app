@@ -163,6 +163,15 @@ function shapeContact(contactRecord: any, linkedListings: LinkedListing[] = []) 
       : [],
 
     linkedListings: isPartner ? [] : linkedListings,
+
+    pins: Array.isArray(contactRecord.pins)
+  ? contactRecord.pins.map((cp: any) => ({
+      id: cp.id,
+      name: cp.pin?.name ?? "",
+      nameKey: cp.pin?.nameKey ?? "",
+      attachedAt: cp.createdAt?.toISOString?.() ?? null,
+    }))
+  : [],
   };
 }
 
@@ -218,8 +227,13 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       include: {
-        contactNotes: true,
-        partnerProfile: true,
+  contactNotes: true,
+  partnerProfile: true,
+        pins: {
+          include: {
+            pin: true, 
+          },
+        },
       },
     });
 
@@ -370,7 +384,13 @@ export async function POST(req: NextRequest) {
     if (id) {
       const existing = await prisma.contact.findFirst({
         where: { id, workspaceId: ctx.workspaceId },
-        include: { contactNotes: true, partnerProfile: true },
+        include: {
+          contactNotes: true,
+          partnerProfile: true,
+          pins: {
+            include: { pin: true },
+          },
+        },
       });
 
       if (!existing) return NextResponse.json({ error: "Contact not found." }, { status: 404 });
@@ -441,7 +461,13 @@ export async function POST(req: NextRequest) {
         const updated = await tx.contact.update({
           where: { id: existing.id },
           data,
-          include: { contactNotes: true, partnerProfile: true },
+          include: {
+            contactNotes: true,
+            partnerProfile: true,
+            pins: {
+              include: { pin: true },
+            },
+          },
         });
 
         await tx.cRMActivity.create({
@@ -524,7 +550,13 @@ export async function POST(req: NextRequest) {
             ? { partnerProfile: { create: partnerProfilePayload } }
             : {}),
         },
-        include: { contactNotes: true, partnerProfile: true },
+        include: {
+          contactNotes: true,
+          partnerProfile: true,
+          pins: {
+            include: { pin: true },
+          },
+        },
       });
 
       await prisma.cRMActivity.create({
