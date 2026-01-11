@@ -27,6 +27,13 @@ enum WorkspaceRole {
   AGENT
 }
 
+enum WorkspaceInviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
 enum SubscriptionPlan {
   STARTER
   PRO
@@ -124,34 +131,36 @@ model User {
   sessions Session[]
 
   // Workspace relations
-  ownedWorkspaces       Workspace[]     @relation("UserOwnedWorkspaces")
-  workspaceMemberships  WorkspaceUser[]
+  createdWorkspaces        Workspace[]       @relation("WorkspaceCreatedBy")
+  workspaceMemberships     WorkspaceUser[]
+  workspaceInvitesSent     WorkspaceInvite[] @relation("WorkspaceInviteInvitedBy")
+  workspaceInvitesAccepted WorkspaceInvite[] @relation("WorkspaceInviteAcceptedBy")
 
   // Audit / assignment relations (workspace-scoped records)
-  createdContacts       Contact[]       @relation("ContactCreatedBy")
-  ownedContacts         Contact[]       @relation("ContactOwner")
+  createdContacts Contact[] @relation("ContactCreatedBy")
+  ownedContacts   Contact[] @relation("ContactOwner")
 
-  createdListings       Listing[]       @relation("ListingCreatedBy")
-  ownedListings         Listing[]       @relation("ListingOwner")
+  createdListings Listing[] @relation("ListingCreatedBy")
+  ownedListings   Listing[] @relation("ListingOwner")
 
-  createdTasks          Task[]          @relation("TaskCreatedBy")
-  assignedTasks         Task[]          @relation("TaskAssignedTo")
+  createdTasks  Task[] @relation("TaskCreatedBy")
+  assignedTasks Task[] @relation("TaskAssignedTo")
 
-  activityActor         Activity[]      @relation("ActivityActor")
-  crmActivityActor      CRMActivity[]   @relation("CRMActivityActor")
+  activityActor    Activity[]    @relation("ActivityActor")
+  crmActivityActor CRMActivity[] @relation("CRMActivityActor")
 
-  intelligenceOutputs   IntelligenceOutput[] @relation("IntelligenceCreatedBy")
-  crmRecords            CRMRecord[]     @relation("CRMRecordCreatedBy")
-  automations           Automation[]    @relation("AutomationCreatedBy")
+  intelligenceOutputs IntelligenceOutput[] @relation("IntelligenceCreatedBy")
+  crmRecords          CRMRecord[]          @relation("CRMRecordCreatedBy")
+  automations         Automation[]         @relation("AutomationCreatedBy")
 
-  smsMessages           SmsMessage[]    @relation("SmsMessageCreatedBy")
-  smsSuppressions       SmsSuppression[] @relation("SmsSuppressionCreatedBy")
+  smsMessages     SmsMessage[]     @relation("SmsMessageCreatedBy")
+  smsSuppressions SmsSuppression[] @relation("SmsSuppressionCreatedBy")
 
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
 
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   createdPins        Pin[]        @relation("PinCreatedBy")
   createdContactPins ContactPin[] @relation("ContactPinCreatedBy")
@@ -164,8 +173,8 @@ model Workspace {
   id   String @id @default(cuid())
   name String
 
-  ownerId String
-  owner   User @relation("UserOwnedWorkspaces", fields: [ownerId], references: [id], onDelete: Cascade)
+  createdByUserId String?
+  createdByUser   User?   @relation("WorkspaceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -180,14 +189,15 @@ model Workspace {
   tasks               Task[]
   intelligenceOutputs IntelligenceOutput[]
   crmRecords          CRMRecord[]
-  automations          Automation[]
-  automationRuns       AutomationRun[]
-  smsMessages          SmsMessage[]
-  smsSuppressions      SmsSuppression[]
-  pins                 Pin[]
-  contactPins          ContactPin[]
+  automations         Automation[]
+  automationRuns      AutomationRun[]
+  smsMessages         SmsMessage[]
+  smsSuppressions     SmsSuppression[]
+  pins                Pin[]
+  contactPins         ContactPin[]
+  invites             WorkspaceInvite[]
 
-  @@index([ownerId])
+  @@index([createdByUserId])
 }
 
 model WorkspaceUser {
@@ -197,15 +207,50 @@ model WorkspaceUser {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   role WorkspaceRole @default(AGENT)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  joinedAt  DateTime  @default(now())
+  removedAt DateTime?
 
   @@unique([workspaceId, userId])
   @@index([userId])
   @@index([workspaceId])
+  @@index([workspaceId, removedAt])
+}
+
+model WorkspaceInvite {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  email    String
+  emailKey String
+  role     WorkspaceRole @default(AGENT)
+
+  token      String                @unique
+  status     WorkspaceInviteStatus @default(PENDING)
+  expiresAt  DateTime
+  acceptedAt DateTime?
+
+  invitedByUserId String?
+  invitedByUser   User?   @relation("WorkspaceInviteInvitedBy", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  acceptedByUserId String?
+  acceptedByUser   User?     @relation("WorkspaceInviteAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+  revokedAt        DateTime?
+
+  @@unique([workspaceId, emailKey])
+  @@index([acceptedByUserId])
+  @@index([workspaceId, status, expiresAt])
+  @@index([email])
+  @@index([emailKey])
+  @@index([invitedByUserId])
 }
 
 // ---------------------------
@@ -220,10 +265,10 @@ model Contact {
 
   // Audit / assignment (optional)
   createdByUserId String?
-  createdByUser   User? @relation("ContactCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("ContactCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   ownerUserId String?
-  ownerUser   User? @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerUser   User?   @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   firstName String?
   lastName  String?
@@ -243,7 +288,7 @@ model Contact {
   label      String?
 
   // Common attributes
-  pins ContactPin[]
+  pins   ContactPin[]
   notes  String?
   source String?
 
@@ -296,7 +341,6 @@ model PartnerProfile {
   updatedAt DateTime @updatedAt
 }
 
-
 // ---------------------------
 // PINS (WORKSPACE-WIDE BANK)
 // ---------------------------
@@ -314,8 +358,7 @@ model Pin {
   nameKey String
 
   createdByUserId String?
-  createdByUser   User? @relation("PinCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-
+  createdByUser   User?   @relation("PinCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -343,23 +386,21 @@ model ContactPin {
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   pinId String
-  pin   Pin @relation(fields: [pinId], references: [id], onDelete: Cascade)
+  pin   Pin    @relation(fields: [pinId], references: [id], onDelete: Cascade)
 
   createdByUserId String?
-  createdByUser   User? @relation("ContactPinCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("ContactPinCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
   // Prevent duplicate attachments
   @@unique([contactId, pinId])
   @@index([workspaceId, contactId, pinId])
-
   // Fast queries for filters/search
   @@index([workspaceId, contactId])
   @@index([workspaceId, pinId])
   @@index([createdByUserId])
 }
-
 
 // ---------------------------
 // LISTINGS
@@ -373,10 +414,10 @@ model Listing {
 
   // Audit / assignment (optional)
   createdByUserId String?
-  createdByUser   User? @relation("ListingCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("ListingCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   ownerUserId String?
-  ownerUser   User? @relation("ListingOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerUser   User?   @relation("ListingOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   // Primary seller contact for this listing
   seller          Contact? @relation("SellerListings", fields: [sellerContactId], references: [id])
@@ -453,7 +494,7 @@ model Activity {
 
   // Who performed the action (optional; keep null for system events)
   actorUserId String?
-  actorUser   User? @relation("ActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorUser   User?   @relation("ActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
@@ -486,7 +527,7 @@ model CRMActivity {
 
   // Who performed the action (optional)
   actorUserId String?
-  actorUser   User? @relation("CRMActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorUser   User?   @relation("CRMActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
@@ -514,7 +555,7 @@ model IntelligenceOutput {
 
   // Who ran/saved it (optional)
   createdByUserId String?
-  createdByUser   User? @relation("IntelligenceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("IntelligenceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   engine IntelligenceEngine
 
@@ -565,10 +606,10 @@ model Task {
 
   // Audit / assignment
   createdByUserId String?
-  createdByUser   User? @relation("TaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("TaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   assignedToUserId String?
-  assignedToUser   User? @relation("TaskAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  assignedToUser   User?   @relation("TaskAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
 
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -683,7 +724,7 @@ model CRMRecord {
 
   // Who created/ingested it (optional)
   createdByUserId String?
-  createdByUser   User? @relation("CRMRecordCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("CRMRecordCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   raw       String
   processed String
@@ -707,7 +748,7 @@ model Automation {
 
   // Who created it (optional)
   createdByUserId String?
-  createdByUser   User? @relation("AutomationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("AutomationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   name        String
   description String?
@@ -749,7 +790,7 @@ model AutomationStepGroup {
 }
 
 model AutomationRun {
-  id           String @id @default(cuid())
+  id String @id @default(cuid())
 
   automationId String
   automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
@@ -809,7 +850,7 @@ model SmsSuppression {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   createdByUserId String?
-  createdByUser   User? @relation("SmsSuppressionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("SmsSuppressionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   phone  String
   reason String @default("STOP")
@@ -829,7 +870,7 @@ model SmsMessage {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   createdByUserId String?
-  createdByUser   User? @relation("SmsMessageCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation("SmsMessageCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   contactId  String?
   direction  SmsDirection
