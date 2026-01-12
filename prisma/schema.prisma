@@ -27,6 +27,11 @@ enum WorkspaceRole {
   AGENT
 }
 
+enum WorkspaceType {
+  PERSONAL
+  TEAM
+}
+
 enum WorkspaceInviteStatus {
   PENDING
   ACCEPTED
@@ -38,6 +43,7 @@ enum SubscriptionPlan {
   STARTER
   PRO
   FOUNDING_PRO
+  ENTERPRISE
 }
 
 enum SubscriptionStatus {
@@ -115,16 +121,9 @@ model User {
   lastLoginAt       DateTime?
   openAITokensUsed  Int       @default(0)
 
-  // Billing / subscription state
-  accessLevel        AccessLevel        @default(EXPIRED)
-  plan               SubscriptionPlan   @default(STARTER)
-  subscriptionStatus SubscriptionStatus @default(NONE)
-  trialEndsAt        DateTime?
-  currentPeriodEnd   DateTime?
-
-  stripeCustomerId     String? @db.VarChar(255)
-  stripeSubscriptionId String? @db.VarChar(255)
-  stripePriceId        String? @db.VarChar(255)
+  // Workspace default context (workspace-first billing + routing)
+  defaultWorkspaceId String?
+  defaultWorkspace   Workspace? @relation("UserDefaultWorkspace", fields: [defaultWorkspaceId], references: [id], onDelete: SetNull)
 
   // NextAuth relations
   accounts Account[]
@@ -164,6 +163,8 @@ model User {
 
   createdPins        Pin[]        @relation("PinCreatedBy")
   createdContactPins ContactPin[] @relation("ContactPinCreatedBy")
+
+  @@index([defaultWorkspaceId])
 }
 
 // ---------------------------
@@ -173,13 +174,36 @@ model Workspace {
   id   String @id @default(cuid())
   name String
 
+  type            WorkspaceType @default(PERSONAL)
   createdByUserId String?
-  createdByUser   User?   @relation("WorkspaceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?         @relation("WorkspaceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // ---------------------------
+  // BILLING (SOURCE OF TRUTH)
+  // ---------------------------
+  accessLevel        AccessLevel        @default(EXPIRED)
+  plan               SubscriptionPlan   @default(STARTER)
+  subscriptionStatus SubscriptionStatus @default(NONE)
+  trialEndsAt        DateTime?
+  currentPeriodEnd   DateTime?
+
+  // Stripe identifiers (workspace-scoped)
+  stripeCustomerId     String? @db.VarChar(255)
+  stripeSubscriptionId String? @db.VarChar(255)
+
+  // Optional: store price ids if you want to display/configure per-workspace pricing cleanly
+  stripeBasePriceId String? @db.VarChar(255)
+  stripeSeatPriceId String? @db.VarChar(255)
+
+  // Seats
+  seatLimit     Int @default(1)
+  includedSeats Int @default(1)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members WorkspaceUser[]
+  members          WorkspaceUser[]
+  defaultedByUsers User[]          @relation("UserDefaultWorkspace")
 
   // Tenant-owned relations
   contacts            Contact[]
@@ -197,7 +221,12 @@ model Workspace {
   contactPins         ContactPin[]
   invites             WorkspaceInvite[]
 
+  @@unique([stripeCustomerId])
+  @@unique([stripeSubscriptionId])
   @@index([createdByUserId])
+  @@index([plan, subscriptionStatus])
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
 }
 
 model WorkspaceUser {
@@ -247,7 +276,7 @@ model WorkspaceInvite {
 
   @@unique([workspaceId, emailKey])
   @@index([acceptedByUserId])
-  @@index([workspaceId, status, expiresAt])
+  @@index([workspaceId, status, revokedAt, expiresAt])
   @@index([email])
   @@index([emailKey])
   @@index([invitedByUserId])

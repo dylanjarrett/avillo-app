@@ -1,19 +1,25 @@
 // src/app/api/stripe/checkout/verify/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 if (!stripeSecretKey) throw new Error("Missing STRIPE_SECRET_KEY in environment.");
-
 const stripe = new Stripe(stripeSecretKey);
 
-type Plan = "STARTER" | "PRO" | "FOUNDING_PRO";
+type Plan = "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE";
 type Status = "NONE" | "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED";
+
+function noStore(json: any, status = 200) {
+  return NextResponse.json(json, {
+    status,
+    headers: { "Cache-Control": "no-store, max-age=0" },
+  });
+}
 
 function unixToDate(x: unknown): Date | null {
   if (typeof x !== "number" || !x) return null;
@@ -24,31 +30,6 @@ function getUnixField(obj: unknown, key: string): number | null {
   if (!obj || typeof obj !== "object") return null;
   const val = (obj as Record<string, unknown>)[key];
   return typeof val === "number" ? val : null;
-}
-
-function planFromPriceId(priceId?: string | null): Plan | null {
-  if (!priceId) return null;
-
-  const starterMonthly =
-    process.env.STRIPE_STARTER_MONTHLY_PRICE_ID ?? "price_1SeSegPuU4fMjEPuYJkTyNGf";
-  const starterAnnual =
-    process.env.STRIPE_STARTER_ANNUAL_PRICE_ID ?? "price_1SeSegPuU4fMjEPubZKAdkNu";
-
-  const proMonthly =
-    process.env.STRIPE_PRO_MONTHLY_PRICE_ID ?? "price_1SeSgXPuU4fMjEPuoyfcpKQ3";
-  const proAnnual =
-    process.env.STRIPE_PRO_ANNUAL_PRICE_ID ?? "price_1SeSflPuU4fMjEPuWLykKHPr";
-
-  const foundingMonthly =
-    process.env.STRIPE_FOUNDING_PRO_MONTHLY_PRICE_ID ?? "price_1SeShcPuU4fMjEPuwuE9sIxf";
-  const foundingAnnual =
-    process.env.STRIPE_FOUNDING_PRO_ANNUAL_PRICE_ID ?? "price_1SeShQPuU4fMjEPug2u9Z3KP";
-
-  if (priceId === starterMonthly || priceId === starterAnnual) return "STARTER";
-  if (priceId === proMonthly || priceId === proAnnual) return "PRO";
-  if (priceId === foundingMonthly || priceId === foundingAnnual) return "FOUNDING_PRO";
-
-  return null;
 }
 
 function statusFromStripe(sub: Stripe.Subscription): Status {
@@ -67,98 +48,152 @@ function statusFromStripe(sub: Stripe.Subscription): Status {
   }
 }
 
-function getPrimaryPriceId(sub: Stripe.Subscription): string | null {
-  return sub.items?.data?.[0]?.price?.id ?? null;
+/**
+ * Determine plan from subscription items by matching known price IDs.
+ * For enterprise, we identify it by the presence of the enterprise base monthly price.
+ */
+function planFromSubscription(sub: Stripe.Subscription): {
+  plan: Plan;
+  basePriceId: string | null;
+  seatPriceId: string | null;
+} {
+  const starterMonthly = process.env.STRIPE_STARTER_MONTHLY_PRICE_ID;
+  const starterAnnual = process.env.STRIPE_STARTER_ANNUAL_PRICE_ID;
+
+  const proMonthly = process.env.STRIPE_PRO_MONTHLY_PRICE_ID;
+  const proAnnual = process.env.STRIPE_PRO_ANNUAL_PRICE_ID;
+
+  const foundingMonthly = process.env.STRIPE_FOUNDING_PRO_MONTHLY_PRICE_ID;
+  const foundingAnnual = process.env.STRIPE_FOUNDING_PRO_ANNUAL_PRICE_ID;
+
+  const enterpriseBaseMonthly = process.env.STRIPE_ENTERPRISE_BASE_MONTHLY_PRICE_ID;
+  const enterpriseSeatMonthly = process.env.STRIPE_ENTERPRISE_SEAT_MONTHLY_PRICE_ID;
+
+  const priceIds = sub.items?.data?.map((i) => i.price?.id).filter(Boolean) as string[];
+
+  const has = (id?: string) => !!id && priceIds.includes(id);
+
+  // Enterprise is base + optional seats (both monthly only)
+  if (has(enterpriseBaseMonthly)) {
+    return {
+      plan: "ENTERPRISE",
+      basePriceId: enterpriseBaseMonthly ?? null,
+      seatPriceId: has(enterpriseSeatMonthly) ? enterpriseSeatMonthly ?? null : enterpriseSeatMonthly ?? null,
+    };
+  }
+
+  if (has(starterMonthly) || has(starterAnnual)) {
+    const basePriceId = has(starterAnnual) ? starterAnnual! : starterMonthly!;
+    return { plan: "STARTER", basePriceId, seatPriceId: null };
+  }
+
+  if (has(proMonthly) || has(proAnnual)) {
+    const basePriceId = has(proAnnual) ? proAnnual! : proMonthly!;
+    return { plan: "PRO", basePriceId, seatPriceId: null };
+  }
+
+  if (has(foundingMonthly) || has(foundingAnnual)) {
+    const basePriceId = has(foundingAnnual) ? foundingAnnual! : foundingMonthly!;
+    return { plan: "FOUNDING_PRO", basePriceId, seatPriceId: null };
+  }
+
+  // Fallback if none match (shouldn't happen if you only sell known prices)
+  return { plan: "STARTER", basePriceId: sub.items?.data?.[0]?.price?.id ?? null, seatPriceId: null };
 }
 
-type VerifyBody = {
-  sessionId?: string;
-};
+type VerifyBody = { sessionId?: string };
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    const email = (session?.user?.email || "").toLowerCase().trim();
+    const ctx = await requireWorkspace();
+    if (!ctx.ok) return noStore(ctx.error, ctx.status);
 
-    if (!email) {
-      return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+    const { workspaceId, workspaceRole, userId } = ctx;
+
+    if (workspaceRole !== "OWNER" && workspaceRole !== "ADMIN") {
+      return noStore({ ok: false, error: "Forbidden" }, 403);
     }
 
     const body = ((await req.json().catch(() => ({}))) || {}) as VerifyBody;
-    const sessionId = (body.sessionId || "").trim();
+    const sessionId = String(body.sessionId || "").trim();
+    if (!sessionId) return noStore({ ok: false, error: "Missing sessionId." }, 400);
 
-    if (!sessionId) {
-      return NextResponse.json({ error: "Missing sessionId." }, { status: 400 });
-    }
-
-    const { prisma } = await import("@/lib/prisma");
-
-    const dbUser = await prisma.user.findUnique({
-      where: { email },
-      select: { id: true, stripeCustomerId: true },
-    });
-
-    if (!dbUser) {
-      return NextResponse.json({ error: "Account not found." }, { status: 404 });
-    }
-
-    // Retrieve checkout session and subscription
     const checkout = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["subscription"],
     });
 
-    const customerId = typeof checkout.customer === "string" ? checkout.customer : checkout.customer?.id;
+    const customerId =
+      typeof checkout.customer === "string" ? checkout.customer : checkout.customer?.id || null;
+
     const subscription =
       typeof checkout.subscription === "string"
         ? await stripe.subscriptions.retrieve(checkout.subscription)
         : (checkout.subscription as Stripe.Subscription | null);
 
     if (!customerId || !subscription) {
-      return NextResponse.json(
-        { error: "Checkout not complete yet. Try again in a moment." },
-        { status: 409 }
-      );
+      return noStore({ ok: false, error: "Checkout not complete yet. Try again in a moment." }, 409);
     }
 
-    // Update customer id if missing (helps recover from earlier state)
-    if (!dbUser.stripeCustomerId) {
-      await prisma.user.update({
-        where: { id: dbUser.id },
-        data: { stripeCustomerId: customerId as any },
-      });
+    const refWorkspaceId =
+      (checkout.client_reference_id as string | null | undefined) ??
+      (checkout.metadata?.workspaceId as string | undefined) ??
+      (subscription.metadata?.workspaceId as string | undefined) ??
+      null;
+
+    if (refWorkspaceId && refWorkspaceId !== workspaceId) {
+      return noStore({ ok: false, error: "Checkout session does not match this workspace." }, 403);
     }
 
-    const priceId = getPrimaryPriceId(subscription);
-    const plan = planFromPriceId(priceId) ?? "STARTER";
+    const { plan, basePriceId, seatPriceId } = planFromSubscription(subscription);
     const status = statusFromStripe(subscription);
 
-    const trialEndUnix = getUnixField(subscription, "trial_end");
-    const currentPeriodEndUnix = getUnixField(subscription, "current_period_end");
+    const trialEndsAt = unixToDate(getUnixField(subscription, "trial_end"));
+    const currentPeriodEnd = unixToDate(getUnixField(subscription, "current_period_end"));
 
-    const trialEndsAt = unixToDate(trialEndUnix);
-    const currentPeriodEnd = unixToDate(currentPeriodEndUnix);
+    // For enterprise, compute seatLimit from subscription items
+    const includedSeats = 5;
+    let seatLimit: number | undefined = undefined;
 
-    await prisma.user.update({
-      where: { id: dbUser.id },
+    if (plan === "ENTERPRISE") {
+      const seatItem = subscription.items.data.find(
+        (i) => i.price?.id === process.env.STRIPE_ENTERPRISE_SEAT_MONTHLY_PRICE_ID
+      );
+      const extraSeats = Math.max(0, Number(seatItem?.quantity ?? 0));
+      seatLimit = includedSeats + extraSeats;
+    }
+
+    await prisma.workspace.update({
+      where: { id: workspaceId },
       data: {
-        // ✅ This is the critical fix for your “still locked on billing”
-        accessLevel: "PAID" as any,
-
+        accessLevel: "PAID",
         plan: plan as any,
         subscriptionStatus: status as any,
-        trialEndsAt: trialEndsAt ?? undefined,
-        currentPeriodEnd: currentPeriodEnd ?? undefined,
+        trialEndsAt: trialEndsAt ?? null,
+        currentPeriodEnd: currentPeriodEnd ?? null,
+        stripeCustomerId: customerId,
         stripeSubscriptionId: subscription.id,
-        stripePriceId: priceId ?? undefined,
-      },
+        stripeBasePriceId: basePriceId ?? null,
+        stripeSeatPriceId: seatPriceId ?? null,
+        ...(plan === "ENTERPRISE"
+          ? { includedSeats, seatLimit: seatLimit ?? includedSeats }
+          : {}),
+        updatedAt: new Date(),
+      } as any,
     });
 
-    return NextResponse.json({ ok: true });
+    await prisma.user
+      .update({
+        where: { id: userId },
+        data: { defaultWorkspaceId: workspaceId },
+      })
+      .catch(() => null);
+
+    return noStore({ ok: true });
   } catch (err: any) {
     console.error("[checkout-verify] error", err);
-    return NextResponse.json(
-      { error: err?.message || "Unable to verify checkout right now." },
-      { status: 500 }
+    return noStore(
+      { ok: false, error: err?.message || "Unable to verify checkout right now." },
+      500
     );
   }
 }

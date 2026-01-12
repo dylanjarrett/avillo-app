@@ -1,9 +1,8 @@
+// src/app/api/admin/metrics/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import type { UserRole, SubscriptionStatus } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,29 +14,24 @@ const stripe = new Stripe(stripeSecretKey);
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
+  const email = String(session?.user?.email || "").trim().toLowerCase();
 
-  if (!session?.user?.email) {
-    return { errorResponse: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  if (!email) {
+    return { ok: false as const, res: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
 
+  const { prisma } = await import("@/lib/prisma");
   const dbUser = await prisma.user.findUnique({
-    where: { email: session.user.email },
+    where: { email },
     select: { role: true },
   });
 
   if (!dbUser || dbUser.role !== "ADMIN") {
-    return { errorResponse: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+    return { ok: false as const, res: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
 
   return { ok: true as const };
 }
-
-type MetricsUserRow = {
-  id: string;
-  role: UserRole;
-  subscriptionStatus: SubscriptionStatus | null;
-  stripePriceId: string | null;
-};
 
 async function priceToMonthlyUsd(priceId: string) {
   const price = await stripe.prices.retrieve(priceId);
@@ -47,64 +41,78 @@ async function priceToMonthlyUsd(priceId: string) {
   return unit;
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   const auth = await requireAdmin();
-  if ("errorResponse" in auth) return auth.errorResponse;
+  if (!auth.ok) return auth.res;
 
   try {
-    const users = (await prisma.user.findMany({
+    const { prisma } = await import("@/lib/prisma");
+
+    const [totalUsers, adminCount] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { role: "ADMIN" as any } }),
+    ]);
+
+    // Workspace subscription footprint
+    const workspaces = await prisma.workspace.findMany({
       select: {
         id: true,
-        role: true,
+        plan: true,
         subscriptionStatus: true,
-        stripePriceId: true,
+        stripeBasePriceId: true,
+        stripeSeatPriceId: true,
       },
-    })) as MetricsUserRow[];
+    });
 
-    const totalUsers = users.length;
-    const adminCount = users.filter((u) => u.role === "ADMIN").length;
+    const totalWorkspaces = workspaces.length;
 
     const statuses: Record<string, number> = {};
-    for (const u of users) {
-      const s = u.subscriptionStatus ?? "NONE";
+    for (const w of workspaces) {
+      const s = String(w.subscriptionStatus || "NONE");
       statuses[s] = (statuses[s] ?? 0) + 1;
     }
 
-    const activePaid = users.filter(
-      (u) => u.subscriptionStatus === "ACTIVE" && !!u.stripePriceId
+    const activePaid = workspaces.filter(
+      (w) => w.subscriptionStatus === ("ACTIVE" as any) && !!w.stripeBasePriceId
     );
 
-    const uniquePriceIds = Array.from(new Set(activePaid.map((u) => u.stripePriceId!)));
+    const uniqueBasePriceIds = Array.from(
+      new Set(activePaid.map((w) => w.stripeBasePriceId!).filter(Boolean))
+    );
 
     const priceMonthly = new Map<string, number>();
     await Promise.all(
-      uniquePriceIds.map(async (pid) => {
+      uniqueBasePriceIds.map(async (pid) => {
         priceMonthly.set(pid, await priceToMonthlyUsd(pid));
       })
     );
 
+    // Base MRR (ignores seats add-on; you can extend later)
     const mrr = activePaid.reduce(
-      (sum, u) => sum + (priceMonthly.get(u.stripePriceId!) ?? 0),
+      (sum, w) => sum + (priceMonthly.get(w.stripeBasePriceId!) ?? 0),
       0
     );
 
-    // Workspace footprint (correct model names)
-    const [totalWorkspaces, totalSeats] = await Promise.all([
-      prisma.workspace.count(),
+    const [totalMemberships, activeMemberships] = await Promise.all([
       prisma.workspaceUser.count(),
+      prisma.workspaceUser.count({ where: { removedAt: null } }),
     ]);
 
     return NextResponse.json({
       totals: {
         totalUsers,
         adminCount,
-        activePaidCount: activePaid.length,
         totalWorkspaces,
-        totalSeats,
+        totalMemberships,
+        activeMemberships,
+        activePaidWorkspaceCount: activePaid.length,
       },
-      statuses,
+      workspaceStatuses: statuses,
       revenue: {
-        mrrUsd: Math.round(mrr * 100) / 100,
+        baseMrrUsd: Math.round(mrr * 100) / 100,
+      },
+      notes: {
+        mrr: "Base MRR computed from stripeBasePriceId only (seat add-ons not included).",
       },
     });
   } catch (err) {

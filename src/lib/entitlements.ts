@@ -1,7 +1,7 @@
 // src/lib/entitlements.ts
 import { prisma } from "@/lib/prisma";
 
-export type PlanWire = "STARTER" | "PRO" | "FOUNDING_PRO" | string | null | undefined;
+export type PlanWire = "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE" | string | null | undefined;
 export type StatusWire =
   | "NONE"
   | "TRIALING"
@@ -21,11 +21,12 @@ export type EntitlementKey =
   | "AUTOMATIONS_WRITE"
   | "AUTOMATIONS_RUN"
   | "AUTOMATIONS_TRIGGER"
-  | "AUTOMATIONS_PERSIST";
+  | "AUTOMATIONS_PERSIST"
+  | "WORKSPACE_INVITE"; // new: gate invites to enterprise
 
 export type Entitlements = {
   accessLevel: "BETA" | "PAID" | "EXPIRED";
-  plan: "STARTER" | "PRO" | "FOUNDING_PRO";
+  plan: "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE";
   subscriptionStatus: "NONE" | "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED";
   isPaidTier: boolean;
   can: Record<EntitlementKey, boolean>;
@@ -35,6 +36,7 @@ function normalizeAccess(access: AccessWire): Entitlements["accessLevel"] {
   const a = String(access || "").toUpperCase();
   if (a === "BETA") return "BETA";
   if (a === "EXPIRED") return "EXPIRED";
+  // default to PAID for any unknown (keeps old rows from breaking)
   return "PAID";
 }
 
@@ -42,6 +44,7 @@ function normalizePlan(plan: PlanWire): Entitlements["plan"] {
   const p = String(plan || "").toUpperCase();
   if (p === "PRO") return "PRO";
   if (p === "FOUNDING_PRO" || p === "FOUNDINGPRO" || p === "FOUNDING-PRO") return "FOUNDING_PRO";
+  if (p === "ENTERPRISE") return "ENTERPRISE";
   return "STARTER";
 }
 
@@ -56,24 +59,18 @@ function normalizeStatus(status: StatusWire): Entitlements["subscriptionStatus"]
 
 /**
  * Paid-access rule:
- * - PRO / FOUNDING_PRO are paid tiers
+ * - Pro / Founding Pro / Enterprise are paid tiers
  * - Allow ACTIVE + TRIALING
- * - (Optional) allow PAST_DUE if you want grace
  */
 function hasPaidAccess(plan: Entitlements["plan"], status: Entitlements["subscriptionStatus"]) {
-  const paidPlan = plan === "STARTER" || plan === "PRO" || plan === "FOUNDING_PRO";
+  const paidPlan = plan === "PRO" || plan === "FOUNDING_PRO" || plan === "ENTERPRISE";
   if (!paidPlan) return false;
-
-  if (status === "ACTIVE" || status === "TRIALING") return true;
-
-  // Optional grace:
-  // return status === "PAST_DUE";
-  return false;
+  return status === "ACTIVE" || status === "TRIALING";
 }
 
-export async function getEntitlementsForUserId(userId: string): Promise<Entitlements> {
-  const u = await prisma.user.findUnique({
-    where: { id: userId },
+export async function getEntitlementsForWorkspaceId(workspaceId: string): Promise<Entitlements> {
+  const w = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
     select: {
       accessLevel: true as any,
       plan: true as any,
@@ -81,14 +78,14 @@ export async function getEntitlementsForUserId(userId: string): Promise<Entitlem
     },
   });
 
-  const accessLevel = normalizeAccess((u as any)?.accessLevel);
-  const plan = normalizePlan((u as any)?.plan);
-  const subscriptionStatus = normalizeStatus((u as any)?.subscriptionStatus);
+  const accessLevel = normalizeAccess((w as any)?.accessLevel);
+  const plan = normalizePlan((w as any)?.plan);
+  const subscriptionStatus = normalizeStatus((w as any)?.subscriptionStatus);
 
-  // Access overrides:
-  // - BETA => treat as paid/unlocked (no Stripe required)
-  // - EXPIRED => always blocked
-  // - PAID => normal Stripe-based access
+  // Overrides:
+  // - BETA => unlock
+  // - EXPIRED => block
+  // - PAID => Stripe rule
   const isPaidTier =
     accessLevel === "BETA"
       ? true
@@ -96,30 +93,27 @@ export async function getEntitlementsForUserId(userId: string): Promise<Entitlem
       ? false
       : hasPaidAccess(plan, subscriptionStatus);
 
-  /**
-   * Your current product decision:
-   * - Starter: can view + design (UI), but cannot save/update/delete or run
-   * - Pro/Founding Pro: full access
-   * - Beta: full access via accessLevel override
-   */
   const can: Entitlements["can"] = {
     // Intelligence
     INTELLIGENCE_GENERATE: isPaidTier,
     INTELLIGENCE_SAVE: isPaidTier,
 
-    // Autopilot / Automations
-    AUTOMATIONS_READ: true, // Starter can view the page + list
-    AUTOMATIONS_WRITE: true, // Starter can edit locally (UI) but not persist
-    AUTOMATIONS_PERSIST: isPaidTier, // gate POST/PUT/DELETE
-    AUTOMATIONS_RUN: isPaidTier, // gate /run
-    AUTOMATIONS_TRIGGER: isPaidTier, // gate background triggers if/when enabled
+    // Automations
+    AUTOMATIONS_READ: true,
+    AUTOMATIONS_WRITE: true,
+    AUTOMATIONS_PERSIST: isPaidTier,
+    AUTOMATIONS_RUN: isPaidTier,
+    AUTOMATIONS_TRIGGER: isPaidTier,
+
+    // Invites: enterprise only
+    WORKSPACE_INVITE: plan === "ENTERPRISE" && (subscriptionStatus === "ACTIVE" || subscriptionStatus === "TRIALING" || accessLevel === "BETA"),
   };
 
   return { accessLevel, plan, subscriptionStatus, isPaidTier, can };
 }
 
-export async function requireEntitlement(userId: string, key: EntitlementKey) {
-  const ent = await getEntitlementsForUserId(userId);
+export async function requireEntitlement(workspaceId: string, key: EntitlementKey) {
+  const ent = await getEntitlementsForWorkspaceId(workspaceId);
   if (ent.can[key]) return { ok: true as const, ent };
 
   return {
@@ -128,11 +122,11 @@ export async function requireEntitlement(userId: string, key: EntitlementKey) {
     error: {
       code: "PLAN_REQUIRED",
       entitlement: key,
-      requiredPlan: "PRO",
+      requiredPlan: key === "WORKSPACE_INVITE" ? "ENTERPRISE" : "PRO",
       accessLevel: ent.accessLevel,
       plan: ent.plan,
       subscriptionStatus: ent.subscriptionStatus,
-      message: "This feature requires Avillo Pro.",
+      message: key === "WORKSPACE_INVITE" ? "Inviting seats requires Avillo Enterprise." : "This feature requires Avillo Pro.",
     },
   };
 }

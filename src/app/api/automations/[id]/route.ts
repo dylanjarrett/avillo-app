@@ -1,6 +1,6 @@
+// src/app/api/automations/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireEntitlement, getEntitlementsForUserId } from "@/lib/entitlements";
 import { requireWorkspace } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -21,19 +21,54 @@ function safeBool(v: any, fallback: boolean) {
   return fallback;
 }
 
+type AutoEnt = {
+  canRun: boolean;
+  canWrite: boolean;
+  lockedReason: string | null;
+};
+
+async function getAutomationEntitlements(workspaceId: string): Promise<AutoEnt> {
+  const ws = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { accessLevel: true, plan: true, subscriptionStatus: true },
+  });
+
+  if (!ws) {
+    return { canRun: false, canWrite: false, lockedReason: "Workspace not found." };
+  }
+
+  if (ws.accessLevel === "BETA") {
+    return { canRun: true, canWrite: true, lockedReason: null };
+  }
+
+  if (ws.accessLevel === "EXPIRED") {
+    return {
+      canRun: false,
+      canWrite: false,
+      lockedReason: "Paused: workspace access is expired.",
+    };
+  }
+
+  const paidPlansThatAllowAutomation = new Set(["PRO", "FOUNDING_PRO", "ENTERPRISE"]);
+  const canRun = paidPlansThatAllowAutomation.has(ws.plan);
+  const canWrite = paidPlansThatAllowAutomation.has(ws.plan);
+
+  return {
+    canRun,
+    canWrite,
+    lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+  };
+}
+
 export async function GET(_: NextRequest, { params }: { params: { id: string } }) {
   try {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-    const ent = await getEntitlementsForUserId(ctx.userId);
-    const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
+    const ent = await getAutomationEntitlements(ctx.workspaceId);
 
     const automation = await prisma.automation.findFirst({
-      where: {
-        id: params.id,
-        workspaceId: ctx.workspaceId,
-      },
+      where: { id: params.id, workspaceId: ctx.workspaceId },
       include: {
         steps: true,
         runs: {
@@ -48,8 +83,8 @@ export async function GET(_: NextRequest, { params }: { params: { id: string } }
 
     return NextResponse.json({
       ...automation,
-      effectiveActive: canRun ? automation.active : false,
-      lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+      effectiveActive: ent.canRun ? automation.active : false,
+      lockedReason: ent.canRun ? null : ent.lockedReason,
     });
   } catch (err) {
     console.error("/api/automations/[id] GET error:", err);
@@ -62,8 +97,13 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-    const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_WRITE");
-    if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
+    const ent = await getAutomationEntitlements(ctx.workspaceId);
+    if (!ent.canWrite) {
+      return NextResponse.json(
+        { error: ent.lockedReason ?? "Upgrade required." },
+        { status: 402 }
+      );
+    }
 
     const body = await req.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
@@ -75,7 +115,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const name = body.name != null ? safeString(body.name, 120) : undefined;
-    const description = body.description != null ? safeString(body.description, 500) || null : undefined;
+    const description =
+      body.description != null ? safeString(body.description, 500) || null : undefined;
     const trigger = body.trigger != null ? safeString(body.trigger, 80) : undefined;
 
     const triggerConfig = body.triggerConfig != null ? safeJson(body.triggerConfig) : undefined;
@@ -111,7 +152,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           ...(status !== undefined ? { status } : {}),
           ...(reEnroll !== undefined ? { reEnroll } : {}),
           ...(timezone !== undefined ? { timezone } : {}),
-          // keep attribution fresh (optional)
+          // optional audit refresh
           createdByUserId: ctx.userId,
         },
       });
@@ -137,13 +178,12 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       },
     });
 
-    const ent = await getEntitlementsForUserId(ctx.userId);
-    const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
+    const entAfter = await getAutomationEntitlements(ctx.workspaceId);
 
     return NextResponse.json({
       ...updatedFull,
-      effectiveActive: canRun ? (updatedFull as any)?.active : false,
-      lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+      effectiveActive: entAfter.canRun ? (updatedFull as any)?.active : false,
+      lockedReason: entAfter.canRun ? null : entAfter.lockedReason,
     });
   } catch (err) {
     console.error("/api/automations/[id] PUT error:", err);
@@ -159,8 +199,13 @@ export async function DELETE(_: NextRequest, { params }: { params: { id: string 
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-    const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_WRITE");
-    if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
+    const ent = await getAutomationEntitlements(ctx.workspaceId);
+    if (!ent.canWrite) {
+      return NextResponse.json(
+        { error: ent.lockedReason ?? "Upgrade required." },
+        { status: 402 }
+      );
+    }
 
     const existing = await prisma.automation.findFirst({
       where: { id: params.id, workspaceId: ctx.workspaceId },

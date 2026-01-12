@@ -14,6 +14,7 @@ const TOOL_ITEMS = [
 const ACCOUNT_ITEMS = [
   { href: "/billing", label: "Billing" },
   { href: "/account", label: "Account" },
+  { href: "/workspace", label: "Workspace" }, 
 ];
 
 type SidebarProps = {

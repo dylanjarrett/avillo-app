@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 
-// All routes that should require a logged-in user
 const PROTECTED_PATHS = [
   "/",
   "/dashboard",
@@ -13,12 +12,11 @@ const PROTECTED_PATHS = [
   "/billing",
   "/account",
   "/autopilot",
+  "/workspace",
 ];
 
 function isProtectedPath(pathname: string) {
-  return PROTECTED_PATHS.some(
-    (base) => pathname === base || pathname.startsWith(`${base}/`)
-  );
+  return PROTECTED_PATHS.some((base) => pathname === base || pathname.startsWith(`${base}/`));
 }
 
 function isPublicPath(pathname: string) {
@@ -47,53 +45,21 @@ function normalizeAccessLevel(x: unknown) {
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // ✅ HARD RULE: never gate API routes with middleware.
-  // (App Router API routes should be auth-checked inside the route handler.)
-  if (pathname.startsWith("/api")) {
-    return NextResponse.next();
-  }
+  // ✅ never gate API routes in middleware
+  if (pathname.startsWith("/api")) return NextResponse.next();
 
-  // ---- Public / always-allowed paths ----
-  if (isPublicPath(pathname)) {
-    return NextResponse.next();
-  }
+  if (isPublicPath(pathname)) return NextResponse.next();
+  if (!isProtectedPath(pathname)) return NextResponse.next();
 
-  // If this path isn't protected, just continue
-  if (!isProtectedPath(pathname)) {
-    return NextResponse.next();
-  }
-
-  // ---- Check auth token ----
   const token = await getToken({ req });
 
-  // No session → send to login with callbackUrl
   if (!token) {
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("callbackUrl", pathname || "/dashboard");
     return NextResponse.redirect(loginUrl);
   }
 
-  // ---- Access enforcement (beta / expired) ----
-  // We try to read accessLevel from the token first (fast).
-  // If it’s not there, we fallback to /api/account/me.
-  let accessLevel = normalizeAccessLevel((token as any)?.accessLevel);
-
-  if (accessLevel === "UNKNOWN") {
-    try {
-      const meUrl = new URL("/api/account/me", req.url);
-      const meRes = await fetch(meUrl.toString(), {
-        headers: { cookie: req.headers.get("cookie") || "" },
-        cache: "no-store",
-      });
-
-      if (meRes.ok) {
-        const data = await meRes.json().catch(() => null);
-        accessLevel = normalizeAccessLevel(data?.user?.accessLevel);
-      }
-    } catch {
-      // If the lookup fails, don’t hard-block. Avoid accidental lockouts.
-    }
-  }
+  const accessLevel = normalizeAccessLevel((token as any)?.accessLevel);
 
   // If access is expired, force them to Billing (but let Billing load)
   if (accessLevel === "EXPIRED" && !pathname.startsWith("/billing")) {
@@ -103,12 +69,10 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(billingUrl);
   }
 
-  // Authenticated + allowed → continue
+  // Unknown => don’t hard-block (prevents accidental lockouts)
   return NextResponse.next();
 }
 
-// ✅ Apply middleware ONLY to non-API routes.
-// This prevents /api/* from ever being intercepted.
 export const config = {
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };

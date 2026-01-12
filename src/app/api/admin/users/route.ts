@@ -1,35 +1,32 @@
+// src/app/api/admin/users/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import {
-  UserRole,
-  SubscriptionPlan,
-  SubscriptionStatus,
-  AccessLevel,
-  WorkspaceRole,
-} from "@prisma/client";
+import { UserRole, WorkspaceRole } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
+  const email = String(session?.user?.email || "").trim().toLowerCase();
 
-  if (!session?.user?.email) {
-    return { errorResponse: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  if (!email) {
+    return { ok: false as const, res: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
 
+  const { prisma } = await import("@/lib/prisma");
+
   const dbUser = await prisma.user.findUnique({
-    where: { email: session.user.email },
+    where: { email },
     select: { id: true, role: true },
   });
 
   if (!dbUser || dbUser.role !== "ADMIN") {
-    return { errorResponse: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+    return { ok: false as const, res: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
 
-  return { ok: true as const, dbUser };
+  return { ok: true as const, adminId: dbUser.id };
 }
 
 function toIso(d: Date | null | undefined) {
@@ -41,11 +38,19 @@ function buildUserPayload(u: any) {
     (u.workspaceMemberships || []).map((wm: any) => ({
       workspaceId: wm.workspace?.id as string,
       workspaceName: (wm.workspace?.name as string) ?? "Untitled workspace",
-      workspaceCreatedAt: wm.workspace?.createdAt
-        ? new Date(wm.workspace.createdAt).toISOString()
-        : null,
+      workspaceCreatedAt: wm.workspace?.createdAt ? new Date(wm.workspace.createdAt).toISOString() : null,
       role: wm.role as WorkspaceRole,
-      joinedAt: toIso(wm.createdAt ?? null),
+      joinedAt: toIso(wm.joinedAt ?? wm.createdAt ?? null),
+
+      // Billing now lives here:
+      workspaceAccessLevel: wm.workspace?.accessLevel ?? null,
+      workspacePlan: wm.workspace?.plan ?? null,
+      workspaceSubscriptionStatus: wm.workspace?.subscriptionStatus ?? null,
+      workspaceTrialEndsAt: toIso(wm.workspace?.trialEndsAt ?? null),
+      workspaceCurrentPeriodEnd: toIso(wm.workspace?.currentPeriodEnd ?? null),
+      stripeCustomerId: wm.workspace?.stripeCustomerId ?? null,
+      stripeSubscriptionId: wm.workspace?.stripeSubscriptionId ?? null,
+      stripeBasePriceId: wm.workspace?.stripeBasePriceId ?? null,
     })) ?? [];
 
   return {
@@ -54,165 +59,220 @@ function buildUserPayload(u: any) {
     email: u.email,
     brokerage: u.brokerage ?? "",
     role: u.role as UserRole,
-
-    accessLevel: (u.accessLevel ?? "PAID") as AccessLevel,
-
-    plan: u.plan as SubscriptionPlan,
-    subscriptionStatus: (u.subscriptionStatus ?? null) as SubscriptionStatus | null,
-    trialEndsAt: toIso(u.trialEndsAt ?? null),
-    currentPeriodEnd: toIso(u.currentPeriodEnd ?? null),
-
-    stripeCustomerId: u.stripeCustomerId ?? null,
-    stripeSubscriptionId: u.stripeSubscriptionId ?? null,
-    stripePriceId: u.stripePriceId ?? null,
+    defaultWorkspaceId: u.defaultWorkspaceId ?? null,
 
     openAITokensUsed: u.openAITokensUsed ?? 0,
     lastLoginAt: toIso(u.lastLoginAt ?? null),
     createdAt: u.createdAt.toISOString(),
 
-    // NEW (workspace footprint)
     workspaceCount: memberships.length,
     memberships,
   };
 }
 
-// GET all users (with workspace memberships)
+// GET all users (with workspace memberships + workspace billing)
 export async function GET() {
   const auth = await requireAdmin();
-  if ("errorResponse" in auth) return auth.errorResponse;
+  if (!auth.ok) return auth.res;
 
   try {
+    const { prisma } = await import("@/lib/prisma");
+
     const users = await prisma.user.findMany({
       orderBy: { createdAt: "asc" },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        brokerage: true,
+        role: true,
+        defaultWorkspaceId: true,
+        openAITokensUsed: true,
+        lastLoginAt: true,
+        createdAt: true,
         workspaceMemberships: {
-          include: {
-            workspace: { select: { id: true, name: true, createdAt: true } },
-          },
           orderBy: { createdAt: "asc" },
+          select: {
+            role: true,
+            joinedAt: true,
+            createdAt: true,
+            workspace: {
+              select: {
+                id: true,
+                name: true,
+                createdAt: true,
+
+                accessLevel: true,
+                plan: true,
+                subscriptionStatus: true,
+                trialEndsAt: true,
+                currentPeriodEnd: true,
+                stripeCustomerId: true,
+                stripeSubscriptionId: true,
+                stripeBasePriceId: true,
+              },
+            },
+          },
         },
       },
     });
 
-    return NextResponse.json({ users: users.map(buildUserPayload) });
+    return NextResponse.json({ ok: true, users: users.map(buildUserPayload) });
   } catch (err) {
     console.error("Admin GET users error:", err);
     return NextResponse.json({ error: "Failed to load users" }, { status: 500 });
   }
 }
 
-// PATCH update role/plan/status/accessLevel OR run actions
+/**
+ * PATCH
+ * - Update platform user role (ADMIN/USER)
+ * - Run workspace billing actions (grant beta, expire, grant founding pro, etc.)
+ */
 export async function PATCH(req: NextRequest) {
   const auth = await requireAdmin();
-  if ("errorResponse" in auth) return auth.errorResponse;
+  if (!auth.ok) return auth.res;
 
   try {
+    const { prisma } = await import("@/lib/prisma");
+
     const body = await req.json().catch(() => ({}));
-    const { userId, role, plan, subscriptionStatus, accessLevel, action } = body ?? {};
+    const userId = String(body?.userId || "");
 
-    if (!userId) {
-      return NextResponse.json({ error: "Missing userId" }, { status: 400 });
-    }
+    if (!userId) return NextResponse.json({ error: "Missing userId" }, { status: 400 });
 
-    // One-click action: grant Founding Pro (manual override)
-    if (action === "GRANT_FOUNDING_PRO") {
-      const updated = await prisma.user.update({
-        where: { id: userId },
-        data: {
-          accessLevel: "PAID",
-          plan: "FOUNDING_PRO",
-          subscriptionStatus: "ACTIVE",
-          trialEndsAt: null,
-          currentPeriodEnd: null,
-        } as any,
-        include: {
-          workspaceMemberships: {
-            include: { workspace: { select: { id: true, name: true, createdAt: true } } },
-          },
-        },
-      });
+    // Load user's default workspace for convenience
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, defaultWorkspaceId: true },
+    });
+    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-      return NextResponse.json({ user: buildUserPayload(updated) });
-    }
+    const workspaceId =
+      String(body?.workspaceId || "") || String(user.defaultWorkspaceId || "");
 
-    // One-click action: grant Beta access (no Stripe)
-    if (action === "GRANT_BETA") {
-      const updated = await prisma.user.update({
-        where: { id: userId },
-        data: {
-          accessLevel: "BETA",
-          subscriptionStatus: "NONE",
-        } as any,
-        include: {
-          workspaceMemberships: {
-            include: { workspace: { select: { id: true, name: true, createdAt: true } } },
-          },
-        },
-      });
-
-      return NextResponse.json({ user: buildUserPayload(updated) });
-    }
-
-    // One-click action: expire access
-    if (action === "EXPIRE_ACCESS") {
-      const updated = await prisma.user.update({
-        where: { id: userId },
-        data: { accessLevel: "EXPIRED" } as any,
-        include: {
-          workspaceMemberships: {
-            include: { workspace: { select: { id: true, name: true, createdAt: true } } },
-          },
-        },
-      });
-
-      return NextResponse.json({ user: buildUserPayload(updated) });
-    }
-
-    const data: any = {};
-
-    if (role) {
-      if (!Object.values(UserRole).includes(role)) {
+    // Optional: update platform user role
+    if (body?.role) {
+      const role = String(body.role);
+      if (!Object.values(UserRole).includes(role as any)) {
         return NextResponse.json({ error: "Invalid role" }, { status: 400 });
       }
-      data.role = role;
+      await prisma.user.update({ where: { id: userId }, data: { role: role as any } });
     }
 
-    if (accessLevel) {
-      if (!Object.values(AccessLevel).includes(accessLevel)) {
-        return NextResponse.json({ error: "Invalid accessLevel" }, { status: 400 });
+    const action = String(body?.action || "");
+
+    // If action targets workspace billing, require a workspaceId
+    const needsWorkspace =
+      action === "GRANT_BETA" ||
+      action === "EXPIRE_ACCESS" ||
+      action === "GRANT_FOUNDING_PRO" ||
+      action === "GRANT_PRO" ||
+      action === "GRANT_STARTER";
+
+    if (needsWorkspace && !workspaceId) {
+      return NextResponse.json(
+        { error: "Missing workspaceId (and user has no defaultWorkspaceId)." },
+        { status: 400 }
+      );
+    }
+
+    // Workspace billing actions
+    if (action && needsWorkspace) {
+      if (action === "GRANT_BETA") {
+        await prisma.workspace.update({
+          where: { id: workspaceId },
+          data: {
+            accessLevel: "BETA" as any,
+            subscriptionStatus: "NONE" as any,
+          } as any,
+        });
       }
-      data.accessLevel = accessLevel;
-    }
 
-    if (plan) {
-      if (!Object.values(SubscriptionPlan).includes(plan)) {
-        return NextResponse.json({ error: "Invalid plan" }, { status: 400 });
+      if (action === "EXPIRE_ACCESS") {
+        await prisma.workspace.update({
+          where: { id: workspaceId },
+          data: { accessLevel: "EXPIRED" as any } as any,
+        });
       }
-      data.plan = plan;
-    }
 
-    if (subscriptionStatus) {
-      if (!Object.values(SubscriptionStatus).includes(subscriptionStatus)) {
-        return NextResponse.json({ error: "Invalid subscriptionStatus" }, { status: 400 });
+      if (action === "GRANT_FOUNDING_PRO") {
+        await prisma.workspace.update({
+          where: { id: workspaceId },
+          data: {
+            accessLevel: "PAID" as any,
+            plan: "FOUNDING_PRO" as any,
+            subscriptionStatus: "ACTIVE" as any,
+            trialEndsAt: null,
+            currentPeriodEnd: null,
+          } as any,
+        });
       }
-      data.subscriptionStatus = subscriptionStatus;
+
+      if (action === "GRANT_PRO") {
+        await prisma.workspace.update({
+          where: { id: workspaceId },
+          data: {
+            accessLevel: "PAID" as any,
+            plan: "PRO" as any,
+            subscriptionStatus: "ACTIVE" as any,
+          } as any,
+        });
+      }
+
+      if (action === "GRANT_STARTER") {
+        await prisma.workspace.update({
+          where: { id: workspaceId },
+          data: {
+            accessLevel: "PAID" as any,
+            plan: "STARTER" as any,
+            subscriptionStatus: "ACTIVE" as any,
+          } as any,
+        });
+      }
     }
 
-    if (Object.keys(data).length === 0) {
-      return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
-    }
-
-    const updated = await prisma.user.update({
+    // Return refreshed user payload
+    const refreshed = await prisma.user.findUnique({
       where: { id: userId },
-      data,
-      include: {
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        brokerage: true,
+        role: true,
+        defaultWorkspaceId: true,
+        openAITokensUsed: true,
+        lastLoginAt: true,
+        createdAt: true,
         workspaceMemberships: {
-          include: { workspace: { select: { id: true, name: true, createdAt: true } } },
+          orderBy: { createdAt: "asc" },
+          select: {
+            role: true,
+            joinedAt: true,
+            createdAt: true,
+            workspace: {
+              select: {
+                id: true,
+                name: true,
+                createdAt: true,
+
+                accessLevel: true,
+                plan: true,
+                subscriptionStatus: true,
+                trialEndsAt: true,
+                currentPeriodEnd: true,
+                stripeCustomerId: true,
+                stripeSubscriptionId: true,
+                stripeBasePriceId: true,
+              },
+            },
+          },
         },
       },
     });
 
-    return NextResponse.json({ user: buildUserPayload(updated) });
+    return NextResponse.json({ ok: true, user: buildUserPayload(refreshed) });
   } catch (err) {
     console.error("Admin PATCH user error:", err);
     return NextResponse.json({ error: "Failed to update user" }, { status: 500 });

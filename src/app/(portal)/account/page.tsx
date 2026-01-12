@@ -15,8 +15,8 @@ type Profile = {
 };
 
 type ProfileResponse =
-  | { success: true; user: Profile }
-  | { success?: false; error: string };
+  | { ok: true; user: Profile }
+  | { ok: false; error: string };
 
 function normalizePhoneInput(raw: string) {
   return raw.replace(/[^\d+]/g, "").trim();
@@ -89,7 +89,7 @@ export default function AccountPage() {
           return;
         }
 
-        if (!res.ok || !("success" in data) || !data.success) {
+        if (!res.ok || !("ok" in data) || !data.ok) {
           if (!cancelled) {
             setProfileError(
               (data as any)?.error ?? "There was an issue loading your profile."

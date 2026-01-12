@@ -1,7 +1,6 @@
 // src/app/api/automations/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireEntitlement, getEntitlementsForUserId } from "@/lib/entitlements";
 import { requireWorkspace } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -18,16 +17,66 @@ function safeJsonObject(v: any) {
   return {};
 }
 
+type AutoEnt = {
+  canRun: boolean;
+  canWrite: boolean;
+  lockedReason: string | null;
+};
+
+async function getAutomationEntitlements(workspaceId: string): Promise<AutoEnt> {
+  const ws = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: {
+      accessLevel: true,
+      plan: true,
+      subscriptionStatus: true,
+    },
+  });
+
+  // If the workspace doesn’t exist, be safe.
+  if (!ws) {
+    return {
+      canRun: false,
+      canWrite: false,
+      lockedReason: "Workspace not found.",
+    };
+  }
+
+  // Beta can do everything (common during private beta)
+  if (ws.accessLevel === "BETA") {
+    return { canRun: true, canWrite: true, lockedReason: null };
+  }
+
+  // Expired cannot do anything
+  if (ws.accessLevel === "EXPIRED") {
+    return {
+      canRun: false,
+      canWrite: false,
+      lockedReason: "Paused: workspace access is expired.",
+    };
+  }
+
+  // PAID: gate by plan
+  const paidPlansThatAllowAutomation = new Set(["PRO", "FOUNDING_PRO", "ENTERPRISE"]);
+
+  const canRun = paidPlansThatAllowAutomation.has(ws.plan);
+  const canWrite = paidPlansThatAllowAutomation.has(ws.plan);
+
+  return {
+    canRun,
+    canWrite,
+    lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+  };
+}
+
 export async function GET() {
   const ctx = await requireWorkspace();
 
-  // Safer during rebuild: let errors surface with the right status
   if (!ctx.ok) {
-    return NextResponse.json(ctx.error ?? [], { status: ctx.status ?? 401 });
+    return NextResponse.json(ctx.error ?? { error: "Unauthorized" }, { status: ctx.status ?? 401 });
   }
 
-  const ent = await getEntitlementsForUserId(ctx.userId);
-  const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
+  const ent = await getAutomationEntitlements(ctx.workspaceId);
 
   const automations = await prisma.automation.findMany({
     where: { workspaceId: ctx.workspaceId },
@@ -38,8 +87,8 @@ export async function GET() {
   return NextResponse.json(
     automations.map((a) => ({
       ...a,
-      effectiveActive: canRun ? a.active : false,
-      lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+      effectiveActive: ent.canRun ? a.active : false,
+      lockedReason: ent.canRun ? null : ent.lockedReason,
     }))
   );
 }
@@ -48,8 +97,13 @@ export async function POST(req: Request) {
   const ctx = await requireWorkspace();
   if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-  const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_WRITE");
-  if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
+  const ent = await getAutomationEntitlements(ctx.workspaceId);
+  if (!ent.canWrite) {
+    return NextResponse.json(
+      { error: ent.lockedReason ?? "Upgrade required." },
+      { status: 402 }
+    );
+  }
 
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
@@ -105,12 +159,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Failed to load created automation." }, { status: 500 });
   }
 
-  const ent = await getEntitlementsForUserId(ctx.userId);
-  const canRun = Boolean(ent?.can?.AUTOMATIONS_RUN);
+  // Recompute (in case plan changes, etc.)
+  const entAfter = await getAutomationEntitlements(ctx.workspaceId);
 
   return NextResponse.json({
     ...full,
-    effectiveActive: canRun ? full.active : false,
-    lockedReason: canRun ? null : "Paused: upgrade to Avillo Pro to run automations.",
+    effectiveActive: entAfter.canRun ? full.active : false,
+    lockedReason: entAfter.canRun ? null : entAfter.lockedReason,
   });
 }

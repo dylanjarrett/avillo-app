@@ -1,6 +1,7 @@
 // src/app/api/stripe/webhook/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ if (!webhookSecret) throw new Error("Missing STRIPE_WEBHOOK_SECRET in environmen
 
 const stripe = new Stripe(stripeSecretKey);
 
-type Plan = "STARTER" | "PRO" | "FOUNDING_PRO";
+type Plan = "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE";
 type Status = "NONE" | "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED";
 
 function unixToDate(x: unknown): Date | null {
@@ -35,41 +36,6 @@ function getCustomerId(
   return x.id ?? null;
 }
 
-function getSubscriptionId(x: string | Stripe.Subscription | null | undefined) {
-  if (!x) return null;
-  if (typeof x === "string") return x;
-  return x.id ?? null;
-}
-
-function getPrimaryPriceId(sub: Stripe.Subscription): string | null {
-  return sub.items?.data?.[0]?.price?.id ?? null;
-}
-
-function planFromPriceId(priceId?: string | null): Plan | null {
-  if (!priceId) return null;
-
-  const starterMonthly =
-    process.env.STRIPE_STARTER_MONTHLY_PRICE_ID ?? "price_1SeSegPuU4fMjEPuYJkTyNGf";
-  const starterAnnual =
-    process.env.STRIPE_STARTER_ANNUAL_PRICE_ID ?? "price_1SeSegPuU4fMjEPubZKAdkNu";
-
-  const proMonthly =
-    process.env.STRIPE_PRO_MONTHLY_PRICE_ID ?? "price_1SeSgXPuU4fMjEPuoyfcpKQ3";
-  const proAnnual =
-    process.env.STRIPE_PRO_ANNUAL_PRICE_ID ?? "price_1SeSflPuU4fMjEPuWLykKHPr";
-
-  const foundingMonthly =
-    process.env.STRIPE_FOUNDING_PRO_MONTHLY_PRICE_ID ?? "price_1SeShcPuU4fMjEPuwuE9sIxf";
-  const foundingAnnual =
-    process.env.STRIPE_FOUNDING_PRO_ANNUAL_PRICE_ID ?? "price_1SeShQPuU4fMjEPug2u9Z3KP";
-
-  if (priceId === starterMonthly || priceId === starterAnnual) return "STARTER";
-  if (priceId === proMonthly || priceId === proAnnual) return "PRO";
-  if (priceId === foundingMonthly || priceId === foundingAnnual) return "FOUNDING_PRO";
-
-  return null;
-}
-
 function statusFromStripe(sub: Stripe.Subscription): Status {
   switch (sub.status) {
     case "trialing":
@@ -86,173 +52,175 @@ function statusFromStripe(sub: Stripe.Subscription): Status {
   }
 }
 
-function isProPlan(plan: Plan | null | undefined) {
-  return plan === "PRO" || plan === "FOUNDING_PRO";
-}
+/**
+ * Determine plan/base/seat from subscription items.
+ * Enterprise is monthly-only (base monthly + seat monthly).
+ */
+function resolveFromSubscription(sub: Stripe.Subscription): {
+  plan: Plan;
+  basePriceId: string | null;
+  seatPriceId: string | null;
+  seatLimit: number | null;
+  includedSeats: number | null;
+} {
+  const starterMonthly = process.env.STRIPE_STARTER_MONTHLY_PRICE_ID;
+  const starterAnnual = process.env.STRIPE_STARTER_ANNUAL_PRICE_ID;
 
-async function pauseAutomationsForUserAcrossWorkspaces(params: {
-  userId: string;
-  reason: string;
-  fromPlan?: Plan | null;
-  toPlan?: Plan | null;
-  fromStatus?: Status | null;
-  toStatus?: Status | null;
-}) {
-  const { prisma } = await import("@/lib/prisma");
-  const { userId, reason, fromPlan, toPlan, fromStatus, toStatus } = params;
+  const proMonthly = process.env.STRIPE_PRO_MONTHLY_PRICE_ID;
+  const proAnnual = process.env.STRIPE_PRO_ANNUAL_PRICE_ID;
 
-  // Find all workspaces this user belongs to (including owned ones via membership table)
-  const memberships = await prisma.workspaceUser.findMany({
-    where: { userId },
-    select: { workspaceId: true },
-  });
+  const foundingMonthly = process.env.STRIPE_FOUNDING_PRO_MONTHLY_PRICE_ID;
+  const foundingAnnual = process.env.STRIPE_FOUNDING_PRO_ANNUAL_PRICE_ID;
 
-  const workspaceIds = memberships.map((m) => m.workspaceId);
-  if (workspaceIds.length === 0) return;
+  const enterpriseBaseMonthly = process.env.STRIPE_ENTERPRISE_BASE_MONTHLY_PRICE_ID;
+  const enterpriseSeatMonthly = process.env.STRIPE_ENTERPRISE_SEAT_MONTHLY_PRICE_ID;
 
-  const paused = await prisma.automation.updateMany({
-    where: { workspaceId: { in: workspaceIds }, active: true },
-    data: {
-      active: false,
-      status: "paused",
-      updatedAt: new Date(),
-    },
-  });
+  const items = sub.items?.data ?? [];
+  const ids = items.map((i) => i.price?.id).filter(Boolean) as string[];
 
-  // Audit: write one CRMActivity per workspace (safe + explicit tenant boundary)
-  if (paused.count > 0) {
-    await Promise.all(
-      workspaceIds.map(async (workspaceId) => {
-        try {
-          await prisma.cRMActivity.create({
-            data: {
-              workspaceId,
-              actorUserId: userId,
-              type: "automation_paused",
-              summary: "Automations paused due to plan change",
-              data: {
-                reason,
-                fromPlan,
-                toPlan,
-                fromStatus,
-                toStatus,
-                at: new Date().toISOString(),
-                pausedCount: paused.count,
-              },
-            },
-          });
-        } catch (e) {
-          console.warn("[stripe-webhook] Failed to write CRMActivity audit:", e);
-        }
-      })
-    );
+  const has = (id?: string) => !!id && ids.includes(id);
+
+  // Enterprise
+  if (has(enterpriseBaseMonthly)) {
+    const includedSeats = 5;
+    const seatItem = items.find((i) => i.price?.id === enterpriseSeatMonthly);
+    const extraSeats = Math.max(0, Number(seatItem?.quantity ?? 0));
+    const seatLimit = includedSeats + extraSeats;
+
+    return {
+      plan: "ENTERPRISE",
+      basePriceId: enterpriseBaseMonthly ?? null,
+      seatPriceId: enterpriseSeatMonthly ?? null,
+      seatLimit,
+      includedSeats,
+    };
   }
+
+  // Non-enterprise: pick the matching base price
+  if (has(starterMonthly) || has(starterAnnual)) {
+    const basePriceId = has(starterAnnual) ? starterAnnual! : starterMonthly!;
+    return { plan: "STARTER", basePriceId, seatPriceId: null, seatLimit: null, includedSeats: null };
+  }
+
+  if (has(proMonthly) || has(proAnnual)) {
+    const basePriceId = has(proAnnual) ? proAnnual! : proMonthly!;
+    return { plan: "PRO", basePriceId, seatPriceId: null, seatLimit: null, includedSeats: null };
+  }
+
+  if (has(foundingMonthly) || has(foundingAnnual)) {
+    const basePriceId = has(foundingAnnual) ? foundingAnnual! : foundingMonthly!;
+    return {
+      plan: "FOUNDING_PRO",
+      basePriceId,
+      seatPriceId: null,
+      seatLimit: null,
+      includedSeats: null,
+    };
+  }
+
+  // Fallback
+  return {
+    plan: "STARTER",
+    basePriceId: items[0]?.price?.id ?? null,
+    seatPriceId: null,
+    seatLimit: null,
+    includedSeats: null,
+  };
 }
 
-async function updateUserBilling(params: {
-  userId?: string | null;
+/**
+ * Workspace-first billing updater (idempotent).
+ * Locates workspace by:
+ *  1) subscription.metadata.workspaceId, else
+ *  2) Workspace.stripeCustomerId
+ */
+async function upsertWorkspaceBilling(params: {
+  workspaceId?: string | null;
   stripeCustomerId?: string | null;
   subscription: Stripe.Subscription;
 }) {
-  const { prisma } = await import("@/lib/prisma");
-  const { userId, stripeCustomerId, subscription } = params;
+  const { workspaceId, stripeCustomerId, subscription } = params;
 
-  const priceId = getPrimaryPriceId(subscription);
-  const plan = planFromPriceId(priceId) ?? "STARTER";
+  const { plan, basePriceId, seatPriceId, seatLimit, includedSeats } =
+    resolveFromSubscription(subscription);
+
   const status = statusFromStripe(subscription);
-
   const trialEndsAt = unixToDate(getUnixField(subscription, "trial_end"));
   const currentPeriodEnd = unixToDate(getUnixField(subscription, "current_period_end"));
 
-  // Find the user: prefer userId (metadata), fallback to stripeCustomerId
-  const user =
-    (userId
-      ? await prisma.user.findUnique({
-          where: { id: userId },
-          select: { id: true, plan: true, subscriptionStatus: true },
+  const ws =
+    (workspaceId
+      ? await prisma.workspace.findUnique({
+          where: { id: workspaceId },
+          select: { id: true },
         })
       : null) ??
     (stripeCustomerId
-      ? await prisma.user.findFirst({
+      ? await prisma.workspace.findFirst({
           where: { stripeCustomerId },
-          select: { id: true, plan: true, subscriptionStatus: true },
+          select: { id: true },
         })
       : null);
 
-  if (!user) {
-    console.warn("[stripe-webhook] No user match for updateUserBilling", {
-      userId,
+  if (!ws) {
+    console.warn("[stripe-webhook] No workspace match", {
+      workspaceId,
       stripeCustomerId,
       subscriptionId: subscription.id,
     });
     return;
   }
 
-  const prevPlan = (user.plan as Plan) ?? "STARTER";
-  const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
-
-  // Any paid checkout/sub update => user accessLevel PAID (your platform gating is user-level)
-  await prisma.user.update({
-    where: { id: user.id },
+  await prisma.workspace.update({
+    where: { id: ws.id },
     data: {
       accessLevel: "PAID",
       plan: plan as any,
       subscriptionStatus: status as any,
       trialEndsAt: trialEndsAt ?? null,
       currentPeriodEnd: currentPeriodEnd ?? null,
-      stripeCustomerId: stripeCustomerId ?? null,
+      stripeCustomerId: stripeCustomerId ?? undefined,
       stripeSubscriptionId: subscription.id,
-      stripePriceId: priceId ?? null,
+      stripeBasePriceId: basePriceId ?? null,
+      stripeSeatPriceId: seatPriceId ?? null,
+      ...(plan === "ENTERPRISE"
+        ? {
+            includedSeats: includedSeats ?? 5,
+            seatLimit: seatLimit ?? 5,
+          }
+        : {}),
+      updatedAt: new Date(),
     } as any,
   });
-
-  // Pause automations if they lost Pro
-  const hadPro = isProPlan(prevPlan);
-  const lostProByPlan = hadPro && plan === "STARTER";
-  const lostProByStatus =
-    hadPro && (status === "PAST_DUE" || status === "CANCELED" || status === "NONE");
-
-  if (lostProByPlan || lostProByStatus) {
-    await pauseAutomationsForUserAcrossWorkspaces({
-      userId: user.id,
-      reason: lostProByPlan ? "DOWNGRADED_TO_STARTER" : "SUBSCRIPTION_NOT_ACTIVE",
-      fromPlan: prevPlan,
-      toPlan: plan,
-      fromStatus: prevStatus,
-      toStatus: status,
-    });
-  }
 }
 
-async function handleCanceled(params: { userId?: string | null; stripeCustomerId?: string | null }) {
-  const { prisma } = await import("@/lib/prisma");
-  const { userId, stripeCustomerId } = params;
+async function handleSubscriptionDeleted(params: {
+  workspaceId?: string | null;
+  stripeCustomerId?: string | null;
+}) {
+  const { workspaceId, stripeCustomerId } = params;
 
-  const user =
-    (userId
-      ? await prisma.user.findUnique({
-          where: { id: userId },
-          select: { id: true, plan: true, subscriptionStatus: true },
-        })
+  const ws =
+    (workspaceId
+      ? await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
       : null) ??
     (stripeCustomerId
-      ? await prisma.user.findFirst({
+      ? await prisma.workspace.findFirst({
           where: { stripeCustomerId },
-          select: { id: true, plan: true, subscriptionStatus: true },
+          select: { id: true },
         })
       : null);
 
-  if (!user) {
-    console.warn("[stripe-webhook] No user found for cancel", { userId, stripeCustomerId });
+  if (!ws) {
+    console.warn("[stripe-webhook] No workspace found for subscription.deleted", {
+      workspaceId,
+      stripeCustomerId,
+    });
     return;
   }
 
-  const prevPlan = (user.plan as Plan) ?? "STARTER";
-  const prevStatus = (user.subscriptionStatus as Status) ?? "NONE";
-
-  // When canceled, you said: keep accessLevel PAID but remove Pro capabilities via plan/status.
-  await prisma.user.update({
-    where: { id: user.id },
+  await prisma.workspace.update({
+    where: { id: ws.id },
     data: {
       accessLevel: "PAID",
       plan: "STARTER" as any,
@@ -260,17 +228,12 @@ async function handleCanceled(params: { userId?: string | null; stripeCustomerId
       trialEndsAt: null,
       currentPeriodEnd: null,
       stripeSubscriptionId: null,
-      stripePriceId: null,
+      stripeBasePriceId: null,
+      stripeSeatPriceId: null,
+      includedSeats: 1,
+      seatLimit: 1,
+      updatedAt: new Date(),
     } as any,
-  });
-
-  await pauseAutomationsForUserAcrossWorkspaces({
-    userId: user.id,
-    reason: "SUBSCRIPTION_CANCELED",
-    fromPlan: prevPlan,
-    toPlan: "STARTER",
-    fromStatus: prevStatus,
-    toStatus: "CANCELED",
   });
 }
 
@@ -294,24 +257,22 @@ export async function POST(req: NextRequest) {
         const session = event.data.object as Stripe.Checkout.Session;
 
         const stripeCustomerId = getCustomerId(session.customer as any);
-        const subscriptionId = getSubscriptionId(session.subscription as any);
 
-        // Prefer linking by userId (client_reference_id or metadata)
-        const userId =
+        const workspaceId =
           (session.client_reference_id as string | null | undefined) ??
-          ((session.metadata as any)?.userId as string | null | undefined) ??
+          (session.metadata?.workspaceId as string | undefined) ??
           null;
+
+        const subscriptionId =
+          typeof session.subscription === "string"
+            ? session.subscription
+            : session.subscription?.id ?? null;
 
         if (!subscriptionId) break;
 
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
-        await updateUserBilling({
-          userId,
-          stripeCustomerId,
-          subscription,
-        });
-
+        await upsertWorkspaceBilling({ workspaceId, stripeCustomerId, subscription });
         break;
       }
 
@@ -320,25 +281,18 @@ export async function POST(req: NextRequest) {
         const subscription = event.data.object as Stripe.Subscription;
         const stripeCustomerId = getCustomerId(subscription.customer as any);
 
-        const userId = ((subscription.metadata as any)?.userId as string | null | undefined) ?? null;
+        const workspaceId = (subscription.metadata?.workspaceId as string | undefined) ?? null;
 
-        if (!stripeCustomerId && !userId) break;
-
-        await updateUserBilling({
-          userId,
-          stripeCustomerId,
-          subscription,
-        });
-
+        await upsertWorkspaceBilling({ workspaceId, stripeCustomerId, subscription });
         break;
       }
 
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
         const stripeCustomerId = getCustomerId(subscription.customer as any);
-        const userId = ((subscription.metadata as any)?.userId as string | null | undefined) ?? null;
+        const workspaceId = (subscription.metadata?.workspaceId as string | undefined) ?? null;
 
-        await handleCanceled({ userId, stripeCustomerId });
+        await handleSubscriptionDeleted({ workspaceId, stripeCustomerId });
         break;
       }
 
