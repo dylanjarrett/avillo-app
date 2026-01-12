@@ -21,50 +21,67 @@ export async function GET() {
     return NextResponse.json({ tasksToday: [], overdueCount: 0 });
   }
 
+  // Extra safety: if requireWorkspace ever returns ok=true without ids, fail closed.
+  if (!ctx.workspaceId || !ctx.userId) {
+    return NextResponse.json({ tasksToday: [], overdueCount: 0 });
+  }
+
   const now = new Date();
+  const todayStart = startOfDay(now);
+  const todayEnd = endOfDay(now);
 
   const baseWhere = {
     workspaceId: ctx.workspaceId,
     assignedToUserId: ctx.userId,
     status: "OPEN" as const,
-    deletedAt: null as any, // if your Prisma type is nullable Date, this is fine without `as any`
+    deletedAt: null as Date | null, // matches Task.deletedAt DateTime?
   };
 
   const [tasksToday, overdueCount] = await Promise.all([
     prisma.task.findMany({
       where: {
         ...baseWhere,
-        dueAt: { gte: startOfDay(now), lte: endOfDay(now) },
+        dueAt: { gte: todayStart, lte: todayEnd },
       },
       orderBy: { dueAt: "asc" },
       take: 20,
-      include: {
-        contact: { select: { id: true, firstName: true, lastName: true, email: true } },
+      select: {
+        id: true,
+        title: true,
+        dueAt: true,
+        contact: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
     }),
+
     prisma.task.count({
       where: {
         ...baseWhere,
-        dueAt: { lt: startOfDay(now) },
+        // Only tasks with a due date before today are overdue
+        dueAt: { lt: todayStart },
       },
     }),
   ]);
 
   return NextResponse.json({
     overdueCount,
-    tasksToday: tasksToday.map((t) => ({
-      id: t.id,
-      title: t.title,
-      dueAt: t.dueAt ? t.dueAt.toISOString() : null,
-      contact: t.contact
-        ? {
-            id: t.contact.id,
-            name:
-              `${(t.contact.firstName ?? "").trim()} ${(t.contact.lastName ?? "").trim()}`.trim() ||
-              t.contact.email ||
-              "Contact",
-          }
-        : null,
-    })),
+    tasksToday: tasksToday.map((t) => {
+      const first = (t.contact?.firstName ?? "").trim();
+      const last = (t.contact?.lastName ?? "").trim();
+      const fullName = `${first} ${last}`.trim();
+
+      return {
+        id: t.id,
+        title: t.title,
+        dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+        contact: t.contact
+          ? {
+              id: t.contact.id,
+              name: fullName || t.contact.email || "Contact",
+            }
+          : null,
+      };
+    }),
   });
 }

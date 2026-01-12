@@ -9,10 +9,10 @@ type TaskTab = "open" | "completed";
 
 type ProfileResponse =
   | {
-      success: true;
+      ok: true;
       user: { id: string; name: string | null; email: string; brokerage: string | null };
     }
-  | { success?: false; error?: string };
+  | { ok: false; error?: string };
 
 type ListingsResponse =
   | {
@@ -34,8 +34,8 @@ type CRMContactsResponse =
         id: string;
         name: string;
         relationshipType: "client" | "partner";
-        stage: string | null; // "new" | "warm" | "hot" | "past" for clients, null for partners
-        clientRole: string | null; // "buyer" | "seller" | "both" for clients, null for partners
+        stage: "new" | "warm" | "hot" | "past" | null;
+        clientRole: "buyer" | "seller" | "both" | null;
       }>;
     }
   | { error?: string };
@@ -60,9 +60,9 @@ type IntelligenceRecentResponse =
 type TaskRow = {
   id: string;
   title: string;
-  notes: string;
+  notes: string | null;
   dueAt: string | null;
-  status: "OPEN" | "DONE" | string;
+  status: "OPEN" | "DONE";
   source?: "PEOPLE_NOTE" | "AUTOPILOT" | "MANUAL" | string;
   contact: { id: string; name: string } | null;
   listing: { id: string; address: string } | null;
@@ -97,12 +97,18 @@ function getTimeOfDayGreeting() {
   return "Good evening";
 }
 
-function getInitials(name: string | null): string {
-  if (!name) return "A";
-  const parts = name.trim().split(" ").filter(Boolean);
+function getInitials(nameOrEmail: string | null): string {
+  const raw = (nameOrEmail || "").trim();
+  if (!raw) return "A";
+
+  // If it's an email, use the local-part
+  const base = raw.includes("@") ? raw.split("@")[0] : raw;
+
+  // Split on spaces, dots, underscores, hyphens
+  const parts = base.split(/[\s._-]+/).filter(Boolean);
   if (parts.length === 0) return "A";
-  if (parts.length === 1) return parts[0][0]?.toUpperCase() || "A";
-  return (parts[0][0]?.toUpperCase() || "") + (parts[parts.length - 1][0]?.toUpperCase() || "");
+  if (parts.length === 1) return (parts[0][0] || "A").toUpperCase();
+  return ((parts[0][0] || "") + (parts[parts.length - 1][0] || "")).toUpperCase();
 }
 
 /* -----------------------------
@@ -420,10 +426,14 @@ export default function DashboardPage() {
         if (cancelled) return;
 
         if (profileRes && profileRes.ok) {
-          const data: ProfileResponse = await profileRes.json();
-          if ("success" in data && data.success) {
-            setProfileName(data.user.name);
-            setBrokerage(data.user.brokerage);
+          const data: any = await profileRes.json();
+
+          if (data?.ok && data?.user) {
+            const userName = (data.user.name ?? "").trim();
+            const emailFallback = (data.user.email || "").split("@")[0] || null;
+
+            setProfileName(userName || emailFallback);
+            setBrokerage(data.user.brokerage ?? null);
           }
         }
 
@@ -435,12 +445,13 @@ export default function DashboardPage() {
             let nurtureBuyers = 0;
 
             for (const c of data.contacts) {
+              const rel = String(c.relationshipType || "").toLowerCase().trim();
+              if (rel !== "client") continue;
+
               const s = normalizeStage(c.stage);
               counts[s] += 1;
 
-              if (c.relationshipType !== "client") continue;
-
-              const role = (c.clientRole || "").toLowerCase().trim();
+              const role = String(c.clientRole || "").toLowerCase().trim();
               const isBuyer = role === "buyer" || role === "both";
 
               if (isBuyer) {
