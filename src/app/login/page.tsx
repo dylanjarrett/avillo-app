@@ -1,3 +1,4 @@
+// src/app/login/page.tsx
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -12,7 +13,7 @@ function GoogleIcon() {
       <svg viewBox="0 0 48 48" aria-hidden="true" className="h-4 w-4">
         <path
           fill="#EA4335"
-          d="M24 9.5c3.54 0 6 1.54 7.38 2.84l5.4-5.28C33.9 3.36 29.47 1.5 24 1.5 14.82 1.5 7.06 6.98 4.08 14.86l6.62 5.14C12.27 14.58 17.62 9.5 24 9.5z"
+          d="M24 9.5c3.54 0 6 1.54 7.38 2.84l5.4-5.28C33.9 3.36 29.47 1.5 24 1.5 14.82 0 7.06 6.98 4.08 14.86l6.62 5.14C12.27 14.58 17.62 9.5 24 9.5z"
         />
         <path
           fill="#FBBC05"
@@ -33,7 +34,7 @@ function GoogleIcon() {
 }
 
 function normalizeEmail(value: string) {
-  return value.trim().toLowerCase();
+  return String(value || "").trim().toLowerCase();
 }
 
 function normalizeAccessLevel(x: unknown) {
@@ -42,6 +43,19 @@ function normalizeAccessLevel(x: unknown) {
   if (s === "PAID") return "PAID";
   if (s === "EXPIRED") return "EXPIRED";
   return "UNKNOWN";
+}
+
+function safeInternalPath(raw: string | null) {
+  if (!raw) return null;
+
+  // Only allow internal paths
+  if (!raw.startsWith("/")) return null;
+
+  // Prevent redirect loops back into auth pages
+  if (raw.startsWith("/login")) return null;
+  if (raw.startsWith("/signup")) return null;
+
+  return raw;
 }
 
 export default function LoginPage() {
@@ -56,23 +70,20 @@ export default function LoginPage() {
 
   const callbackUrl = useMemo(() => {
     const raw = searchParams?.get("callbackUrl");
-    // Avoid redirecting back to /login or other auth pages
-    if (!raw) return null;
-    if (raw.startsWith("/login") || raw.startsWith("/signup")) return null;
-    return raw;
+    return safeInternalPath(raw);
   }, [searchParams]);
 
   const postLoginPath = useMemo(() => {
     const accessLevel = normalizeAccessLevel((session?.user as any)?.accessLevel);
 
-    // ✅ Your rule: EXPIRED always goes to Billing.
+    // ✅ your rule: EXPIRED always goes to Billing
     if (accessLevel === "EXPIRED") return "/billing?reason=upgrade_required";
 
-    // Otherwise honor callbackUrl if present; fallback to dashboard.
+    // Otherwise honor callbackUrl if present
     return callbackUrl || "/dashboard";
   }, [session, callbackUrl]);
 
-  // ✅ If already signed in, route deterministically (prevents "stuck on login")
+  // ✅ if already signed in, route deterministically
   useEffect(() => {
     if (status === "authenticated") {
       router.replace(postLoginPath);
@@ -97,8 +108,7 @@ export default function LoginPage() {
         return;
       }
 
-      // ✅ Ensure session refresh before navigating (prevents race)
-      // A tiny delay + hard session refetch is the most reliable approach.
+      // Let NextAuth session cookie settle a moment
       await new Promise((r) => setTimeout(r, 150));
       router.replace(postLoginPath);
     } catch (err: any) {
@@ -109,8 +119,10 @@ export default function LoginPage() {
   }
 
   async function handleGoogleSignIn() {
-    // ✅ Always land at billing if expired; middleware will enforce too.
-    await signIn("google", { callbackUrl: "/billing?reason=upgrade_required" });
+    // ✅ IMPORTANT: preserve callbackUrl for invite acceptance
+    // EXPIRED users will still be gated by your middleware / billing rule after auth.
+    const target = callbackUrl || "/dashboard";
+    await signIn("google", { callbackUrl: target });
   }
 
   return (
@@ -135,6 +147,12 @@ export default function LoginPage() {
             <h1 className="mt-1 text-sm font-semibold text-[var(--avillo-cream)]">
               Sign in to Avillo
             </h1>
+
+            {callbackUrl?.startsWith("/invite/accept") && (
+              <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+                Sign in to accept your workspace invitation.
+              </p>
+            )}
           </div>
 
           {error && (
@@ -207,10 +225,7 @@ export default function LoginPage() {
 
           <p className="mt-4 text-center text-[11px] text-[var(--avillo-cream-muted)]">
             New to Avillo?{" "}
-            <Link
-              href="/signup"
-              className="font-medium text-[var(--avillo-cream)] hover:underline"
-            >
+            <Link href="/signup" className="font-medium text-[var(--avillo-cream)] hover:underline">
               Create an account
             </Link>
           </p>

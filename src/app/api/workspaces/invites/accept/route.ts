@@ -4,19 +4,35 @@ import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
+const ACTIVE_WS_COOKIE = "avillo_workspace_id";
+
 function normalizeEmail(v: unknown) {
   return String(v || "").trim().toLowerCase();
+}
+
+function setActiveWorkspaceCookie(res: NextResponse, workspaceId: string) {
+  res.cookies.set(ACTIVE_WS_COOKIE, workspaceId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30, // 30 days
+  });
 }
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as any)?.id as string | undefined;
 
-  if (!userId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  if (!userId) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
 
   const body = await req.json().catch(() => null);
-  const token = String(body?.token || "");
-  if (!token) return NextResponse.json({ ok: false, error: "Token is required." }, { status: 400 });
+  const token = String(body?.token || "").trim();
+  if (!token) {
+    return NextResponse.json({ ok: false, error: "Token is required." }, { status: 400 });
+  }
 
   const invite = await prisma.workspaceInvite.findUnique({
     where: { token },
@@ -28,10 +44,13 @@ export async function POST(req: Request) {
       status: true,
       expiresAt: true,
       revokedAt: true,
+      acceptedByUserId: true,
     },
   });
 
-  if (!invite) return NextResponse.json({ ok: false, error: "Invite not found." }, { status: 404 });
+  if (!invite) {
+    return NextResponse.json({ ok: false, error: "Invite not found." }, { status: 404 });
+  }
 
   // Expire if needed
   if (invite.status === "PENDING" && invite.expiresAt < new Date()) {
@@ -42,7 +61,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Invite expired." }, { status: 400 });
   }
 
+  // ✅ Idempotent: if already accepted by THIS user, treat as success
   if (invite.status === "ACCEPTED") {
+    if (invite.acceptedByUserId === userId) {
+      const res = NextResponse.json({
+        ok: true,
+        alreadyAccepted: true,
+        workspaceId: invite.workspaceId,
+      });
+      // ✅ ensure they’re “pulled into” the workspace immediately
+      setActiveWorkspaceCookie(res, invite.workspaceId);
+      return res;
+    }
     return NextResponse.json({ ok: false, error: "Invite already accepted." }, { status: 400 });
   }
 
@@ -103,8 +133,7 @@ export async function POST(req: Request) {
           data: { removedAt: null, joinedAt: new Date(), role: invite.role as any },
         });
       } else {
-        // Already active member; optional: update role to invite role (usually not needed)
-        // await tx.workspaceUser.update({ ... })
+        // Already active member; keep role as-is (or update to invite role if you want)
       }
 
       const updatedInvite = await tx.workspaceInvite.update({
@@ -124,7 +153,7 @@ export async function POST(req: Request) {
         },
       });
 
-      // Switch default workspace to the one they joined
+      // Switch default workspace to the one they joined (server truth)
       await tx.user.update({
         where: { id: userId },
         data: { defaultWorkspaceId: updatedInvite.workspaceId },
@@ -133,7 +162,10 @@ export async function POST(req: Request) {
       return updatedInvite;
     });
 
-    return NextResponse.json({ ok: true, invite: result, workspaceId: result.workspaceId });
+    // ✅ Return success + set active workspace cookie so requireWorkspace resolves correctly immediately
+    const res = NextResponse.json({ ok: true, invite: result, workspaceId: result.workspaceId });
+    setActiveWorkspaceCookie(res, result.workspaceId);
+    return res;
   } catch (err: any) {
     const msg = String(err?.message || "");
 

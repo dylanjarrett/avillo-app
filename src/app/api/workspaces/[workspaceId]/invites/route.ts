@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
 import { requireEntitlement } from "@/lib/entitlements";
 import crypto from "crypto";
+import { sendWorkspaceInviteEmail } from "@/lib/emails/sendWorkspaceInviteEmail";
 
 type WorkspaceRole = "OWNER" | "ADMIN" | "AGENT";
 
@@ -23,6 +24,15 @@ function defaultExpiry(days = 7) {
   const d = new Date();
   d.setDate(d.getDate() + days);
   return d;
+}
+
+function getRequestOrigin(req: Request) {
+  const proto = req.headers.get("x-forwarded-proto") || "http";
+  const host =
+    req.headers.get("x-forwarded-host") ||
+    req.headers.get("host") ||
+    "localhost:3000";
+  return `${proto}://${host}`.replace(/\/+$/, "");
 }
 
 async function expirePendingInvites(workspaceId: string) {
@@ -71,10 +81,7 @@ async function getSeatUsage(workspaceId: string) {
   };
 }
 
-export async function GET(
-  req: Request,
-  { params }: { params: { workspaceId: string } }
-) {
+export async function GET(req: Request, { params }: { params: { workspaceId: string } }) {
   const gate = await requireWorkspace();
   if (!gate.ok) return NextResponse.json(gate.error, { status: gate.status });
 
@@ -82,10 +89,7 @@ export async function GET(
   const workspaceId = params.workspaceId;
 
   if (workspaceId !== sessionWorkspaceId) {
-    return NextResponse.json(
-      { ok: false, error: "Not authorized for this workspace." },
-      { status: 403 }
-    );
+    return NextResponse.json({ ok: false, error: "Not authorized for this workspace." }, { status: 403 });
   }
   if (!isAdminOrOwner(workspaceRole)) {
     return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
@@ -123,10 +127,7 @@ export async function GET(
   return NextResponse.json({ ok: true, invites, seat });
 }
 
-export async function POST(
-  req: Request,
-  { params }: { params: { workspaceId: string } }
-) {
+export async function POST(req: Request, { params }: { params: { workspaceId: string } }) {
   const gate = await requireWorkspace();
   if (!gate.ok) return NextResponse.json(gate.error, { status: gate.status });
 
@@ -134,10 +135,7 @@ export async function POST(
   const workspaceId = params.workspaceId;
 
   if (workspaceId !== sessionWorkspaceId) {
-    return NextResponse.json(
-      { ok: false, error: "Not authorized for this workspace." },
-      { status: 403 }
-    );
+    return NextResponse.json({ ok: false, error: "Not authorized for this workspace." }, { status: 403 });
   }
   if (!isAdminOrOwner(workspaceRole)) {
     return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
@@ -160,10 +158,7 @@ export async function POST(
 
   // Only OWNER can invite OWNER
   if (role === "OWNER" && workspaceRole !== "OWNER") {
-    return NextResponse.json(
-      { ok: false, error: "Only an OWNER can invite another OWNER." },
-      { status: 403 }
-    );
+    return NextResponse.json({ ok: false, error: "Only an OWNER can invite another OWNER." }, { status: 403 });
   }
 
   await expirePendingInvites(workspaceId);
@@ -188,11 +183,7 @@ export async function POST(
     const seat = await getSeatUsage(workspaceId);
     if (seat.remaining <= 0) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: "No available seats. Increase your seat limit to send more invites.",
-          seat,
-        },
+        { ok: false, error: "No available seats. Increase your seat limit to send more invites.", seat },
         { status: 409 }
       );
     }
@@ -211,10 +202,7 @@ export async function POST(
     });
 
     if (member && member.removedAt == null) {
-      return NextResponse.json(
-        { ok: false, error: "User is already a member of this workspace." },
-        { status: 409 }
-      );
+      return NextResponse.json({ ok: false, error: "User is already a member of this workspace." }, { status: 409 });
     }
   }
 
@@ -247,23 +235,38 @@ export async function POST(
     },
     select: {
       id: true,
+      workspaceId: true,
       email: true,
       emailKey: true,
       role: true,
       status: true,
+      token: true,
       expiresAt: true,
       invitedByUserId: true,
       createdAt: true,
     },
   });
 
+const origin = getRequestOrigin(req);
+
+try {
+  await sendWorkspaceInviteEmail({
+    workspaceId: invite.workspaceId,
+    invitedByUserId: invite.invitedByUserId ?? null,
+    toEmail: invite.email,
+    role: invite.role as any,
+    token: invite.token,
+    expiresAt: invite.expiresAt,
+    origin, // ✅ added
+  });
+} catch (e) {
+  console.error("INVITE EMAIL SEND ERROR →", e);
+}
+
   return NextResponse.json({ ok: true, invite });
 }
 
-export async function PATCH(
-  req: Request,
-  { params }: { params: { workspaceId: string } }
-) {
+export async function PATCH(req: Request, { params }: { params: { workspaceId: string } }) {
   const gate = await requireWorkspace();
   if (!gate.ok) return NextResponse.json(gate.error, { status: gate.status });
 
@@ -271,10 +274,7 @@ export async function PATCH(
   const workspaceId = params.workspaceId;
 
   if (workspaceId !== sessionWorkspaceId) {
-    return NextResponse.json(
-      { ok: false, error: "Not authorized for this workspace." },
-      { status: 403 }
-    );
+    return NextResponse.json({ ok: false, error: "Not authorized for this workspace." }, { status: 403 });
   }
   if (!isAdminOrOwner(workspaceRole)) {
     return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
@@ -288,12 +288,12 @@ export async function PATCH(
     return NextResponse.json({ ok: false, error: "inviteId is required." }, { status: 400 });
   }
 
-  const invite = await prisma.workspaceInvite.findUnique({
+  const existing = await prisma.workspaceInvite.findUnique({
     where: { id: inviteId },
     select: { id: true, workspaceId: true, status: true, expiresAt: true, revokedAt: true },
   });
 
-  if (!invite || invite.workspaceId !== workspaceId) {
+  if (!existing || existing.workspaceId !== workspaceId) {
     return NextResponse.json({ ok: false, error: "Invite not found." }, { status: 404 });
   }
 
@@ -313,6 +313,7 @@ export async function PATCH(
         revokedAt: true,
       },
     });
+
     return NextResponse.json({ ok: true, invite: updated });
   }
 
@@ -325,18 +326,14 @@ export async function PATCH(
 
     const now = new Date();
     const alreadyCountsAsPending =
-      invite.status === "PENDING" && !invite.revokedAt && invite.expiresAt > now;
+      existing.status === "PENDING" && !existing.revokedAt && existing.expiresAt > now;
 
     // Only enforce seat availability if resend would ADD a pending slot
     if (!alreadyCountsAsPending) {
       const seat = await getSeatUsage(workspaceId);
       if (seat.remaining <= 0) {
         return NextResponse.json(
-          {
-            ok: false,
-            error: "No available seats. Increase your seat limit to resend invites.",
-            seat,
-          },
+          { ok: false, error: "No available seats. Increase your seat limit to resend invites.", seat },
           { status: 409 }
         );
       }
@@ -353,13 +350,32 @@ export async function PATCH(
       },
       select: {
         id: true,
+        workspaceId: true,
         email: true,
         role: true,
         status: true,
+        token: true,
+        invitedByUserId: true,
         expiresAt: true,
         revokedAt: true,
       },
     });
+
+const origin = getRequestOrigin(req);
+
+try {
+  await sendWorkspaceInviteEmail({
+    workspaceId: updated.workspaceId,
+    invitedByUserId: updated.invitedByUserId ?? null,
+    toEmail: updated.email,
+    role: updated.role as any,
+    token: updated.token,
+    expiresAt: updated.expiresAt,
+    origin, // ✅ added
+  });
+} catch (e) {
+  console.error("INVITE RESEND EMAIL ERROR →", e);
+}
 
     return NextResponse.json({ ok: true, invite: updated });
   }

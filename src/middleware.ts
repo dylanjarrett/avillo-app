@@ -42,6 +42,22 @@ function normalizeAccessLevel(x: unknown) {
   return "UNKNOWN";
 }
 
+/**
+ * Build a safe internal callbackUrl.
+ * - Keeps full path + query (critical for /invite/accept?token=...)
+ * - Only allows relative paths (prevents open redirects)
+ */
+function safeCallbackFromRequest(req: NextRequest) {
+  const { pathname, search } = req.nextUrl;
+  const raw = `${pathname}${search || ""}`;
+
+  // must be internal
+  if (!raw.startsWith("/")) return "/dashboard";
+  // avoid loops
+  if (raw.startsWith("/login") || raw.startsWith("/signup")) return "/dashboard";
+  return raw || "/dashboard";
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -55,7 +71,7 @@ export async function middleware(req: NextRequest) {
 
   if (!token) {
     const loginUrl = new URL("/login", req.url);
-    loginUrl.searchParams.set("callbackUrl", pathname || "/dashboard");
+    loginUrl.searchParams.set("callbackUrl", safeCallbackFromRequest(req));
     return NextResponse.redirect(loginUrl);
   }
 
@@ -65,11 +81,10 @@ export async function middleware(req: NextRequest) {
   if (accessLevel === "EXPIRED" && !pathname.startsWith("/billing")) {
     const billingUrl = new URL("/billing", req.url);
     billingUrl.searchParams.set("reason", "upgrade_required");
-    billingUrl.searchParams.set("callbackUrl", pathname);
+    billingUrl.searchParams.set("callbackUrl", safeCallbackFromRequest(req));
     return NextResponse.redirect(billingUrl);
   }
 
-  // Unknown => don’t hard-block (prevents accidental lockouts)
   return NextResponse.next();
 }
 
