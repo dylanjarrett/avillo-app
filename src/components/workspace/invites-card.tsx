@@ -3,7 +3,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { signOut } from "next-auth/react";
-import { CardShell, PillButton, TextInput, cx, RoleBadge } from "./workspace-ui";
+import { CardShell, PillButton, TextInput, cx} from "./workspace-ui";
 
 type Invite = {
   id: string;
@@ -74,11 +74,10 @@ export function InvitesCard({
   workspaceId: string;
   workspaceRole: "OWNER" | "ADMIN" | "AGENT";
 }) {
+  // Initial load ONLY
   const [loading, setLoading] = useState(true);
 
-  // Keep the list visible during create/resend/revoke:
-  // - "loading" is only for initial load or workspace switch
-  // - "mutating" is for actions; we do NOT blank the list
+  // Mutations keep list visible (no blanking)
   const [mutating, setMutating] = useState(false);
 
   const [invites, setInvites] = useState<Invite[]>([]);
@@ -95,6 +94,9 @@ export function InvitesCard({
   // Track which invite row is busy (resend/revoke)
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
 
+  // Hide accepted by default (history)
+  const [showAccepted, setShowAccepted] = useState(false);
+
   const manager = isManager(workspaceRole);
   const canInviteOwner = workspaceRole === "OWNER";
 
@@ -102,6 +104,16 @@ export function InvitesCard({
     const e = normalizeEmail(email);
     return e.length > 5 && e.includes("@") && e.includes(".") && e.length <= 120;
   }, [email]);
+
+  const acceptedCount = useMemo(
+    () => (invites || []).filter((i) => i.status === "ACCEPTED").length,
+    [invites]
+  );
+
+  const visibleInvites = useMemo(() => {
+    const list = invites || [];
+    return showAccepted ? list : list.filter((i) => i.status !== "ACCEPTED");
+  }, [invites, showAccepted]);
 
   async function fetchInvites(opts?: { showInitialLoader?: boolean }) {
     const showInitialLoader = opts?.showInitialLoader ?? false;
@@ -146,7 +158,7 @@ export function InvitesCard({
   }
 
   useEffect(() => {
-    // Initial load / workspace switch uses the loader
+    // Initial load / workspace switch uses loader
     void (async () => {
       setLoading(true);
       await fetchInvites({ showInitialLoader: false });
@@ -166,7 +178,6 @@ export function InvitesCard({
     setError(null);
     setUpgradeHint(null);
 
-    // Optional: optimistic add a placeholder row so the user sees it immediately
     const optimisticId = `optimistic_${Date.now()}`;
     const optimisticInvite: Invite = {
       id: optimisticId,
@@ -179,6 +190,7 @@ export function InvitesCard({
     };
 
     setInvites((prev) => {
+      // prevent dup pending rows for same email
       const exists = prev.some((x) => x.emailKey === optimisticInvite.emailKey && x.status === "PENDING");
       return exists ? prev : [optimisticInvite, ...prev];
     });
@@ -207,7 +219,7 @@ export function InvitesCard({
 
         if (data?.seat) setSeat(data.seat);
 
-        // Rollback optimistic row
+        // rollback optimistic
         setInvites((prev) => prev.filter((x) => x.id !== optimisticId));
         return;
       }
@@ -216,13 +228,11 @@ export function InvitesCard({
       setEmail("");
       setRole("AGENT");
 
-      // Refresh in background without blanking list
+      // background refresh (no blanking)
       await fetchInvites({ showInitialLoader: false });
     } catch (e) {
       console.error(e);
       setError("Something went wrong creating invite.");
-
-      // Rollback optimistic row
       setInvites((prev) => prev.filter((x) => x.id !== optimisticId));
     } finally {
       setCreating(false);
@@ -239,15 +249,14 @@ export function InvitesCard({
     setError(null);
     setUpgradeHint(null);
 
-    // Optimistic UI:
-    // - revoke: mark row as REVOKED immediately
-    // - resend: keep status, but you can optionally bump a "Working…" label (we already show busy state)
     let rollbackSnapshot: Invite[] | null = null;
 
     if (act === "revoke") {
       setInvites((prev) => {
         rollbackSnapshot = prev;
-        return prev.map((x) => (x.id === inviteId ? { ...x, status: "REVOKED", revokedAt: new Date().toISOString() } : x));
+        return prev.map((x) =>
+          x.id === inviteId ? { ...x, status: "REVOKED", revokedAt: new Date().toISOString() } : x
+        );
       });
     }
 
@@ -275,20 +284,17 @@ export function InvitesCard({
 
         if (data?.seat) setSeat(data.seat);
 
-        // Rollback optimistic change if we made one
         if (rollbackSnapshot) setInvites(rollbackSnapshot);
         return;
       }
 
       setToast(act === "revoke" ? "Invite revoked." : "Invite resent.");
 
-      // Refresh in background without blanking list
+      // background refresh (no blanking)
       await fetchInvites({ showInitialLoader: false });
     } catch (e) {
       console.error(e);
       setError("Something went wrong performing that action.");
-
-      // Rollback optimistic change if we made one
       if (rollbackSnapshot) setInvites(rollbackSnapshot);
     } finally {
       setBusyInviteId(null);
@@ -300,7 +306,6 @@ export function InvitesCard({
     <CardShell
       title="Seat invites"
       subtitle="Invite a teammate with a link. Invites can be revoked or resent."
-      right={<RoleBadge role={workspaceRole} />}
     >
       {/* Seat summary */}
       {seat ? (
@@ -381,7 +386,7 @@ export function InvitesCard({
             </div>
           </div>
 
-          {/* Row 2: Button (its own row) */}
+          {/* Row 2: Button */}
           <div className="mt-3 flex items-center justify-end">
             <PillButton
               size="md"
@@ -400,6 +405,7 @@ export function InvitesCard({
         </div>
       )}
 
+      {/* Invites list */}
       <div className="mt-4">
         {loading ? (
           <p className="text-xs text-slate-400/90">Loading invites…</p>
@@ -408,65 +414,106 @@ export function InvitesCard({
             <p className="text-xs text-slate-300/90">No invites yet. Create one above to add your first teammate.</p>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/35">
-            {/* Header (responsive) */}
-            <div className="grid grid-cols-12 gap-2 border-b border-slate-800 px-4 py-3 text-[11px] font-semibold text-slate-300/80">
-              <div className="col-span-12 md:col-span-6">Invite</div>
-              <div className="col-span-6 md:col-span-3">Status</div>
-              <div className="col-span-6 md:col-span-3 text-right">Actions</div>
+          <>
+            {/* History toggle row */}
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-slate-400/90">
+                {visibleInvites.length} invite{visibleInvites.length === 1 ? "" : "s"}
+                {acceptedCount ? <span className="text-slate-500/90"> • {acceptedCount} accepted (history)</span> : null}
+              </p>
+
+              {acceptedCount ? (
+                <PillButton intent="neutral" onClick={() => setShowAccepted((v) => !v)}>
+                  {showAccepted ? "Hide accepted" : "Show accepted"}
+                </PillButton>
+              ) : (
+                <span />
+              )}
             </div>
 
-            <div className="divide-y divide-slate-800">
-              {invites.map((inv) => {
-                const busy = busyInviteId === inv.id;
-                const canAct = manager && inv.status !== "ACCEPTED" && !inv.id.startsWith("optimistic_");
-                const showRowDim = mutating && busy;
+            {visibleInvites.length === 0 ? (
+              <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+                <p className="text-xs text-slate-300/90">
+                  No active invites. {acceptedCount ? "Accepted invites are hidden in history." : null}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/35">
+                {/* Header (responsive) */}
+                <div className="grid grid-cols-12 gap-2 border-b border-slate-800 px-4 py-3 text-[11px] font-semibold text-slate-300/80">
+                  <div className="col-span-12 md:col-span-6">Invite</div>
+                  <div className="col-span-6 md:col-span-3">Status</div>
+                  <div className="col-span-6 md:col-span-3 text-right">Actions</div>
+                </div>
 
-                return (
-                  <div key={inv.id} className={cx("grid grid-cols-12 gap-2 px-4 py-3", showRowDim ? "opacity-80" : "")}>
-                    {/* Invite */}
-                    <div className="col-span-12 md:col-span-6 min-w-0">
-                      <p className="truncate text-xs font-semibold text-slate-50">{inv.email}</p>
-                      <p className="truncate text-[11px] text-slate-400/90">
-                        Role: <span className="font-mono text-amber-100/90">{inv.role}</span> • Expires{" "}
-                        {new Date(inv.expiresAt).toLocaleDateString()}
-                      </p>
-                    </div>
+                <div className="divide-y divide-slate-800">
+                  {visibleInvites.map((inv) => {
+                    const busy = busyInviteId === inv.id;
 
-                    {/* Status */}
-                    <div className="col-span-6 md:col-span-3 flex items-center">
-                      <span
-                        className={cx(
-                          "inline-flex items-center rounded-full border px-3 py-1.5 text-[11px] font-semibold",
-                          statusPill(inv.status)
-                        )}
-                      >
-                        {inv.id.startsWith("optimistic_") ? "CREATING" : inv.status}
-                      </span>
-                    </div>
+                    // Actions are only relevant for non-accepted + non-optimistic
+                    const isOptimistic = inv.id.startsWith("optimistic_");
+                    const canAct = manager && inv.status !== "ACCEPTED" && !isOptimistic;
 
-                    {/* Actions (wrap to avoid overlay) */}
-                    <div className="col-span-6 md:col-span-3 flex flex-wrap items-center justify-end gap-2">
-                      <PillButton intent="neutral" disabled={!canAct || busy} onClick={() => action(inv.id, "resend")}>
-                        {busy ? "Working…" : "Resend"}
-                      </PillButton>
-                      <PillButton
-                        intent="danger"
-                        disabled={!canAct || busy || inv.status !== "PENDING"}
-                        onClick={() => {
-                          const ok = window.confirm(`Revoke invite for ${inv.email}?`);
-                          if (!ok) return;
-                          void action(inv.id, "revoke");
-                        }}
-                      >
-                        Revoke
-                      </PillButton>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+                    const showRowDim = mutating && busy;
+
+                    return (
+                      <div key={inv.id} className={cx("grid grid-cols-12 gap-2 px-4 py-3", showRowDim ? "opacity-80" : "")}>
+                        {/* Invite */}
+                        <div className="col-span-12 md:col-span-6 min-w-0">
+                          <p className="truncate text-xs font-semibold text-slate-50">{inv.email}</p>
+                          <p className="truncate text-[11px] text-slate-400/90">
+                            Role: <span className="font-mono text-amber-100/90">{inv.role}</span> • Expires{" "}
+                            {new Date(inv.expiresAt).toLocaleDateString()}
+                          </p>
+                        </div>
+
+                        {/* Status */}
+                        <div className="col-span-6 md:col-span-3 flex items-center">
+                          <span
+                            className={cx(
+                              "inline-flex items-center rounded-full border px-3 py-1.5 text-[11px] font-semibold",
+                              statusPill(inv.status)
+                            )}
+                          >
+                            {isOptimistic ? "CREATING" : inv.status}
+                          </span>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="col-span-6 md:col-span-3 flex flex-wrap items-center justify-end gap-2">
+                          {inv.status === "ACCEPTED" ? (
+                            <span className="text-[11px] text-slate-500/90">History</span>
+                          ) : (
+                            <>
+                              <PillButton
+                                intent="neutral"
+                                disabled={!canAct || busy}
+                                onClick={() => action(inv.id, "resend")}
+                              >
+                                {busy ? "Working…" : "Resend"}
+                              </PillButton>
+
+                              <PillButton
+                                intent="danger"
+                                disabled={!canAct || busy || inv.status !== "PENDING"}
+                                onClick={() => {
+                                  const ok = window.confirm(`Revoke invite for ${inv.email}?`);
+                                  if (!ok) return;
+                                  void action(inv.id, "revoke");
+                                }}
+                              >
+                                Revoke
+                              </PillButton>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </CardShell>

@@ -135,7 +135,13 @@ export function CardShell({
   right?: React.ReactNode;
 }>) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
+    <div
+      className={cx(
+        "relative h-full overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-5",
+        "shadow-[0_0_40px_rgba(15,23,42,0.85)]",
+        "flex flex-col"
+      )}
+    >
       <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.16),transparent_55%)] opacity-40 blur-3xl" />
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -148,7 +154,9 @@ export function CardShell({
         </div>
         {right}
       </div>
-      <div className="mt-4">{children}</div>
+
+      {/* This makes the card stretch properly in equal-height layouts */}
+      <div className="mt-4 flex-1">{children}</div>
     </div>
   );
 }

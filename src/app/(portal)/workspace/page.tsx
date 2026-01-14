@@ -119,6 +119,7 @@ export default function WorkspacePage() {
     setRenameSuccess(null);
 
     const nextName = normalizeName(draftName);
+
     // Client-side validation (mirrors server)
     if (!nextName || nextName.length < 2 || nextName.length > 60) {
       setRenameError(
@@ -173,6 +174,14 @@ export default function WorkspacePage() {
     }
   }
 
+  const roleBadgeOrDash = workspace ? (
+    <RoleBadge role={workspace.role} />
+  ) : (
+    <span className="inline-flex items-center rounded-full border border-slate-600 bg-slate-900/60 px-3 py-1.5 text-[11px] font-semibold text-slate-400">
+      —
+    </span>
+  );
+
   return (
     <div className="space-y-8">
       <PageHeader
@@ -181,30 +190,27 @@ export default function WorkspacePage() {
         subtitle="Manage your team members, seat invites, roles, and ownership. Workspace settings apply to everyone in this tenant."
       />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-        {/* Left column */}
-        <div className="space-y-6">
-          <CardShell
-            title="Workspace"
-            subtitle="Your workspace controls data isolation (contacts, listings, tasks, automations, SMS, and pins)."
-            right={
-              workspace ? (
-                <RoleBadge role={workspace.role} />
-              ) : (
-                <span className="inline-flex items-center rounded-full border border-slate-600 bg-slate-900/60 px-3 py-1.5 text-[11px] font-semibold text-slate-400">
-                  —
-                </span>
-              )
-            }
-          >
-            {loading ? (
-              <p className="text-xs text-slate-400/90">Loading workspace…</p>
-            ) : error ? (
-              <p className="text-xs text-rose-300">{error}</p>
-            ) : !workspace ? (
-              <p className="text-xs text-slate-400/90">No workspace selected.</p>
-            ) : (
-              <div className="space-y-3 text-xs">
+      {/* 2x2 grid layout:
+          [WORKSPACE]  [OWNERSHIP & PERMISSIONS]
+          [MEMBERS]       [SEAT INVITES]
+      */}
+      <div className="grid gap-6 lg:grid-cols-2 lg:items-stretch">
+        {/* WORKSPACE (top-left) */}
+        <CardShell
+          title="Workspace"
+          subtitle="Your workspace controls data isolation (contacts, listings, tasks, automations, SMS, and pins)."
+          right={roleBadgeOrDash}
+        >
+          {loading ? (
+            <p className="text-xs text-slate-400/90">Loading workspace…</p>
+          ) : error ? (
+            <p className="text-xs text-rose-300">{error}</p>
+          ) : !workspace ? (
+            <p className="text-xs text-slate-400/90">No workspace selected.</p>
+          ) : (
+            <div className="flex h-full flex-col">
+              {/* main content */}
+              <div className="flex-1 space-y-3 text-xs">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <TextInput
@@ -240,63 +246,110 @@ export default function WorkspacePage() {
                     </div>
                   ) : null}
                 </div>
+              </div>
+
+              {/* bottom pinned field to keep height rhythm consistent */}
+              <div className="pt-3">
+                <label className="block text-[11px] font-semibold text-slate-200/90">
+                  Workspace ID
+                </label>
+                <input
+                  value={workspace.id}
+                  readOnly
+                  className="mt-1 w-full cursor-not-allowed rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 font-mono text-[11px] text-slate-400 outline-none ring-0"
+                />
+              </div>
+            </div>
+          )}
+        </CardShell>
+
+        {/* OWNERSHIP & PERMISSIONS (top-right) */}
+        <div className="relative h-full">
+          <CardShell
+            title="Ownership & permissions"
+            subtitle="System-level control for this workspace."
+          >
+            {/* Cream glass layers (inside CardShell so they render) */}
+            {/* Soft inner halo */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 rounded-2xl
+                ring-1 ring-amber-100/10
+                shadow-[inset_0_0_60px_rgba(248,250,252,0.10)]"
+            />
+
+            {/* Subtle diagonal glass streak */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -top-10 left-8 h-40 w-[520px] rotate-12 rounded-full
+                bg-[linear-gradient(90deg,transparent,rgba(248,250,252,0.10),transparent)]
+                blur-xl opacity-40"
+            />
+
+            {/* Faint structural divider */}
+            <div
+              aria-hidden
+              className="relative mb-4 h-px w-full
+                bg-gradient-to-r
+                from-transparent
+                via-amber-100/20
+                to-transparent"
+            />
+
+            {/* Content */}
+            <div className="relative flex h-full flex-col">
+              <div className="flex-1 space-y-4 text-xs text-slate-300/90">
+                <div>
+                  <p className="font-semibold text-amber-100">Owner</p>
+                  <p className="mt-0.5">
+                    Full authority over workspace configuration, billing access, and ownership transfer.
+                  </p>
+                </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-200/90">
-                    Workspace ID
-                  </label>
-                  <input
-                    value={workspace.id}
-                    readOnly
-                    className="mt-1 w-full cursor-not-allowed rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 font-mono text-[11px] text-slate-400 outline-none ring-0"
-                  />
+                  <p className="font-semibold text-amber-100">Admin</p>
+                  <p className="mt-0.5">
+                    Manages members, roles, and seat invites without ownership privileges.
+                  </p>
+                </div>
+
+                <div>
+                  <p className="font-semibold text-amber-100">Agent</p>
+                  <p className="mt-0.5">
+                    Operates within the workspace with assigned access and visibility.
+                  </p>
                 </div>
               </div>
-            )}
+            </div>
           </CardShell>
-
-          {workspace && userId ? (
-            <MembersCard
-              workspaceId={workspace.id}
-              currentUserId={userId}
-              workspaceRole={workspace.role}
-            />
-          ) : (
-            <CardShell title="Members" subtitle="Loading member access…">
-              <p className="text-xs text-slate-400/90">
-                {loading ? "Loading…" : "Workspace not available."}
-              </p>
-            </CardShell>
-          )}
         </div>
 
-        {/* Right column */}
-        <div className="space-y-6">
-          {workspace ? (
-            <InvitesCard workspaceId={workspace.id} workspaceRole={workspace.role} />
-          ) : (
-            <CardShell title="Seat invites" subtitle="Loading invites…">
-              <p className="text-xs text-slate-400/90">
-                {loading ? "Loading…" : "Workspace not available."}
-              </p>
-            </CardShell>
-          )}
 
-          <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4 text-xs text-slate-300/90 shadow-[0_0_35px_rgba(15,23,42,0.85)]">
-            <p className="text-[11px] font-semibold tracking-[0.18em] text-amber-100/80 uppercase">
-              Ownership &amp; permissions
+        {/* MEMBERS (bottom-left) */}
+        {workspace && userId ? (
+          <MembersCard
+            workspaceId={workspace.id}
+            currentUserId={userId}
+            workspaceRole={workspace.role}
+          />
+        ) : (
+          <CardShell title="Members" subtitle="Loading member access…">
+            <p className="text-xs text-slate-400/90">
+              {loading ? "Loading…" : "Workspace not available."}
             </p>
-            <p className="mt-2">
-              <span className="font-semibold text-amber-100">Owners</span> control workspace-wide
-              settings and can transfer ownership.{" "}
-              <span className="font-semibold text-amber-100">Admins</span> can manage access and invites.{" "}
-              <span className="font-semibold text-amber-100">Agents</span> can view workspace details.
+          </CardShell>
+        )}
+
+        {/* SEAT INVITES (bottom-right) */}
+        {workspace ? (
+          <InvitesCard workspaceId={workspace.id} workspaceRole={workspace.role} />
+        ) : (
+          <CardShell title="Seat invites" subtitle="Loading invites…">
+            <p className="text-xs text-slate-400/90">
+              {loading ? "Loading…" : "Workspace not available."}
             </p>
-            <p className="mt-2 text-[11px] text-slate-400/90">
-              All actions are scoped to the workspace in session (API routes auth inside handlers). No cross-tenant access.
-            </p>
-          </div>
-        </div>
+          </CardShell>
+        )}
       </div>
     </div>
   );
