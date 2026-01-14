@@ -1,18 +1,18 @@
 // src/lib/entitlements.ts
 import { prisma } from "@/lib/prisma";
+import { AccessLevel, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 
-export type PlanWire = "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE" | string | null | undefined;
-export type StatusWire =
-  | "NONE"
-  | "TRIALING"
-  | "ACTIVE"
-  | "PAST_DUE"
-  | "CANCELED"
-  | string
-  | null
-  | undefined;
-
-export type AccessWire = "BETA" | "PAID" | "EXPIRED" | string | null | undefined;
+/**
+ * ✅ Stripe-aligned gating:
+ * - During TRIALING: treat as fully active (same as ACTIVE)
+ * - After trial: Stripe transitions to ACTIVE (paid) or PAST_DUE/CANCELED/etc.
+ * - So paid access = (status is ACTIVE or TRIALING) for paid tiers
+ *
+ * ✅ Your beta policy:
+ * - BETA bypass unlocks Pro features without Stripe
+ * - BUT beta is solo-only → WORKSPACE_INVITE is always OFF in BETA
+ * - When beta ends: you flip all workspaces to EXPIRED to hard-block until plan selection
+ */
 
 export type EntitlementKey =
   | "INTELLIGENCE_GENERATE"
@@ -22,76 +22,84 @@ export type EntitlementKey =
   | "AUTOMATIONS_RUN"
   | "AUTOMATIONS_TRIGGER"
   | "AUTOMATIONS_PERSIST"
-  | "WORKSPACE_INVITE"; // new: gate invites to enterprise
+  | "WORKSPACE_INVITE";
 
 export type Entitlements = {
-  accessLevel: "BETA" | "PAID" | "EXPIRED";
-  plan: "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE";
-  subscriptionStatus: "NONE" | "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED";
+  accessLevel: AccessLevel; // BETA | PAID | EXPIRED
+  plan: SubscriptionPlan; // STARTER | PRO | FOUNDING_PRO | ENTERPRISE
+  subscriptionStatus: SubscriptionStatus; // NONE | TRIALING | ACTIVE | PAST_DUE | CANCELED
+
+  /** True when Pro-tier features should be allowed (your primary gate). */
   isPaidTier: boolean;
+
+  /** Per-feature flags */
   can: Record<EntitlementKey, boolean>;
 };
 
-function normalizeAccess(access: AccessWire): Entitlements["accessLevel"] {
-  const a = String(access || "").toUpperCase();
-  if (a === "BETA") return "BETA";
-  if (a === "EXPIRED") return "EXPIRED";
-  // default to PAID for any unknown (keeps old rows from breaking)
-  return "PAID";
+function normalizeAccess(v: unknown): AccessLevel {
+  const a = String(v ?? "").toUpperCase();
+  if (a === "BETA") return AccessLevel.BETA;
+  if (a === "EXPIRED") return AccessLevel.EXPIRED;
+  return AccessLevel.PAID;
 }
 
-function normalizePlan(plan: PlanWire): Entitlements["plan"] {
-  const p = String(plan || "").toUpperCase();
-  if (p === "PRO") return "PRO";
-  if (p === "FOUNDING_PRO" || p === "FOUNDINGPRO" || p === "FOUNDING-PRO") return "FOUNDING_PRO";
-  if (p === "ENTERPRISE") return "ENTERPRISE";
-  return "STARTER";
+function normalizePlan(v: unknown): SubscriptionPlan {
+  const p = String(v ?? "").toUpperCase();
+  if (p === "PRO") return SubscriptionPlan.PRO;
+  if (p === "FOUNDING_PRO" || p === "FOUNDINGPRO" || p === "FOUNDING-PRO") return SubscriptionPlan.FOUNDING_PRO;
+  if (p === "ENTERPRISE") return SubscriptionPlan.ENTERPRISE;
+  return SubscriptionPlan.STARTER;
 }
 
-function normalizeStatus(status: StatusWire): Entitlements["subscriptionStatus"] {
-  const s = String(status || "").toUpperCase();
-  if (s === "ACTIVE") return "ACTIVE";
-  if (s === "TRIALING") return "TRIALING";
-  if (s === "PAST_DUE" || s === "PASTDUE" || s === "UNPAID") return "PAST_DUE";
-  if (s === "CANCELED" || s === "CANCELLED") return "CANCELED";
-  return "NONE";
+function normalizeStatus(v: unknown): SubscriptionStatus {
+  const s = String(v ?? "").toUpperCase();
+  if (s === "TRIALING") return SubscriptionStatus.TRIALING;
+  if (s === "ACTIVE") return SubscriptionStatus.ACTIVE;
+  if (s === "PAST_DUE" || s === "PASTDUE" || s === "UNPAID") return SubscriptionStatus.PAST_DUE;
+  if (s === "CANCELED" || s === "CANCELLED") return SubscriptionStatus.CANCELED;
+  return SubscriptionStatus.NONE;
 }
 
-/**
- * Paid-access rule:
- * - Pro / Founding Pro / Enterprise are paid tiers
- * - Allow ACTIVE + TRIALING
- */
-function hasPaidAccess(plan: Entitlements["plan"], status: Entitlements["subscriptionStatus"]) {
-  const paidPlan = plan === "PRO" || plan === "FOUNDING_PRO" || plan === "ENTERPRISE";
-  if (!paidPlan) return false;
-  return status === "ACTIVE" || status === "TRIALING";
+function isPaidPlan(plan: SubscriptionPlan) {
+  return plan === SubscriptionPlan.PRO || plan === SubscriptionPlan.FOUNDING_PRO || plan === SubscriptionPlan.ENTERPRISE;
+}
+
+/** Stripe-consistent: trial counts as paid access */
+function billingOk(status: SubscriptionStatus) {
+  return status === SubscriptionStatus.ACTIVE || status === SubscriptionStatus.TRIALING;
 }
 
 export async function getEntitlementsForWorkspaceId(workspaceId: string): Promise<Entitlements> {
   const w = await prisma.workspace.findUnique({
     where: { id: workspaceId },
     select: {
-      accessLevel: true as any,
-      plan: true as any,
-      subscriptionStatus: true as any,
+      accessLevel: true,
+      plan: true,
+      subscriptionStatus: true,
+      // trialEndsAt is intentionally NOT used for gating (Stripe status is source of truth)
+      // trialEndsAt: true,
     },
   });
 
-  const accessLevel = normalizeAccess((w as any)?.accessLevel);
-  const plan = normalizePlan((w as any)?.plan);
-  const subscriptionStatus = normalizeStatus((w as any)?.subscriptionStatus);
+  const accessLevel = normalizeAccess(w?.accessLevel);
+  const plan = normalizePlan(w?.plan);
+  const subscriptionStatus = normalizeStatus(w?.subscriptionStatus);
 
-  // Overrides:
-  // - BETA => unlock
-  // - EXPIRED => block
-  // - PAID => Stripe rule
+  const stripeBillingOk = billingOk(subscriptionStatus);
+  const paidPlan = isPaidPlan(plan);
+
+  // Primary paid-feature gate:
+  // - BETA: allow Pro features without Stripe (bypass)
+  // - EXPIRED: block everything that requires payment
+  // - PAID: require paid plan + Stripe billing ok
   const isPaidTier =
-    accessLevel === "BETA"
+    accessLevel === AccessLevel.BETA
       ? true
-      : accessLevel === "EXPIRED"
+      : accessLevel === AccessLevel.EXPIRED
       ? false
-      : hasPaidAccess(plan, subscriptionStatus);
+      : paidPlan && stripeBillingOk;
+
+  const isEnterprise = plan === SubscriptionPlan.ENTERPRISE;
 
   const can: Entitlements["can"] = {
     // Intelligence
@@ -99,14 +107,17 @@ export async function getEntitlementsForWorkspaceId(workspaceId: string): Promis
     INTELLIGENCE_SAVE: isPaidTier,
 
     // Automations
+    // (You’ve been allowing read/write shell always, then gating actual persistence/runs.)
     AUTOMATIONS_READ: true,
     AUTOMATIONS_WRITE: true,
     AUTOMATIONS_PERSIST: isPaidTier,
     AUTOMATIONS_RUN: isPaidTier,
     AUTOMATIONS_TRIGGER: isPaidTier,
 
-    // Invites: enterprise only
-    WORKSPACE_INVITE: plan === "ENTERPRISE" && (subscriptionStatus === "ACTIVE" || subscriptionStatus === "TRIALING" || accessLevel === "BETA"),
+    // Workspace invites:
+    // - NOT allowed in BETA (solo-only)
+    // - Requires Enterprise + Stripe OK + accessLevel PAID (not expired)
+    WORKSPACE_INVITE: accessLevel === AccessLevel.PAID && isEnterprise && stripeBillingOk,
   };
 
   return { accessLevel, plan, subscriptionStatus, isPaidTier, can };
@@ -116,17 +127,38 @@ export async function requireEntitlement(workspaceId: string, key: EntitlementKe
   const ent = await getEntitlementsForWorkspaceId(workspaceId);
   if (ent.can[key]) return { ok: true as const, ent };
 
+  const requiredPlan = key === "WORKSPACE_INVITE" ? SubscriptionPlan.ENTERPRISE : SubscriptionPlan.PRO;
+
+  // Slightly more helpful messaging for common billing states
+  const billingMessage =
+    ent.accessLevel === AccessLevel.EXPIRED
+      ? "This workspace is inactive. Choose a plan to continue."
+      : ent.subscriptionStatus === SubscriptionStatus.PAST_DUE
+      ? "Your subscription is past due. Update your payment method to regain access."
+      : ent.subscriptionStatus === SubscriptionStatus.CANCELED
+      ? "Your subscription is canceled. Reactivate to regain access."
+      : "Choose a plan to continue.";
+
   return {
     ok: false as const,
     ent,
     error: {
       code: "PLAN_REQUIRED",
       entitlement: key,
-      requiredPlan: key === "WORKSPACE_INVITE" ? "ENTERPRISE" : "PRO",
+      requiredPlan,
       accessLevel: ent.accessLevel,
       plan: ent.plan,
       subscriptionStatus: ent.subscriptionStatus,
-      message: key === "WORKSPACE_INVITE" ? "Inviting seats requires Avillo Enterprise." : "This feature requires Avillo Pro.",
+      message:
+        key === "WORKSPACE_INVITE"
+          ? ent.accessLevel === AccessLevel.BETA
+            ? "Team invites are disabled during the private beta."
+            : !billingOk(ent.subscriptionStatus)
+            ? billingMessage
+            : "Inviting team members requires Avillo Enterprise."
+          : ent.accessLevel === AccessLevel.BETA
+          ? "" // beta bypass allows Pro features; this path is unlikely, but keep safe
+          : billingMessage,
     },
   };
 }

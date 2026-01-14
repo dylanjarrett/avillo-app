@@ -17,6 +17,10 @@ const stripe = new Stripe(stripeSecretKey);
 type Plan = "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE";
 type Status = "NONE" | "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED";
 
+/* -----------------------------
+ * Small helpers
+ * ---------------------------- */
+
 function unixToDate(x: unknown): Date | null {
   if (typeof x !== "number" || !x) return null;
   return new Date(x * 1000);
@@ -28,9 +32,7 @@ function getUnixField(obj: unknown, key: string): number | null {
   return typeof val === "number" ? val : null;
 }
 
-function getCustomerId(
-  x: string | Stripe.Customer | Stripe.DeletedCustomer | null | undefined
-) {
+function getCustomerId(x: string | Stripe.Customer | Stripe.DeletedCustomer | null | undefined) {
   if (!x) return null;
   if (typeof x === "string") return x;
   return x.id ?? null;
@@ -53,9 +55,19 @@ function statusFromStripe(sub: Stripe.Subscription): Status {
 }
 
 /**
- * Determine plan/base/seat from subscription items.
- * Enterprise is monthly-only (base monthly + seat monthly).
+ * ⚠️ CRITICAL: Never trust subscription items inside the webhook payload.
+ * Always re-fetch the subscription from Stripe with expanded items/prices.
  */
+async function fetchFullSubscription(subscriptionId: string) {
+  return await stripe.subscriptions.retrieve(subscriptionId, {
+    expand: ["items.data.price"],
+  });
+}
+
+/* -----------------------------
+ * Plan resolution
+ * ---------------------------- */
+
 function resolveFromSubscription(sub: Stripe.Subscription): {
   plan: Plan;
   basePriceId: string | null;
@@ -77,10 +89,9 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
 
   const items = sub.items?.data ?? [];
   const ids = items.map((i) => i.price?.id).filter(Boolean) as string[];
+  const has = (id?: string | null) => !!id && ids.includes(id);
 
-  const has = (id?: string) => !!id && ids.includes(id);
-
-  // Enterprise
+  // --- Enterprise ---
   if (has(enterpriseBaseMonthly)) {
     const includedSeats = 5;
     const seatItem = items.find((i) => i.price?.id === enterpriseSeatMonthly);
@@ -96,29 +107,25 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
     };
   }
 
-  // Non-enterprise: pick the matching base price
+  // --- Starter ---
   if (has(starterMonthly) || has(starterAnnual)) {
     const basePriceId = has(starterAnnual) ? starterAnnual! : starterMonthly!;
     return { plan: "STARTER", basePriceId, seatPriceId: null, seatLimit: null, includedSeats: null };
   }
 
+  // --- Pro ---
   if (has(proMonthly) || has(proAnnual)) {
     const basePriceId = has(proAnnual) ? proAnnual! : proMonthly!;
     return { plan: "PRO", basePriceId, seatPriceId: null, seatLimit: null, includedSeats: null };
   }
 
+  // --- Founding ---
   if (has(foundingMonthly) || has(foundingAnnual)) {
     const basePriceId = has(foundingAnnual) ? foundingAnnual! : foundingMonthly!;
-    return {
-      plan: "FOUNDING_PRO",
-      basePriceId,
-      seatPriceId: null,
-      seatLimit: null,
-      includedSeats: null,
-    };
+    return { plan: "FOUNDING_PRO", basePriceId, seatPriceId: null, seatLimit: null, includedSeats: null };
   }
 
-  // Fallback
+  // Fallback: unknown mapping
   return {
     plan: "STARTER",
     basePriceId: items[0]?.price?.id ?? null,
@@ -128,12 +135,10 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
   };
 }
 
-/**
- * Workspace-first billing updater (idempotent).
- * Locates workspace by:
- *  1) subscription.metadata.workspaceId, else
- *  2) Workspace.stripeCustomerId
- */
+/* -----------------------------
+ * Workspace billing upsert
+ * ---------------------------- */
+
 async function upsertWorkspaceBilling(params: {
   workspaceId?: string | null;
   stripeCustomerId?: string | null;
@@ -141,8 +146,7 @@ async function upsertWorkspaceBilling(params: {
 }) {
   const { workspaceId, stripeCustomerId, subscription } = params;
 
-  const { plan, basePriceId, seatPriceId, seatLimit, includedSeats } =
-    resolveFromSubscription(subscription);
+  const { plan, basePriceId, seatPriceId, seatLimit, includedSeats } = resolveFromSubscription(subscription);
 
   const status = statusFromStripe(subscription);
   const trialEndsAt = unixToDate(getUnixField(subscription, "trial_end"));
@@ -150,16 +154,10 @@ async function upsertWorkspaceBilling(params: {
 
   const ws =
     (workspaceId
-      ? await prisma.workspace.findUnique({
-          where: { id: workspaceId },
-          select: { id: true },
-        })
+      ? await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
       : null) ??
     (stripeCustomerId
-      ? await prisma.workspace.findFirst({
-          where: { stripeCustomerId },
-          select: { id: true },
-        })
+      ? await prisma.workspace.findFirst({ where: { stripeCustomerId }, select: { id: true } })
       : null);
 
   if (!ws) {
@@ -170,6 +168,10 @@ async function upsertWorkspaceBilling(params: {
     });
     return;
   }
+
+  // If checkout carried a requested seatLimit, reflect it even if seats take a moment to propagate.
+  const requestedSeatLimitRaw = subscription.metadata?.enterpriseRequestedSeatLimit as string | undefined;
+  const requestedSeatLimit = requestedSeatLimitRaw ? Math.max(5, Number(requestedSeatLimitRaw)) : null;
 
   await prisma.workspace.update({
     where: { id: ws.id },
@@ -183,39 +185,33 @@ async function upsertWorkspaceBilling(params: {
       stripeSubscriptionId: subscription.id,
       stripeBasePriceId: basePriceId ?? null,
       stripeSeatPriceId: seatPriceId ?? null,
-      ...(plan === "ENTERPRISE"
+            ...(plan === "ENTERPRISE"
         ? {
             includedSeats: includedSeats ?? 5,
-            seatLimit: seatLimit ?? 5,
+            seatLimit: seatLimit ?? requestedSeatLimit ?? 5,
+            type: "TEAM" as any,
           }
-        : {}),
+        : {
+            // reset enterprise-only fields on downgrade to avoid stale seat UI / logic
+            includedSeats: 1,
+            seatLimit: 1,
+          }),
       updatedAt: new Date(),
     } as any,
   });
 }
 
-async function handleSubscriptionDeleted(params: {
-  workspaceId?: string | null;
-  stripeCustomerId?: string | null;
-}) {
+async function handleSubscriptionDeleted(params: { workspaceId?: string | null; stripeCustomerId?: string | null }) {
   const { workspaceId, stripeCustomerId } = params;
 
   const ws =
-    (workspaceId
-      ? await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
-      : null) ??
+    (workspaceId ? await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } }) : null) ??
     (stripeCustomerId
-      ? await prisma.workspace.findFirst({
-          where: { stripeCustomerId },
-          select: { id: true },
-        })
+      ? await prisma.workspace.findFirst({ where: { stripeCustomerId }, select: { id: true } })
       : null);
 
   if (!ws) {
-    console.warn("[stripe-webhook] No workspace found for subscription.deleted", {
-      workspaceId,
-      stripeCustomerId,
-    });
+    console.warn("[stripe-webhook] No workspace found for subscription.deleted", { workspaceId, stripeCustomerId });
     return;
   }
 
@@ -236,6 +232,10 @@ async function handleSubscriptionDeleted(params: {
     } as any,
   });
 }
+
+/* -----------------------------
+ * Webhook handler
+ * ---------------------------- */
 
 export async function POST(req: NextRequest) {
   const sig = req.headers.get("stripe-signature");
@@ -264,13 +264,11 @@ export async function POST(req: NextRequest) {
           null;
 
         const subscriptionId =
-          typeof session.subscription === "string"
-            ? session.subscription
-            : session.subscription?.id ?? null;
+          typeof session.subscription === "string" ? session.subscription : session.subscription?.id ?? null;
 
         if (!subscriptionId) break;
 
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        const subscription = await fetchFullSubscription(subscriptionId);
 
         await upsertWorkspaceBilling({ workspaceId, stripeCustomerId, subscription });
         break;
@@ -278,9 +276,11 @@ export async function POST(req: NextRequest) {
 
       case "customer.subscription.created":
       case "customer.subscription.updated": {
-        const subscription = event.data.object as Stripe.Subscription;
-        const stripeCustomerId = getCustomerId(subscription.customer as any);
+        const subEvent = event.data.object as Stripe.Subscription;
 
+        const subscription = await fetchFullSubscription(subEvent.id);
+
+        const stripeCustomerId = getCustomerId(subscription.customer as any);
         const workspaceId = (subscription.metadata?.workspaceId as string | undefined) ?? null;
 
         await upsertWorkspaceBilling({ workspaceId, stripeCustomerId, subscription });
@@ -288,9 +288,9 @@ export async function POST(req: NextRequest) {
       }
 
       case "customer.subscription.deleted": {
-        const subscription = event.data.object as Stripe.Subscription;
-        const stripeCustomerId = getCustomerId(subscription.customer as any);
-        const workspaceId = (subscription.metadata?.workspaceId as string | undefined) ?? null;
+        const subEvent = event.data.object as Stripe.Subscription;
+        const stripeCustomerId = getCustomerId(subEvent.customer as any);
+        const workspaceId = (subEvent.metadata?.workspaceId as string | undefined) ?? null;
 
         await handleSubscriptionDeleted({ workspaceId, stripeCustomerId });
         break;

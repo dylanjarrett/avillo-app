@@ -39,7 +39,6 @@ type InvitesErr = {
   subscriptionStatus?: string;
   seat?: SeatUsage;
 };
-
 type InvitesResponse = InvitesOk | InvitesErr;
 
 function normalizeEmail(v: string) {
@@ -76,6 +75,12 @@ export function InvitesCard({
   workspaceRole: "OWNER" | "ADMIN" | "AGENT";
 }) {
   const [loading, setLoading] = useState(true);
+
+  // Keep the list visible during create/resend/revoke:
+  // - "loading" is only for initial load or workspace switch
+  // - "mutating" is for actions; we do NOT blank the list
+  const [mutating, setMutating] = useState(false);
+
   const [invites, setInvites] = useState<Invite[]>([]);
   const [seat, setSeat] = useState<SeatUsage | null>(null);
 
@@ -86,6 +91,8 @@ export function InvitesCard({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"AGENT" | "ADMIN" | "OWNER">("AGENT");
   const [creating, setCreating] = useState(false);
+
+  // Track which invite row is busy (resend/revoke)
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
 
   const manager = isManager(workspaceRole);
@@ -96,8 +103,10 @@ export function InvitesCard({
     return e.length > 5 && e.includes("@") && e.includes(".") && e.length <= 120;
   }, [email]);
 
-  async function load() {
-    setLoading(true);
+  async function fetchInvites(opts?: { showInitialLoader?: boolean }) {
+    const showInitialLoader = opts?.showInitialLoader ?? false;
+
+    if (showInitialLoader) setLoading(true);
     setError(null);
     setUpgradeHint(null);
 
@@ -132,12 +141,17 @@ export function InvitesCard({
       console.error(e);
       setError("Something went wrong loading invites.");
     } finally {
-      setLoading(false);
+      if (showInitialLoader) setLoading(false);
     }
   }
 
   useEffect(() => {
-    void load();
+    // Initial load / workspace switch uses the loader
+    void (async () => {
+      setLoading(true);
+      await fetchInvites({ showInitialLoader: false });
+      setLoading(false);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
@@ -147,9 +161,27 @@ export function InvitesCard({
     if (role === "OWNER" && !canInviteOwner) return;
 
     setCreating(true);
+    setMutating(true);
     setToast(null);
     setError(null);
     setUpgradeHint(null);
+
+    // Optional: optimistic add a placeholder row so the user sees it immediately
+    const optimisticId = `optimistic_${Date.now()}`;
+    const optimisticInvite: Invite = {
+      id: optimisticId,
+      email: normalizeEmail(email),
+      emailKey: normalizeEmail(email),
+      role,
+      status: "PENDING",
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    setInvites((prev) => {
+      const exists = prev.some((x) => x.emailKey === optimisticInvite.emailKey && x.status === "PENDING");
+      return exists ? prev : [optimisticInvite, ...prev];
+    });
 
     try {
       const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/invites`, {
@@ -174,34 +206,56 @@ export function InvitesCard({
         }
 
         if (data?.seat) setSeat(data.seat);
+
+        // Rollback optimistic row
+        setInvites((prev) => prev.filter((x) => x.id !== optimisticId));
         return;
       }
 
       setToast("Invite created.");
       setEmail("");
       setRole("AGENT");
-      await load();
+
+      // Refresh in background without blanking list
+      await fetchInvites({ showInitialLoader: false });
     } catch (e) {
       console.error(e);
       setError("Something went wrong creating invite.");
+
+      // Rollback optimistic row
+      setInvites((prev) => prev.filter((x) => x.id !== optimisticId));
     } finally {
       setCreating(false);
+      setMutating(false);
     }
   }
 
-  async function action(inviteId: string, action: "revoke" | "resend") {
+  async function action(inviteId: string, act: "revoke" | "resend") {
     if (!manager) return;
 
     setBusyInviteId(inviteId);
+    setMutating(true);
     setToast(null);
     setError(null);
     setUpgradeHint(null);
+
+    // Optimistic UI:
+    // - revoke: mark row as REVOKED immediately
+    // - resend: keep status, but you can optionally bump a "Working…" label (we already show busy state)
+    let rollbackSnapshot: Invite[] | null = null;
+
+    if (act === "revoke") {
+      setInvites((prev) => {
+        rollbackSnapshot = prev;
+        return prev.map((x) => (x.id === inviteId ? { ...x, status: "REVOKED", revokedAt: new Date().toISOString() } : x));
+      });
+    }
 
     try {
       const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/invites`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inviteId, action }),
+        body: JSON.stringify({ inviteId, action: act }),
       });
 
       if (res.status === 401) {
@@ -220,16 +274,25 @@ export function InvitesCard({
         }
 
         if (data?.seat) setSeat(data.seat);
+
+        // Rollback optimistic change if we made one
+        if (rollbackSnapshot) setInvites(rollbackSnapshot);
         return;
       }
 
-      setToast(action === "revoke" ? "Invite revoked." : "Invite resent.");
-      await load();
+      setToast(act === "revoke" ? "Invite revoked." : "Invite resent.");
+
+      // Refresh in background without blanking list
+      await fetchInvites({ showInitialLoader: false });
     } catch (e) {
       console.error(e);
       setError("Something went wrong performing that action.");
+
+      // Rollback optimistic change if we made one
+      if (rollbackSnapshot) setInvites(rollbackSnapshot);
     } finally {
       setBusyInviteId(null);
+      setMutating(false);
     }
   }
 
@@ -314,9 +377,7 @@ export function InvitesCard({
                   OWNER {canInviteOwner ? "" : "(Owner only)"}
                 </option>
               </select>
-              <p className="mt-1 text-[11px] text-slate-400/90">
-                Default to Agent unless they’ll manage access.
-              </p>
+              <p className="mt-1 text-[11px] text-slate-400/90">Default to Agent unless they’ll manage access.</p>
             </div>
           </div>
 
@@ -344,29 +405,27 @@ export function InvitesCard({
           <p className="text-xs text-slate-400/90">Loading invites…</p>
         ) : invites.length === 0 ? (
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-            <p className="text-xs text-slate-300/90">
-              No invites yet. Create one above to add your first teammate.
-            </p>
+            <p className="text-xs text-slate-300/90">No invites yet. Create one above to add your first teammate.</p>
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/35">
-            <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,0.55fr)_minmax(0,0.7fr)] gap-2 border-b border-slate-800 px-4 py-3 text-[11px] font-semibold text-slate-300/80">
-              <div>Invite</div>
-              <div>Status</div>
-              <div className="text-right">Actions</div>
+            {/* Header (responsive) */}
+            <div className="grid grid-cols-12 gap-2 border-b border-slate-800 px-4 py-3 text-[11px] font-semibold text-slate-300/80">
+              <div className="col-span-12 md:col-span-6">Invite</div>
+              <div className="col-span-6 md:col-span-3">Status</div>
+              <div className="col-span-6 md:col-span-3 text-right">Actions</div>
             </div>
 
             <div className="divide-y divide-slate-800">
               {invites.map((inv) => {
                 const busy = busyInviteId === inv.id;
-                const canAct = manager && inv.status !== "ACCEPTED";
+                const canAct = manager && inv.status !== "ACCEPTED" && !inv.id.startsWith("optimistic_");
+                const showRowDim = mutating && busy;
 
                 return (
-                  <div
-                    key={inv.id}
-                    className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,0.55fr)_minmax(0,0.7fr)] gap-2 px-4 py-3"
-                  >
-                    <div className="min-w-0">
+                  <div key={inv.id} className={cx("grid grid-cols-12 gap-2 px-4 py-3", showRowDim ? "opacity-80" : "")}>
+                    {/* Invite */}
+                    <div className="col-span-12 md:col-span-6 min-w-0">
                       <p className="truncate text-xs font-semibold text-slate-50">{inv.email}</p>
                       <p className="truncate text-[11px] text-slate-400/90">
                         Role: <span className="font-mono text-amber-100/90">{inv.role}</span> • Expires{" "}
@@ -374,23 +433,21 @@ export function InvitesCard({
                       </p>
                     </div>
 
-                    <div className="flex items-center">
+                    {/* Status */}
+                    <div className="col-span-6 md:col-span-3 flex items-center">
                       <span
                         className={cx(
                           "inline-flex items-center rounded-full border px-3 py-1.5 text-[11px] font-semibold",
                           statusPill(inv.status)
                         )}
                       >
-                        {inv.status}
+                        {inv.id.startsWith("optimistic_") ? "CREATING" : inv.status}
                       </span>
                     </div>
 
-                    <div className="flex items-center justify-end gap-2">
-                      <PillButton
-                        intent="neutral"
-                        disabled={!canAct || busy}
-                        onClick={() => action(inv.id, "resend")}
-                      >
+                    {/* Actions (wrap to avoid overlay) */}
+                    <div className="col-span-6 md:col-span-3 flex flex-wrap items-center justify-end gap-2">
+                      <PillButton intent="neutral" disabled={!canAct || busy} onClick={() => action(inv.id, "resend")}>
                         {busy ? "Working…" : "Resend"}
                       </PillButton>
                       <PillButton

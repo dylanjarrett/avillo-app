@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { requireEntitlement } from "@/lib/entitlements";
 
 const ACTIVE_WS_COOKIE = "avillo_workspace_id";
 
@@ -24,15 +25,11 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as any)?.id as string | undefined;
 
-  if (!userId) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  if (!userId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json().catch(() => null);
   const token = String(body?.token || "").trim();
-  if (!token) {
-    return NextResponse.json({ ok: false, error: "Token is required." }, { status: 400 });
-  }
+  if (!token) return NextResponse.json({ ok: false, error: "Token is required." }, { status: 400 });
 
   const invite = await prisma.workspaceInvite.findUnique({
     where: { token },
@@ -48,28 +45,18 @@ export async function POST(req: Request) {
     },
   });
 
-  if (!invite) {
-    return NextResponse.json({ ok: false, error: "Invite not found." }, { status: 404 });
-  }
+  if (!invite) return NextResponse.json({ ok: false, error: "Invite not found." }, { status: 404 });
 
   // Expire if needed
   if (invite.status === "PENDING" && invite.expiresAt < new Date()) {
-    await prisma.workspaceInvite.update({
-      where: { id: invite.id },
-      data: { status: "EXPIRED" },
-    });
+    await prisma.workspaceInvite.update({ where: { id: invite.id }, data: { status: "EXPIRED" } });
     return NextResponse.json({ ok: false, error: "Invite expired." }, { status: 400 });
   }
 
-  // ✅ Idempotent: if already accepted by THIS user, treat as success
+  // ✅ Idempotent
   if (invite.status === "ACCEPTED") {
     if (invite.acceptedByUserId === userId) {
-      const res = NextResponse.json({
-        ok: true,
-        alreadyAccepted: true,
-        workspaceId: invite.workspaceId,
-      });
-      // ✅ ensure they’re “pulled into” the workspace immediately
+      const res = NextResponse.json({ ok: true, alreadyAccepted: true, workspaceId: invite.workspaceId });
       setActiveWorkspaceCookie(res, invite.workspaceId);
       return res;
     }
@@ -79,7 +66,6 @@ export async function POST(req: Request) {
   if (invite.status === "REVOKED" || invite.revokedAt) {
     return NextResponse.json({ ok: false, error: "Invite revoked." }, { status: 400 });
   }
-
   if (invite.status === "EXPIRED") {
     return NextResponse.json({ ok: false, error: "Invite expired." }, { status: 400 });
   }
@@ -87,34 +73,42 @@ export async function POST(req: Request) {
   // Email must match logged-in user (recommended)
   const sessionEmail = normalizeEmail((session?.user as any)?.email);
   if (sessionEmail && sessionEmail !== normalizeEmail(invite.email)) {
-    return NextResponse.json(
-      { ok: false, error: "Invite email does not match logged-in user." },
-      { status: 403 }
-    );
+    return NextResponse.json({ ok: false, error: "Invite email does not match logged-in user." }, { status: 403 });
   }
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      // Lock in seatLimit and current active membership
       const ws = await tx.workspace.findUnique({
         where: { id: invite.workspaceId },
-        select: { seatLimit: true },
+        select: { id: true, seatLimit: true },
       });
       if (!ws) throw new Error("WORKSPACE_NOT_FOUND");
 
+      const seatLimit = Math.max(1, Number(ws.seatLimit ?? 1));
+
+      // Are they already a member?
       const existing = await tx.workspaceUser.findUnique({
         where: { workspaceId_userId: { workspaceId: invite.workspaceId, userId } },
         select: { removedAt: true },
       });
 
-      const activeMembers = await tx.workspaceUser.count({
-        where: { workspaceId: invite.workspaceId, removedAt: null },
-      });
+      const isAlreadyActiveMember = !!existing && existing.removedAt == null;
+      const willConsumeSeat = !isAlreadyActiveMember;
 
-      // If user is not already active, joining consumes a seat
-      const willConsumeSeat = !existing || !!existing.removedAt;
-      if (willConsumeSeat && activeMembers >= ws.seatLimit) {
-        throw new Error("NO_AVAILABLE_SEATS");
+      // 🔒 BULLETPROOF: if accepting would add a seat, require entitlement (billing not on hold)
+      if (willConsumeSeat) {
+        const ent = await requireEntitlement(invite.workspaceId, "WORKSPACE_INVITE");
+        if (!ent.ok) {
+          throw new Error("BILLING_REQUIRED");
+        }
+
+        const activeMembers = await tx.workspaceUser.count({
+          where: { workspaceId: invite.workspaceId, removedAt: null },
+        });
+
+        if (activeMembers >= seatLimit) {
+          throw new Error("NO_AVAILABLE_SEATS");
+        }
       }
 
       // Create or reinstate membership
@@ -132,8 +126,6 @@ export async function POST(req: Request) {
           where: { workspaceId_userId: { workspaceId: invite.workspaceId, userId } },
           data: { removedAt: null, joinedAt: new Date(), role: invite.role as any },
         });
-      } else {
-        // Already active member; keep role as-is (or update to invite role if you want)
       }
 
       const updatedInvite = await tx.workspaceInvite.update({
@@ -143,17 +135,9 @@ export async function POST(req: Request) {
           acceptedAt: new Date(),
           acceptedByUserId: userId,
         },
-        select: {
-          id: true,
-          workspaceId: true,
-          email: true,
-          role: true,
-          status: true,
-          acceptedAt: true,
-        },
+        select: { id: true, workspaceId: true, email: true, role: true, status: true, acceptedAt: true },
       });
 
-      // Switch default workspace to the one they joined (server truth)
       await tx.user.update({
         where: { id: userId },
         data: { defaultWorkspaceId: updatedInvite.workspaceId },
@@ -162,16 +146,26 @@ export async function POST(req: Request) {
       return updatedInvite;
     });
 
-    // ✅ Return success + set active workspace cookie so requireWorkspace resolves correctly immediately
     const res = NextResponse.json({ ok: true, invite: result, workspaceId: result.workspaceId });
     setActiveWorkspaceCookie(res, result.workspaceId);
     return res;
   } catch (err: any) {
     const msg = String(err?.message || "");
 
+    if (msg === "BILLING_REQUIRED") {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "BILLING_REQUIRED",
+          error: "This workspace can’t add seats right now. Ask the owner to update billing to accept this invite.",
+        },
+        { status: 402 }
+      );
+    }
+
     if (msg === "NO_AVAILABLE_SEATS") {
       return NextResponse.json(
-        { ok: false, error: "No available seats in this workspace. Ask the owner to add seats." },
+        { ok: false, code: "NO_SEATS", error: "No available seats in this workspace. Ask the owner to add seats." },
         { status: 409 }
       );
     }
