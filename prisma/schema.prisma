@@ -101,6 +101,35 @@ enum SmsDirection {
   INBOUND
 }
 
+enum ChatChannelType {
+  BOARD
+  ROOM
+  DM
+}
+
+enum ChatMessageType {
+  TEXT
+  SYSTEM
+}
+
+enum ChatMessageStatus {
+  SENT
+  FAILED
+}
+
+enum ChatAttachmentType {
+  IMAGE
+  FILE
+  LINK
+}
+
+enum ChatModerationAction {
+  NONE
+  FLAGGED
+  HIDDEN
+  REMOVED
+}
+
 // ---------------------------
 // USER
 // ---------------------------
@@ -135,6 +164,17 @@ model User {
   workspaceInvitesSent     WorkspaceInvite[] @relation("WorkspaceInviteInvitedBy")
   workspaceInvitesAccepted WorkspaceInvite[] @relation("WorkspaceInviteAcceptedBy")
 
+  // Chat relations
+  createdChatChannels  ChatChannel[] @relation("ChatChannelCreatedBy")
+  archivedChatChannels ChatChannel[] @relation("ChatChannelArchivedBy")
+
+  chatMessagesAuthored  ChatMessage[] @relation("ChatMessageAuthor")
+  chatMessagesEdited    ChatMessage[] @relation("ChatMessageEditedBy")
+  chatMessagesDeleted   ChatMessage[] @relation("ChatMessageDeletedBy")
+  chatMessagesModerated ChatMessage[] @relation("ChatMessageModeratedBy")
+
+  chatMentionsReceived ChatMention[] @relation("ChatMentionedUser")
+
   // Audit / assignment relations (workspace-scoped records)
   createdContacts Contact[] @relation("ContactCreatedBy")
   ownedContacts   Contact[] @relation("ContactOwner")
@@ -161,8 +201,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  createdPins        Pin[]        @relation("PinCreatedBy")
-  createdContactPins ContactPin[] @relation("ContactPinCreatedBy")
+  createdPins        Pin[]               @relation("PinCreatedBy")
+  createdContactPins ContactPin[]        @relation("ContactPinCreatedBy")
+  ChatChannelMember  ChatChannelMember[]
+  ChatReadState      ChatReadState[]
+  ChatReaction       ChatReaction[]
 
   @@index([defaultWorkspaceId])
 }
@@ -220,6 +263,13 @@ model Workspace {
   pins                Pin[]
   contactPins         ContactPin[]
   invites             WorkspaceInvite[]
+  chatChannels        ChatChannel[]
+  chatMessages        ChatMessage[]
+  chatReadStates      ChatReadState[]
+  chatReactions       ChatReaction[]
+  chatAttachments     ChatAttachment[]
+  chatMentions        ChatMention[]
+  chatMembers         ChatChannelMember[]
 
   @@unique([stripeCustomerId])
   @@unique([stripeSubscriptionId])
@@ -280,6 +330,246 @@ model WorkspaceInvite {
   @@index([email])
   @@index([emailKey])
   @@index([invitedByUserId])
+}
+
+// ---------------------------
+// CHAT CHANNELS (WORKSPACE BOARD + ROOMS)
+// ---------------------------
+model ChatChannel {
+  id String @id @default(cuid())
+
+  // Tenant boundary
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  type ChatChannelType @default(BOARD)
+
+  // Unique key per workspace ("board", "general", etc.)
+  key  String @db.VarChar(48)
+  name String
+
+  // Optional: private channels later
+  isPrivate Boolean @default(false)
+
+  createdByUserId String?
+  createdByUser   User?     @relation("ChatChannelCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  lastMessageAt   DateTime?
+
+  // Light moderation/audit hooks at channel level
+  archivedAt       DateTime?
+  archivedByUserId String?
+  archivedByUser   User?     @relation("ChatChannelArchivedBy", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages    ChatMessage[]
+  memberships ChatChannelMember[]
+  readStates  ChatReadState[]
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, type])
+  @@index([workspaceId, updatedAt])
+  @@index([workspaceId, lastMessageAt])
+  @@index([createdByUserId])
+  @@index([archivedByUserId])
+}
+
+// ---------------------------
+// CHAT MEMBERSHIP (optional now, enables private rooms later)
+// ---------------------------
+model ChatChannelMember {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // future-proof: role inside channel
+  // role String?
+
+  createdAt DateTime  @default(now())
+  removedAt DateTime?
+
+  @@unique([channelId, userId])
+  @@index([workspaceId, userId])
+  @@index([channelId, removedAt])
+}
+
+// ---------------------------
+// CHAT MESSAGES (threads, edits, delivery status, moderation)
+// ---------------------------
+model ChatMessage {
+  id String @id @default(cuid())
+
+  // Tenant boundary
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  authorUserId String?
+  authorUser   User?   @relation("ChatMessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  type   ChatMessageType   @default(TEXT)
+  status ChatMessageStatus @default(SENT)
+
+  // Idempotency for retries (prevents duplicate posts on re-send)
+  clientNonce String? @db.VarChar(64)
+
+  // Threads / replies
+  parentId String?
+  parent   ChatMessage?  @relation("ChatThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  ChatMessage[] @relation("ChatThread")
+
+  body String
+
+  // Editing + soft delete
+  editedAt       DateTime?
+  editedByUserId String?
+  editedByUser   User?     @relation("ChatMessageEditedBy", fields: [editedByUserId], references: [id], onDelete: SetNull)
+
+  deletedAt       DateTime?
+  deletedByUserId String?
+  deletedByUser   User?     @relation("ChatMessageDeletedBy", fields: [deletedByUserId], references: [id], onDelete: SetNull)
+
+  // Simplifies UI queries: fetch messages where isVisible=true
+  isVisible Boolean @default(true)
+
+  // Delivery failure details (queue/realtime hooks)
+  failureReason String?
+
+  // Moderation hooks (keep lightweight but useful)
+  moderationAction  ChatModerationAction @default(NONE)
+  moderatedAt       DateTime?
+  moderatedByUserId String?
+  moderatedByUser   User?                @relation("ChatMessageModeratedBy", fields: [moderatedByUserId], references: [id], onDelete: SetNull)
+  moderationNotes   String?
+
+  // Optional structured payload for future rich text/embeds
+  payload Json?
+
+  createdAt DateTime @default(now())
+
+  reactions     ChatReaction[]
+  attachments   ChatAttachment[]
+  mentions      ChatMention[]
+  ChatReadState ChatReadState[]
+
+  @@unique([channelId, authorUserId, clientNonce])
+  @@index([workspaceId, createdAt])
+  @@index([channelId, createdAt])
+  @@index([authorUserId, createdAt])
+  @@index([parentId, createdAt])
+  @@index([deletedAt])
+  @@index([status])
+  @@index([moderationAction, moderatedAt])
+}
+
+// ---------------------------
+// PER-USER READ STATE (cursor-based)
+// ---------------------------
+model ChatReadState {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Cursor-based: what message have they read up through?
+  lastReadMessageId String?
+  lastReadMessage   ChatMessage? @relation(fields: [lastReadMessageId], references: [id], onDelete: SetNull)
+
+  lastReadAt DateTime @default(now())
+
+  @@unique([channelId, userId])
+  @@index([workspaceId, userId])
+  @@index([channelId, lastReadAt])
+}
+
+// ---------------------------
+// REACTIONS
+// ---------------------------
+model ChatReaction {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  emoji String @db.VarChar(32)
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@index([workspaceId])
+  @@index([messageId])
+  @@index([userId])
+}
+
+// ---------------------------
+// ATTACHMENTS (metadata only; store files in S3/Supabase later)
+// ---------------------------
+model ChatAttachment {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  type ChatAttachmentType
+
+  url        String
+  storageKey String?
+  sha256     String?
+  name       String?
+  size       Int?
+  mime       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId])
+  @@index([messageId])
+}
+
+// ---------------------------
+// MENTIONS (for notifications later)
+// ---------------------------
+model ChatMention {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  mentionedUserId String
+  mentionedUser   User   @relation("ChatMentionedUser", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, mentionedUserId])
+  @@index([workspaceId, mentionedUserId, createdAt])
+  @@index([messageId])
 }
 
 // ---------------------------
