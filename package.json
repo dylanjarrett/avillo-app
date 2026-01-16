@@ -29,7 +29,8 @@
     "tailwind": "^2.3.1",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "3.4.0",
-    "twilio": "^5.10.7"
+    "twilio": "^5.10.7",
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@prisma/client": "^5.10.0",
