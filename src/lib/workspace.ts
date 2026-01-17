@@ -6,7 +6,26 @@ import { cookies } from "next/headers";
 
 const ACTIVE_WS_COOKIE = "avillo_workspace_id";
 
-export async function requireWorkspace() {
+type WorkspaceCtx =
+  | { ok: false; status: number; error: { error: string } }
+  | {
+      ok: true;
+      userId: string;
+      workspaceId: string;
+      workspaceRole: string;
+      workspace: {
+        id: string;
+        name: string;
+        type: string;
+        accessLevel: string;
+        plan: string;
+        subscriptionStatus: string;
+        seatLimit: number;
+        includedSeats: number;
+      };
+    };
+
+export async function requireWorkspace(): Promise<WorkspaceCtx> {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as any)?.id as string | undefined;
   const tokenWorkspaceId = (session?.user as any)?.workspaceId as string | undefined;
@@ -15,10 +34,9 @@ export async function requireWorkspace() {
     return { ok: false as const, status: 401, error: { error: "Unauthorized" } };
   }
 
-  // ✅ NEW: cookie overrides session/default workspace (server-trust selection)
-  const cookieWorkspaceId = cookies().get(ACTIVE_WS_COOKIE)?.value || undefined;
+  const jar = cookies();
+  const cookieWorkspaceId = jar.get(ACTIVE_WS_COOKIE)?.value || undefined;
 
-  // Fallback: user default workspace
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { defaultWorkspaceId: true },
@@ -50,10 +68,19 @@ export async function requireWorkspace() {
   });
 
   if (!membership) {
-    // If cookie points to a workspace they can’t access, fall back once to defaultWorkspaceId
-    if (cookieWorkspaceId && user?.defaultWorkspaceId && user.defaultWorkspaceId !== cookieWorkspaceId) {
+    // If cookie points to a workspace they can’t access, clear it and fall back once
+    if (cookieWorkspaceId) {
+      jar.delete(ACTIVE_WS_COOKIE);
+    }
+
+    const fallbackWorkspaceId =
+      user?.defaultWorkspaceId && user.defaultWorkspaceId !== workspaceId
+        ? user.defaultWorkspaceId
+        : undefined;
+
+    if (fallbackWorkspaceId) {
       const fallback = await prisma.workspaceUser.findFirst({
-        where: { workspaceId: user.defaultWorkspaceId, userId, removedAt: null },
+        where: { workspaceId: fallbackWorkspaceId, userId, removedAt: null },
         select: {
           role: true,
           workspace: {
@@ -75,7 +102,7 @@ export async function requireWorkspace() {
         return {
           ok: true as const,
           userId,
-          workspaceId: user.defaultWorkspaceId,
+          workspaceId: fallbackWorkspaceId,
           workspaceRole: String(fallback.role),
           workspace: fallback.workspace,
         };
@@ -89,7 +116,7 @@ export async function requireWorkspace() {
     ok: true as const,
     userId,
     workspaceId,
-    workspaceRole: String(membership.role),
+    workspaceRole: membership.role,
     workspace: membership.workspace,
   };
 }

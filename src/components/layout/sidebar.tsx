@@ -1,3 +1,4 @@
+// components/layout/sidebar.tsx (or wherever this file lives)
 "use client";
 
 import Link from "next/link";
@@ -9,12 +10,13 @@ const TOOL_ITEMS = [
   { href: "/people", label: "People" },
   { href: "/listings", label: "Listings" },
   { href: "/autopilot", label: "Autopilot" },
+  { href: "/hub", label: "Hub" },
 ];
 
 const ACCOUNT_ITEMS = [
   { href: "/billing", label: "Billing" },
   { href: "/account", label: "Account" },
-  { href: "/workspace", label: "Workspace" }, 
+  { href: "/workspace", label: "Workspace" },
 ];
 
 type SidebarProps = {
@@ -34,6 +36,8 @@ function tourIdForHref(href: string) {
       return "tour-nav-listings";
     case "/autopilot":
       return "tour-nav-autopilot";
+    case "/hub":
+      return "tour-nav-hub";
     default:
       return undefined;
   }

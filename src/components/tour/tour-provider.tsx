@@ -1,3 +1,4 @@
+// components/tour/tour-provider.tsx
 "use client";
 
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -186,7 +187,7 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
       {
         id: "nav-people",
         title: "People",
-        text: "Your relationship hub — lightweight CRM done right.",
+        text: "Your relationship portal — lightweight CRM done right.",
         attachTo: { element: "#tour-nav-people", on: "right" },
         offsetX: 0,
         undimSidebar: true,
@@ -204,6 +205,14 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
         title: "Autopilot",
         text: "Automate the repetition. Stay in control.",
         attachTo: { element: "#tour-nav-autopilot", on: "right" },
+        offsetX: 0,
+        undimSidebar: true,
+      },
+      {
+        id: "nav-hub",
+        title: "Hub",
+        text: "Your workspace hub — DMs, mentions, and a shared board for fast team context.",
+        attachTo: { element: "#tour-nav-hub", on: "right" },
         offsetX: 0,
         undimSidebar: true,
       },
@@ -300,6 +309,7 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
       stopTour,
       isTourActive,
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [isTourActive, pathname]
   );
 
