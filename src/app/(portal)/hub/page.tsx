@@ -1458,7 +1458,6 @@ return (
               <Orb />
               <div className="min-w-0">
                 <div className="text-[11px] font-medium tracking-[0.22em] text-amber-100/45">HUB</div>
-                <div className="mt-0.5 text-sm font-semibold text-amber-50/90">Workspace communications</div>
               </div>
             </>
           }
@@ -1790,8 +1789,7 @@ return (
                     </div>
 
                       <div className="mt-2 flex items-center justify-between px-2">
-                        <div className="text-[11px] text-amber-50/35">Tip: Enter to send • Shift+Enter for a new line</div>
-                      </div>
+                    </div>
                     </GlassPanel>
                   </div>
                 </div>
