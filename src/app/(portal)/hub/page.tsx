@@ -1221,6 +1221,7 @@ async function pollMentions() {
   const [search, setSearch] = useState("");
   const [roomsOpen, setRoomsOpen] = useState(true);
   const [dmsOpen, setDmsOpen] = useState(true);
+  const [channelsDrawerOpen, setChannelsDrawerOpen] = useState(false);
 
   // persist collapsible state
   useEffect(() => {
@@ -1445,6 +1446,174 @@ const channelMemberUsers = useMemo(() => {
   return (channelMembers || []).map((m: any) => ({ name: m.user?.name, image: m.user?.image }));
 }, [channelMembers]);
 
+const LeftRail = (
+  <div className="flex h-full min-h-0 flex-col">
+    {/* Header + search (NOT scrollable) */}
+    <div className="px-4 pt-4 md:px-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-amber-50/90">Channels</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-amber-50/45">
+            <span>Board</span>
+            <Dot />
+            <span>Rooms</span>
+            <Dot />
+            <span>DMs</span>
+
+            {workspaceRole ? (
+              <span className="ml-1 rounded-full border border-amber-200/10 bg-white/5 px-2 py-0.5 text-[10px] text-amber-50/55">
+                {workspaceRole}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <StatusPill status={loading ? "loading" : error ? "error" : "ok"} />
+      </div>
+
+      <div className="mt-3">
+        <div className="relative">
+          <input
+            id="hub-channel-search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search channels…"
+            className={cx(
+              "w-full rounded-2xl border border-amber-200/10 bg-black/20 px-3 py-2",
+              "text-sm text-amber-50/90 placeholder:text-amber-50/35",
+              "outline-none focus:border-amber-200/20"
+            )}
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 rounded-2xl shadow-[inset_0_0_28px_rgba(244,210,106,0.05)]"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <DividerSoft />
+      </div>
+    </div>
+
+    {/* Scroll area */}
+    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      {error ? (
+        <div className="mx-3 mt-3 rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100/90">
+          {error}
+        </div>
+      ) : null}
+
+      {loading ? <SkeletonCard className="mx-3 mt-3">Booting Hub…</SkeletonCard> : null}
+
+      {/* BOARD */}
+      {board ? (
+        <div className="mt-3">
+          <SectionLabel label="Board" />
+          <ChannelRow
+            channel={board as any}
+            selected={selectedChannelId === board.id}
+            onClick={() => {
+              setSelectedChannelId(board.id);
+              setChannelsDrawerOpen(false);
+            }}
+            hasUnread={channelHasUnread(board)}
+            lastReadAt={board.readState?.lastReadAt ?? null}
+          />
+        </div>
+      ) : null}
+
+      {/* ROOMS */}
+      <div className="mt-4">
+        <CollapsibleHeader
+          label="Rooms"
+          open={roomsOpen}
+          onToggle={() => setRoomsOpen((v) => !v)}
+          noTop
+          right={
+            <MiniAction
+              onClick={() => {
+                setCreateType("ROOM");
+                setCreateOpen(true);
+                setChannelsDrawerOpen(false);
+              }}
+              title="New room"
+            >
+              + Room
+            </MiniAction>
+          }
+        />
+
+        {roomsOpen ? (
+          filteredRooms.length ? (
+            filteredRooms.map((c) => (
+              <ChannelRow
+                key={c.id}
+                channel={c as any}
+                selected={selectedChannelId === c.id}
+                onClick={() => {
+                  setSelectedChannelId(c.id);
+                  setChannelsDrawerOpen(false);
+                }}
+                hasUnread={channelHasUnread(c)}
+                lastReadAt={c.readState?.lastReadAt ?? null}
+              />
+            ))
+          ) : (
+            <EmptyHint text="No rooms yet." />
+          )
+        ) : null}
+      </div>
+
+      {/* DMS */}
+      <div className="mt-4">
+        <CollapsibleHeader
+          label="DMs"
+          open={dmsOpen}
+          onToggle={() => setDmsOpen((v) => !v)}
+          noTop
+          right={
+            <MiniAction
+              onClick={() => {
+                setCreateType("DM");
+                setCreateOpen(true);
+                setChannelsDrawerOpen(false);
+              }}
+              title="New DM"
+            >
+              + DM
+            </MiniAction>
+          }
+        />
+
+        {dmsOpen ? (
+          filteredDMs.length ? (
+            filteredDMs.map((c) => (
+              <ChannelRow
+                key={c.id}
+                channel={c as any}
+                selected={selectedChannelId === c.id}
+                onClick={() => {
+                  setSelectedChannelId(c.id);
+                  setChannelsDrawerOpen(false);
+                }}
+                hasUnread={channelHasUnread(c)}
+                lastReadAt={c.readState?.lastReadAt ?? null}
+              />
+            ))
+          ) : (
+            <EmptyHint text="No DMs yet." />
+          )
+        ) : null}
+      </div>
+
+      <div className="mx-4 mt-5">
+        <DividerSoft />
+      </div>
+    </div>
+  </div>
+);
+
 return (
   <>
   <div className="space-y-10">
@@ -1452,18 +1621,61 @@ return (
 
     <div className="px-4 pb-8 md:px-6">
       <GlassShell>
+        <div className="hidden md:block">
         <Toolbar
           left={
-            <>
+            <div className="flex items-center gap-3">
               <Orb />
               <div className="min-w-0">
                 <div className="text-[11px] font-medium tracking-[0.22em] text-amber-100/45">HUB</div>
               </div>
-            </>
+            </div>
           }
           right={
-            <>
-              <SoftButton onClick={() => setNewMenuOpen(true)} title="Create a room or start a DM" rightHint="+">
+  <div className="flex items-center gap-2">
+      <SoftButton onClick={() => setNewMenuOpen(true)} title="Create a room or start a DM" rightHint="+">
+        New
+      </SoftButton>
+
+      <div className="relative">
+        <SoftButton onClick={() => void openMentions()} title="Mentions" rightHint="@">
+          Mentions
+        </SoftButton>
+
+        {mentionsUnreadCount > 0 ? (
+          <span
+            className={cx(
+              "absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1",
+              "rounded-full border border-amber-200/20 bg-amber-300/20",
+              "text-[10px] font-semibold text-amber-50/90",
+              "flex items-center justify-center",
+              "shadow-[0_0_16px_rgba(244,210,106,0.22)]"
+            )}
+          >
+            {mentionsUnreadCount > 99 ? "99+" : mentionsUnreadCount}
+          </span>
+        ) : null}
+      </div>
+
+      <SoftButton onClick={() => void openMembers()} title="Members" rightHint="👥">
+        Members
+      </SoftButton>
+    </div>
+}
+        />
+          <Divider />
+         </div>
+
+          <div className="relative grid min-h-0 md:h-[75vh] grid-cols-1 md:grid-cols-[320px_1fr]">
+            {/* LEFT RAIL */}
+            <aside className="hidden md:block h-full min-h-0 overflow-hidden border-b border-amber-200/10 md:border-b-0 md:border-r md:border-amber-200/10">
+              {LeftRail}
+            </aside>
+
+          {/* Mobile top actions */}
+          <div className="md:hidden px-4 pt-4">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <SoftButton onClick={() => setNewMenuOpen(true)} title="Create" rightHint="+">
                 New
               </SoftButton>
 
@@ -1490,176 +1702,18 @@ return (
               <SoftButton onClick={() => void openMembers()} title="Members" rightHint="👥">
                 Members
               </SoftButton>
-            </>
-          }
-        />
-          <Divider />
-
-          <div className="relative grid min-h-0 md:h-[75vh] grid-cols-1 md:grid-cols-[320px_1fr]">
-            {/* LEFT RAIL */}
-            <aside className="h-full min-h-0 overflow-hidden border-b border-amber-200/10 md:border-b-0 md:border-r md:border-amber-200/10">
-              <div className="flex h-full min-h-0 flex-col">
-                {/* Header + search (NOT scrollable) */}
-                <div className="px-4 pt-4 md:px-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-amber-50/90">Channels</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-amber-50/45">
-                        <span>Board</span>
-                        <Dot />
-                        <span>Rooms</span>
-                        <Dot />
-                        <span>DMs</span>
-
-                        {workspaceRole ? (
-                          <span className="ml-1 rounded-full border border-amber-200/10 bg-white/5 px-2 py-0.5 text-[10px] text-amber-50/55">
-                            {workspaceRole}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <StatusPill status={loading ? "loading" : error ? "error" : "ok"} />
-                  </div>
-
-                  <div className="mt-3">
-                    <div className="relative">
-                      <input
-                        id="hub-channel-search"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search channels…"
-                        className={cx(
-                          "w-full rounded-2xl border border-amber-200/10 bg-black/20 px-3 py-2",
-                          "text-sm text-amber-50/90 placeholder:text-amber-50/35",
-                          "outline-none focus:border-amber-200/20"
-                        )}
-                      />
-                      <div
-                        aria-hidden
-                        className="pointer-events-none absolute inset-0 rounded-2xl shadow-[inset_0_0_28px_rgba(244,210,106,0.05)]"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-4">
-                    <DividerSoft />
-                  </div>
-                </div>
-
-                {/* Scroll area (ONLY this scrolls; scrollbar starts below header) */}
-                <div className="min-h-0 flex-1 overflow-visible md:overflow-y-auto px-2 pb-4">
-                  {error ? (
-                    <div className="mx-3 mt-3 rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100/90">
-                      {error}
-                    </div>
-                  ) : null}
-
-                  {loading ? <SkeletonCard className="mx-3 mt-3">Booting Hub…</SkeletonCard> : null}
-
-                  {/* BOARD */}
-                  {board ? (
-                    <div className="mt-3">
-                      <SectionLabel label="Board" />
-                      <ChannelRow
-                        channel={board as any}
-                        selected={selectedChannelId === board.id}
-                        onClick={() => setSelectedChannelId(board.id)}
-                        hasUnread={channelHasUnread(board)}
-                        lastReadAt={board.readState?.lastReadAt ?? null}
-                      />
-                    </div>
-                  ) : null}
-
-                  {/* ROOMS */}
-                  <div className="mt-4">
-                    <CollapsibleHeader
-                      label="Rooms"
-                      open={roomsOpen}
-                      onToggle={() => setRoomsOpen((v) => !v)}
-                      noTop
-                      right={
-                        <MiniAction
-                          onClick={() => {
-                            setCreateType("ROOM");
-                            setCreateOpen(true);
-                          }}
-                          title="New room"
-                        >
-                          + Room
-                        </MiniAction>
-                      }
-                    />
-
-                    {roomsOpen ? (
-                      filteredRooms.length ? (
-                        filteredRooms.map((c) => (
-                          <ChannelRow
-                            key={c.id}
-                            channel={c as any}
-                            selected={selectedChannelId === c.id}
-                            onClick={() => setSelectedChannelId(c.id)}
-                            hasUnread={channelHasUnread(c)}
-                            lastReadAt={c.readState?.lastReadAt ?? null}
-                          />
-                        ))
-                      ) : (
-                        <EmptyHint text="No rooms yet." />
-                      )
-                    ) : null}
-                  </div>
-
-                  {/* DMS */}
-                  <div className="mt-4">
-                    <CollapsibleHeader
-                      label="DMs"
-                      open={dmsOpen}
-                      onToggle={() => setDmsOpen((v) => !v)}
-                      noTop
-                      right={
-                        <MiniAction
-                          onClick={() => {
-                            setCreateType("DM");
-                            setCreateOpen(true);
-                          }}
-                          title="New DM"
-                        >
-                          + DM
-                        </MiniAction>
-                      }
-                    />
-
-                    {dmsOpen ? (
-                      filteredDMs.length ? (
-                        filteredDMs.map((c) => (
-                          <ChannelRow
-                            key={c.id}
-                            channel={c as any}
-                            selected={selectedChannelId === c.id}
-                            onClick={() => setSelectedChannelId(c.id)}
-                            hasUnread={channelHasUnread(c)}
-                            lastReadAt={c.readState?.lastReadAt ?? null}
-                          />
-                        ))
-                      ) : (
-                        <EmptyHint text="No DMs yet." />
-                      )
-                    ) : null}
-                  </div>
-
-                  <div className="mx-4 mt-5">
-                    <DividerSoft />
-                  </div>
-                </div>
-              </div>
-            </aside>
+            </div>
+          </div>
 
             {/* MAIN */}
-            <main className="min-h-[72vh]">
-              {/* Channel header */}
-              <div className="px-4 pt-4 md:px-5">
+          <main className="min-h-[72vh]">
+            {/* Channel header */}
+            <div className="px-4 pt-4 md:px-5">
+              <div className="space-y-2">
+                {/* Row 2 (mobile) / Desktop header row: actions */}
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                  {/* Desktop: title + subtitle live on the left */}
+                  <div className="hidden md:block min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="truncate text-lg font-semibold text-amber-50/95">
                         {selectedChannel ? selectedChannel.name : "Select a channel"}
@@ -1687,7 +1741,15 @@ return (
                     <div className="mt-1 text-sm text-amber-50/55">{channelSubtitle}</div>
                   </div>
 
+                  {/* Actions (mobile row 2, desktop right controls) */}
                   <div className="flex items-center gap-2">
+                    {/* Mobile: open channels drawer */}
+                    <div className="md:hidden">
+                      <SoftButton onClick={() => setChannelsDrawerOpen(true)} title="Channels" rightHint="☰">
+                        Channels
+                      </SoftButton>
+                    </div>
+
                     <SoftButton
                       onClick={() => {
                         void refreshChannels(true);
@@ -1701,10 +1763,41 @@ return (
                   </div>
                 </div>
 
-                <div className="mt-4">
-                  <Divider />
+                {/* ✅ Mobile Row 3: title (bumped down) */}
+                <div className="md:hidden min-w-0 pt-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-lg font-semibold text-amber-50/95">
+                      {selectedChannel ? selectedChannel.name : "Select a channel"}
+                    </div>
+
+                    {selectedChannel ? (
+                      <Tag>
+                        {selectedChannel.type === "BOARD"
+                          ? "Board"
+                          : selectedChannel.type === "DM"
+                          ? "DM"
+                          : selectedChannel.isPrivate
+                          ? "Restricted"
+                          : "Room"}
+                      </Tag>
+                    ) : null}
+
+                    {(membersOpen || channelMembers.length) && channelMemberUsers.length ? (
+                      <div className="ml-1">
+                        <AvatarStack users={channelMemberUsers} />
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
+
+                {/* ✅ Mobile Row 4: subtitle */}
+                <div className="md:hidden text-sm text-amber-50/55">{channelSubtitle}</div>
               </div>
+
+              <div className="mt-4">
+                <Divider />
+              </div>
+            </div>
 
               {/* Messages + Composer (messages scroll; composer below) */}
                 <div className="px-2 pb-4 pt-3 md:px-4">
@@ -1795,6 +1888,11 @@ return (
                 </div>
               </main>
           </div>
+
+          {/* Mobile Channels Drawer */}
+          <Drawer open={channelsDrawerOpen} onClose={() => setChannelsDrawerOpen(false)} title="Channels">
+            <div className="h-full">{LeftRail}</div>
+          </Drawer>
 
           {/* Mentions Drawer */}
           <Drawer open={mentionsOpen} onClose={() => setMentionsOpen(false)} title="Mentions">

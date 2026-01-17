@@ -558,7 +558,7 @@ export function QuickReactions({
   className?: string;
   compact?: boolean;
 }) {
-  const quick = compact ? ["👍", "🔥", "✅", "😂"] : ["👍", "🔥", "✅", "😂", "🙏", "🎯"];
+  const quick = compact ? ["👍", "🔥", "❤️", "😂"] : ["👍", "🔥", "❤️", "😂", "🎉"];
   return (
     <div className={cx("flex items-center gap-1", className)}>
       {quick.map((e) => (
@@ -777,9 +777,16 @@ export function MessageRow({
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(m.body || "");
 
+  // ✅ Mobile-only state (tap-to-show). Desktop ignores it.
+  const [mobileActive, setMobileActive] = useState(false);
+
   useEffect(() => {
     if (!editing) setEditDraft(m.body || "");
   }, [m.body, editing]);
+
+  useEffect(() => {
+    if (editing) setMobileActive(false);
+  }, [editing]);
 
   async function commitEdit() {
     const next = editDraft.trim();
@@ -795,6 +802,9 @@ export function MessageRow({
   const author = tidyAuthor(m.authorUserId, mine, meName);
   const time = formatTime(m.createdAt);
   const reactionGroups = groupReactions(m.reactions || []);
+
+  // ✅ Mobile: show reactions row only when active OR meaningful OR mine
+  const showReactionsMobile = mobileActive || reactionGroups.length >= 2 || reactionGroups.some((g) => !!g.mine);
 
   const actions: ActionItem[] = [
     {
@@ -838,10 +848,30 @@ export function MessageRow({
         highlight ? "ring-1 ring-amber-200/25 rounded-3xl shadow-[0_0_40px_rgba(244,210,106,0.10)]" : ""
       )}
       data-message-id={m.id}
+      onClick={() => {
+        // ✅ Mobile only: tap message surface toggles active state
+        if (typeof window !== "undefined" && window.innerWidth < 768) {
+          setMobileActive((v) => !v);
+        }
+      }}
     >
+      {/* ✅ Mobile tap-away closer (behind message; message sits above it) */}
+      {mobileActive ? (
+        <button
+          type="button"
+          aria-label="Close message actions"
+          className="fixed inset-0 z-[40] md:hidden"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMobileActive(false);
+          }}
+        />
+      ) : null}
+
       {lastReadMarker ? <LastReadDivider /> : null}
 
-      <div className="flex gap-3 rounded-3xl px-3 py-3">
+      {/* message body above tap-away overlay */}
+      <div className="relative z-[45] flex gap-3 rounded-3xl px-3 py-3">
         {/* avatar */}
         <div
           className={cx(
@@ -849,13 +879,21 @@ export function MessageRow({
             "grid place-items-center text-xs font-semibold text-amber-50/75"
           )}
           title={author}
+          onClick={(e) => e.stopPropagation()}
         >
           {mine ? meInitials || "Y" : author.slice(0, 2).toUpperCase()}
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0 text-xs text-amber-50/65">
+          {/* ✅ Desktop AND Mobile use the SAME layout:
+              - meta line
+              - pinned ⋯ action on the right
+              - reactions/quick reacts live UNDER the message text
+              - desktop shows ⋯ on hover; mobile shows ⋯ when active
+              - desktop quick reacts show on hover; mobile quick reacts show when active
+          */}
+          <div className="relative">
+            <div className="min-w-0 pr-12 text-xs text-amber-50/65">
               <span className="font-semibold text-amber-50/85">{author}</span>
               <span className="mx-2 text-amber-50/25">•</span>
               <span className="text-amber-50/45">{time}</span>
@@ -863,17 +901,31 @@ export function MessageRow({
             </div>
 
             {showHoverActions ? (
-              <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition">
-                <div className="hidden md:flex">
-                  <QuickReactions onReact={onReact} compact />
+              <>
+                {/* Desktop pinned ⋯ on hover */}
+                <div
+                  className="absolute right-0 top-0 hidden md:block opacity-0 group-hover:opacity-100 transition"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ActionMenu items={actions} label="Message actions" />
                 </div>
-                <ActionMenu items={actions} label="Message actions" />
-              </div>
+
+                {/* Mobile pinned ⋯ when active */}
+                <div
+                  className={cx(
+                    "absolute right-0 top-0 md:hidden transition",
+                    mobileActive ? "opacity-100" : "opacity-0 pointer-events-none"
+                  )}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ActionMenu items={actions} label="Message actions" />
+                </div>
+              </>
             ) : null}
           </div>
 
           {editing ? (
-            <div className="mt-2 space-y-2">
+            <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
               <textarea
                 value={editDraft}
                 onChange={(e) => setEditDraft(e.target.value)}
@@ -916,8 +968,19 @@ export function MessageRow({
             <div className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-amber-50/90">{m.body}</div>
           )}
 
+          {/* ✅ Reaction chips (under text):
+              - Desktop: ALWAYS show if reactions exist
+              - Mobile: conditional (active/meaningful/mine)
+          */}
           {reactionGroups.length ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div
+              className={cx(
+                "mt-3 flex flex-wrap items-center gap-2",
+                "md:flex",
+                showReactionsMobile ? "flex" : "hidden md:flex"
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
               {reactionGroups.map((g) => (
                 <ReactionChip
                   key={g.emoji}
@@ -930,8 +993,18 @@ export function MessageRow({
             </div>
           ) : null}
 
-          {/* mobile quick reacts */}
-          <div className="mt-3 flex flex-wrap gap-1 md:hidden">
+          {/* ✅ Quick reacts row (under text):
+              - Mobile: only when active
+              - Desktop: only on hover (but still under text)
+          */}
+          <div
+            className={cx(
+              "mt-3 flex flex-wrap gap-1",
+              "md:flex md:opacity-0 md:group-hover:opacity-100 md:transition",
+              mobileActive ? "flex md:opacity-100" : "hidden md:flex"
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
             <QuickReactions onReact={onReact} />
           </div>
         </div>
@@ -1414,23 +1487,36 @@ export function TypeChip({
   );
 }
 
-export function Toggle({ on, onClick, title }: { on: boolean; onClick: () => void; title?: string }) {
+export function Toggle({
+  on,
+  onClick,
+  title,
+  className,
+}: {
+  on: boolean;
+  onClick: () => void;
+  title?: string;
+  className?: string;
+}) {
   return (
     <button
+      type="button"
       onClick={onClick}
       title={title}
+      aria-pressed={on}
       className={cx(
-        "relative h-9 w-16 rounded-full border transition",
-        on ? "border-amber-200/20 bg-[rgba(244,210,106,0.10)]" : "border-amber-200/10 bg-black/20"
+        "inline-flex items-center justify-center",
+        "h-8 min-w-[56px] px-3 rounded-full border",
+        "text-[11px] font-semibold tracking-wide",
+        "transition-colors duration-150",
+        on
+          ? "border-amber-200/20 bg-[rgba(244,210,106,0.12)] text-amber-50"
+          : "border-amber-200/10 bg-black/20 text-amber-50/55",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/20",
+        className
       )}
     >
-      <span
-        className={cx(
-          "absolute top-1 h-7 w-7 rounded-full transition",
-          "bg-amber-50/90 shadow-[0_0_18px_rgba(244,210,106,0.22)]",
-          on ? "left-8" : "left-1"
-        )}
-      />
+      {on ? "ON" : "OFF"}
     </button>
   );
 }
