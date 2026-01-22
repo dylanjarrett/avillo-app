@@ -1,6 +1,7 @@
+//components/intelligence/OutputHistory
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import UpgradeModal from "@/components/billing/UpgradeModal";
 
 /* ----------------------------------------
@@ -108,6 +109,28 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   const isPro = isProAccount(account);
+
+  // Engine pill scroller ref (mobile)
+  const pillsRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-scroll active pill (mobile only)
+  useEffect(() => {
+    // md breakpoint = 768px
+    if (typeof window === "undefined") return;
+    if (window.matchMedia("(min-width: 768px)").matches) return;
+
+    const root = pillsRef.current;
+    if (!root) return;
+
+    const activeEl = root.querySelector<HTMLButtonElement>("[data-active='true']");
+    if (!activeEl) return;
+
+    activeEl.scrollIntoView({
+      behavior: "smooth",
+      inline: "center",
+      block: "nearest",
+    });
+  }, [engineFilter]);
 
   // Load plan (cached) — no "Checking plan..." UI
   useEffect(() => {
@@ -256,9 +279,7 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
                 Upgrade to Pro
               </button>
 
-              <p className="text-[10px] text-slate-400/90">
-                Pro = leverage — fewer manual steps, more momentum.
-              </p>
+              <p className="text-[10px] text-slate-400/90">Pro = leverage — fewer manual steps, more momentum.</p>
             </div>
           </div>
         </section>
@@ -294,16 +315,32 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
             </div>
 
             <div className="flex flex-col gap-2 md:items-end">
-              {/* Engine pills */}
-              <div className="inline-flex rounded-full border border-slate-700/80 bg-slate-900/70 p-1 text-[11px]">
+              {/* Engine pills – mobile horizontal scroll */}
+              <div
+                ref={pillsRef}
+                className={[
+                  // Mobile: horizontal scroll (like page header)
+                  "flex w-full items-center gap-1 overflow-x-auto whitespace-nowrap",
+                  "touch-pan-x scroll-smooth",
+                  // Hide scrollbar
+                  "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+                  // Shared styling
+                  "rounded-full border border-slate-700/80 bg-slate-900/70 p-1 text-[11px]",
+                  // Desktop: no scrolling needed
+                  "md:w-auto md:overflow-visible",
+                ].join(" ")}
+              >
                 {ENGINE_FILTERS.map((f) => {
                   const active = engineFilter === f.value;
                   return (
                     <button
                       key={f.value}
                       type="button"
+                      data-active={active ? "true" : "false"}
                       onClick={() => setEngineFilter(f.value)}
                       className={[
+                        // Prevent shrinking so pills scroll instead of wrapping
+                        "shrink-0",
                         "px-3 py-1 rounded-full whitespace-nowrap transition-all duration-150",
                         active
                           ? "border border-[rgba(242,235,221,0.85)] bg-[rgba(242,235,221,0.12)] text-[var(--avillo-cream)] shadow-[0_0_0_1px_rgba(242,235,221,0.25),0_0_16px_rgba(242,235,221,0.20)]"
