@@ -57,7 +57,7 @@ function stageToLower(stage?: ContactStage | null): StageLower | null {
 }
 
 function normalizeRelationshipType(raw?: string | null): RelationshipTypeLower | undefined {
-  if (!raw) return undefined;
+  if (raw == null) return undefined; // allow "field omitted" semantics upstream
   const v = String(raw).toLowerCase().trim();
   if (v === "client" || v === "partner") return v;
   return undefined;
@@ -165,13 +165,13 @@ function shapeContact(contactRecord: any, linkedListings: LinkedListing[] = []) 
     linkedListings: isPartner ? [] : linkedListings,
 
     pins: Array.isArray(contactRecord.pins)
-  ? contactRecord.pins.map((cp: any) => ({
-      id: cp.id,
-      name: cp.pin?.name ?? "",
-      nameKey: cp.pin?.nameKey ?? "",
-      attachedAt: cp.createdAt?.toISOString?.() ?? null,
-    }))
-  : [],
+      ? contactRecord.pins.map((cp: any) => ({
+          id: cp.id,
+          name: cp.pin?.name ?? "",
+          nameKey: cp.pin?.nameKey ?? "",
+          attachedAt: cp.createdAt?.toISOString?.() ?? null,
+        }))
+      : [],
   };
 }
 
@@ -227,13 +227,9 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       include: {
-  contactNotes: true,
-  partnerProfile: true,
-        pins: {
-          include: {
-            pin: true, 
-          },
-        },
+        contactNotes: true,
+        partnerProfile: true,
+        pins: { include: { pin: true } },
       },
     });
 
@@ -282,7 +278,10 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     console.error("crm/contacts GET error:", err);
     return NextResponse.json(
-      { error: "We couldn’t load your contacts. Try again, or email support@avillo.io if it continues." },
+      {
+        error:
+          "We couldn’t load your contacts. Try again, or email support@avillo.io if it continues.",
+      },
       { status: 500 }
     );
   }
@@ -310,7 +309,7 @@ type SaveContactBody = {
   timeline?: string;
   source?: string;
 
-  relationshipType?: RelationshipTypeLower;
+  relationshipType?: RelationshipTypeLower | string | null;
 
   // partner profile
   businessName?: string;
@@ -355,10 +354,7 @@ export async function POST(req: NextRequest) {
     const normalizedClientRoleEnum = normalizeClientRole(clientRole ?? undefined);
     const normalizedSource = normalizeLowerTrim(source ?? undefined);
 
-    const normalizedRelationship = normalizeRelationshipType(relationshipType ?? null);
-    const prismaRelationshipEnum =
-      normalizedRelationship === "partner" ? RelationshipType.PARTNER : RelationshipType.CLIENT;
-
+    // Partner profile touched? (signals partner intent even if relationshipType omitted)
     const partnerProfileTouched =
       "businessName" in body ||
       "partnerType" in body ||
@@ -376,6 +372,19 @@ export async function POST(req: NextRequest) {
       profileUrl: normalizeTrim(profileUrl) ?? "",
     };
 
+    // Relationship patch semantics:
+    // - If field omitted => undefined (do NOT default to CLIENT on update)
+    // - If provided but invalid/empty => undefined (do NOT change)
+    const relationshipPatch: RelationshipTypeLower | undefined =
+      ("relationshipType" in body ? normalizeRelationshipType(relationshipType ?? null) : undefined);
+
+    const prismaRelationshipEnum: RelationshipType | undefined =
+      relationshipPatch === "partner"
+        ? RelationshipType.PARTNER
+        : relationshipPatch === "client"
+          ? RelationshipType.CLIENT
+          : undefined;
+
     let contactRecord: any = null;
 
     // -----------------------------
@@ -387,9 +396,7 @@ export async function POST(req: NextRequest) {
         include: {
           contactNotes: true,
           partnerProfile: true,
-          pins: {
-            include: { pin: true },
-          },
+          pins: { include: { pin: true } },
         },
       });
 
@@ -397,8 +404,15 @@ export async function POST(req: NextRequest) {
 
       const wasPartner = (existing.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER;
 
+      // If partner profile fields are being submitted, infer PARTNER unless explicitly set to CLIENT.
+      const inferredPartner = partnerProfileTouched && prismaRelationshipEnum !== RelationshipType.CLIENT;
+
       const willBePartner =
-        "relationshipType" in body ? prismaRelationshipEnum === RelationshipType.PARTNER : wasPartner;
+        inferredPartner
+          ? true
+          : prismaRelationshipEnum != null
+            ? prismaRelationshipEnum === RelationshipType.PARTNER
+            : wasPartner;
 
       const previousStageEnum: ContactStage | null = wasPartner
         ? null
@@ -412,7 +426,12 @@ export async function POST(req: NextRequest) {
       if ("email" in body) data.email = body.email ?? "";
       if ("phone" in body) data.phone = body.phone ?? "";
 
-      if ("relationshipType" in body) data.relationshipType = prismaRelationshipEnum;
+      // Relationship update: only if explicitly valid OR inferred by partner profile edits
+      if (inferredPartner) {
+        data.relationshipType = RelationshipType.PARTNER;
+      } else if (prismaRelationshipEnum != null) {
+        data.relationshipType = prismaRelationshipEnum;
+      }
 
       // client-only updates
       if (!willBePartner) {
@@ -425,7 +444,8 @@ export async function POST(req: NextRequest) {
         data.stage = null;
         data.clientRole = null;
 
-        if (partnerProfileTouched) {
+        // Ensure partner profile exists/updated when partner fields are touched OR when inferred partner
+        if (partnerProfileTouched || inferredPartner) {
           data.partnerProfile = {
             upsert: { create: partnerProfilePayload, update: partnerProfilePayload },
           };
@@ -464,9 +484,7 @@ export async function POST(req: NextRequest) {
           include: {
             contactNotes: true,
             partnerProfile: true,
-            pins: {
-              include: { pin: true },
-            },
+            pins: { include: { pin: true } },
           },
         });
 
@@ -523,7 +541,12 @@ export async function POST(req: NextRequest) {
     // CREATE
     // -----------------------------
     else {
-      const isPartner = prismaRelationshipEnum === RelationshipType.PARTNER;
+      // Create semantics:
+      // - If relationshipType is explicitly partner => partner
+      // - Else if partner profile fields were provided => partner
+      // - Else => client
+      const isPartner =
+        prismaRelationshipEnum === RelationshipType.PARTNER || (prismaRelationshipEnum == null && partnerProfileTouched);
 
       contactRecord = await prisma.contact.create({
         data: {
@@ -535,7 +558,7 @@ export async function POST(req: NextRequest) {
           email: email ?? "",
           phone: phone ?? "",
 
-          relationshipType: prismaRelationshipEnum,
+          relationshipType: isPartner ? RelationshipType.PARTNER : RelationshipType.CLIENT,
 
           stage: isPartner ? null : normalizedStageEnum ?? ContactStage.NEW,
           clientRole: isPartner ? null : normalizedClientRoleEnum ?? null,
@@ -546,16 +569,19 @@ export async function POST(req: NextRequest) {
           timeline: timeline ?? "",
           source: normalizedSource ?? "",
 
-          ...(isPartner && partnerProfileTouched
-            ? { partnerProfile: { create: partnerProfilePayload } }
+          // If partner, ensure partnerProfile exists (even if empty) when partner was inferred/touched.
+          ...(isPartner
+            ? {
+                partnerProfile: {
+                  create: partnerProfilePayload,
+                },
+              }
             : {}),
         },
         include: {
           contactNotes: true,
           partnerProfile: true,
-          pins: {
-            include: { pin: true },
-          },
+          pins: { include: { pin: true } },
         },
       });
 
@@ -603,7 +629,10 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error("crm/contacts POST error:", err);
     return NextResponse.json(
-      { error: "We couldn’t save this contact. Try again, or email support@avillo.io if it continues." },
+      {
+        error:
+          "We couldn’t save this contact. Try again, or email support@avillo.io if it continues.",
+      },
       { status: 500 }
     );
   }
@@ -642,7 +671,6 @@ export async function DELETE(req: NextRequest) {
       await tx.cRMActivity.deleteMany({ where: { contactId, workspaceId: ctx.workspaceId } });
       await tx.activity.deleteMany({ where: { contactId, workspaceId: ctx.workspaceId } });
 
-      // Task model is workspace-first; also delete where task is in this tenant
       await tx.task.deleteMany({ where: { contactId, workspaceId: ctx.workspaceId } });
 
       await tx.contactNote.deleteMany({ where: { contactId } });
@@ -666,7 +694,10 @@ export async function DELETE(req: NextRequest) {
 
     console.error("crm/contacts DELETE error:", err);
     return NextResponse.json(
-      { error: "We couldn’t delete this contact. Try again, or email support@avillo.io if it continues." },
+      {
+        error:
+          "We couldn’t delete this contact. Try again, or email support@avillo.io if it continues.",
+      },
       { status: 500 }
     );
   }

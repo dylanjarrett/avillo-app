@@ -1,3 +1,4 @@
+//api/automations/runs/route
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireEntitlement } from "@/lib/entitlements";
@@ -10,7 +11,7 @@ export async function GET(_req: NextRequest) {
   const ctx = await requireWorkspace();
   if (!ctx.ok) return NextResponse.json([], { status: 200 });
 
-  const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_READ");
+  const gate = await requireEntitlement(ctx.workspaceId, "AUTOMATIONS_READ");
   if (!gate.ok) return NextResponse.json([], { status: 200 });
 
   const runs = await prisma.automationRun.findMany({

@@ -1,3 +1,4 @@
+//api/automations/trigger/route
 import { NextRequest, NextResponse } from "next/server";
 import { requireEntitlement } from "@/lib/entitlements";
 import { prisma } from "@/lib/prisma";
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-    const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_TRIGGER");
+    const gate = await requireEntitlement(ctx.workspaceId, "AUTOMATIONS_TRIGGER");
     if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
     const body = (await req.json().catch(() => null)) as any | null;

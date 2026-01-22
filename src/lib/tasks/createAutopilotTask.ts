@@ -68,8 +68,8 @@ export async function createAutopilotTask(input: AutopilotTaskInput): Promise<Ta
   const since = new Date(Date.now() - dedupeWindowMinutes * 60 * 1000);
 
   // Safety: actor must belong to workspace
-  const membership = await prisma.workspaceUser.findUnique({
-    where: { workspaceId_userId: { workspaceId, userId: actorUserId } },
+  const membership = await prisma.workspaceUser.findFirst({
+    where: { workspaceId, userId: actorUserId, removedAt: null },
     select: { id: true },
   });
   if (!membership) return null;

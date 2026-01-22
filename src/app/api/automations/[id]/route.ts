@@ -152,8 +152,6 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           ...(status !== undefined ? { status } : {}),
           ...(reEnroll !== undefined ? { reEnroll } : {}),
           ...(timezone !== undefined ? { timezone } : {}),
-          // optional audit refresh
-          createdByUserId: ctx.userId,
         },
       });
 

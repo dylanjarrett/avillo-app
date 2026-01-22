@@ -26,8 +26,8 @@ function safeLogText(v: string, max = 80) {
 }
 
 async function isMember(workspaceId: string, userId: string) {
-  const membership = await prisma.workspaceUser.findUnique({
-    where: { workspaceId_userId: { workspaceId, userId } },
+  const membership = await prisma.workspaceUser.findFirst({
+    where: { workspaceId, userId, removedAt: null },
     select: { id: true },
   });
   return Boolean(membership);
@@ -91,16 +91,15 @@ export async function sendAutomationSms(args: SendAutomationSmsArgs) {
     data: { to, preview: safeLogText(body, 60) },
   });
 
-      return sendSms({
-      userId,
-      workspaceId,
-      to,
-      body,
-      ...(contactId ? { contactId } : {}),
-      source: "AUTOPILOT",
-    });
-    }
-
+  return sendSms({
+    userId,
+    workspaceId,
+    to,
+    body,
+    ...(contactId ? { contactId } : {}),
+    source: "AUTOPILOT",
+  });
+}
 
 export async function sendAutomationEmail(args: SendAutomationEmailArgs) {
   const { userId, workspaceId, to, subject, html, contactId } = args;

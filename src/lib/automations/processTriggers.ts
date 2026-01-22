@@ -31,15 +31,15 @@ export async function processTriggers(trigger: AutomationTrigger, context: Autom
     if (!workspaceId) return;
 
     // Defense-in-depth: if called directly, still enforce entitlement
-    const gate = await requireEntitlement(userId, "AUTOMATIONS_TRIGGER");
+    const gate = await requireEntitlement(workspaceId, "AUTOMATIONS_TRIGGER");
     if (!gate.ok) return;
 
     // Membership guard
-    const membership = await prisma.workspaceUser.findUnique({
-      where: { workspaceId_userId: { workspaceId, userId } },
-      select: { id: true },
-    });
-    if (!membership) return;
+    const membership = await prisma.workspaceUser.findFirst({
+    where: { workspaceId, userId, removedAt: null },
+    select: { id: true },
+  });
+  if (!membership) return;
 
     // Validate contact belongs to workspace + HARD RULE: Partner contacts don't run automations
     if (contactId) {

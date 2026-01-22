@@ -121,7 +121,7 @@ export async function POST(req: Request) {
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
     // Pro-only entitlement (userId keyed)
-    const gate = await requireEntitlement(ctx.userId, "INTELLIGENCE_SAVE");
+    const gate = await requireEntitlement(ctx.workspaceId, "INTELLIGENCE_SAVE");
     if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
     let body: SaveOutputBody;

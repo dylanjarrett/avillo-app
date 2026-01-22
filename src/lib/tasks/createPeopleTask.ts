@@ -68,8 +68,8 @@ export async function createPeopleTask(args: Args): Promise<Task | null> {
   const windowStart = new Date(Date.now() - dedupeWindowMinutes * 60 * 1000);
 
   // Safety: membership guard (actor must belong to workspace)
-  const membership = await prisma.workspaceUser.findUnique({
-    where: { workspaceId_userId: { workspaceId, userId: actorUserId } },
+  const membership = await prisma.workspaceUser.findFirst({
+    where: { workspaceId, userId: actorUserId, removedAt: null },
     select: { id: true },
   });
   if (!membership) return null;

@@ -46,8 +46,8 @@ function norm(v: any): string {
   return String(v ?? "").trim().toLowerCase();
 }
 
-async function canRunAutomations(userId: string) {
-  const gate = await requireEntitlement(userId, "AUTOMATIONS_RUN");
+async function canRunAutomations(workspaceId: string) {
+  const gate = await requireEntitlement(workspaceId, "AUTOMATIONS_RUN");
   return gate.ok;
 }
 
@@ -209,11 +209,11 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
   if (!userId || !workspaceId || !automationId) return;
 
   // Plan gate
-  if (!(await canRunAutomations(userId))) return;
+  if (!(await canRunAutomations(workspaceId))) return;
 
-  // Membership guard
-  const membership = await prisma.workspaceUser.findUnique({
-    where: { workspaceId_userId: { workspaceId, userId } },
+  // Membership guard (must be active membership)
+  const membership = await prisma.workspaceUser.findFirst({
+    where: { workspaceId, userId, removedAt: null },
     select: { id: true },
   });
   if (!membership) return;
@@ -346,7 +346,7 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
     for (const step of stepsToRun) {
       try {
         // Mid-run downgrade safety
-        if (!(await canRunAutomations(userId))) {
+        if (!(await canRunAutomations(workspaceId))) {
           await recordStep({
             stepId: step.id,
             stepType: step.type,

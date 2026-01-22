@@ -1,3 +1,4 @@
+//api/automations/run/route
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { runAutomation } from "@/lib/automations/runAutomation";
@@ -11,7 +12,7 @@ export async function POST(req: Request) {
   const ctx = await requireWorkspace();
   if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-  const gate = await requireEntitlement(ctx.userId, "AUTOMATIONS_RUN");
+  const gate = await requireEntitlement(ctx.workspaceId, "AUTOMATIONS_RUN");
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
   const body = await req.json().catch(() => null);
