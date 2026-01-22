@@ -2308,15 +2308,18 @@ function AutopilotActivityCard({
                 </div>
 
                 {expanded && steps.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    {steps.slice(0, 2).map((s: any, idx: number) => {
+                <div className="mt-2">
+                  <div className="max-h-40 space-y-1 overflow-y-auto pr-1 overscroll-contain">
+                    {steps.map((s: any, idx: number) => {
                       const label =
                         s?.label ||
                         s?.name ||
                         s?.stepType ||
                         s?.type ||
                         `Step ${idx + 1}`;
+
                       const msg = s?.message || s?.summary || "";
+
                       return (
                         <div
                           key={`${runId}-step-${idx}`}
@@ -2325,20 +2328,16 @@ function AutopilotActivityCard({
                           <p className="text-[10px] font-semibold text-slate-50">
                             {String(label)}
                           </p>
+
                           {msg ? (
-                            <p className="mt-0.5 text-[10px] text-[var(--avillo-cream-muted)]">
+                            <p className="mt-0.5 whitespace-pre-wrap text-[10px] text-[var(--avillo-cream-muted)]">
                               {String(msg)}
                             </p>
                           ) : null}
                         </div>
                       );
-                    })}
-
-                    {steps.length > 2 && (
-                      <p className="pt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                        +{steps.length - 2} more step{steps.length - 2 === 1 ? "" : "s"}
-                      </p>
-                    )}
+                     })}
+                     </div>
                   </div>
                 )}
               </div>
