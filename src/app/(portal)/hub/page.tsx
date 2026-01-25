@@ -245,6 +245,29 @@ function stableDmKey(a?: string | null, b?: string | null) {
   return `dm-${hash32(`dm:${lo}:${hi}`)}`;
 }
 
+function byCreatedAtAsc(a: { createdAt: string }, b: { createdAt: string }) {
+  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+}
+
+function mergeMessagesById(prev: Message[], incoming: Message[]) {
+  if (!incoming?.length) return prev;
+
+  const map = new Map<string, Message>();
+  for (const m of prev) map.set(m.id, m);
+
+  // merge incoming (server) messages
+  for (const m of incoming) {
+    map.set(m.id, m);
+  }
+
+  // keep any optimistic messages that haven't been replaced yet
+  const optimistic = prev.filter((m) => String(m.id).startsWith("optimistic:"));
+  for (const m of optimistic) map.set(m.id, m);
+
+  const merged = Array.from(map.values());
+  merged.sort(byCreatedAtAsc);
+  return merged;
+}
 
 /* ------------------------------------------------------------ */
 /* api                                                           */
@@ -376,6 +399,10 @@ export default function HubPage() {
   // left rail
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const selectedChannelIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedChannelIdRef.current = selectedChannelId;
+  }, [selectedChannelId]);
   const selectedChannel = useMemo(
     () => channels.find((c) => c.id === selectedChannelId) ?? null,
     [channels, selectedChannelId]
@@ -624,46 +651,24 @@ const board = useMemo(() => channels.find((c) => c.type === "BOARD") || null, [c
 
   pollingRef.current = true;
   try {
-    const current = messagesRef.current;
-    const last = current.length ? current[current.length - 1] : null;
-    const lastId = last?.id && !String(last.id).startsWith("optimistic:") ? last.id : null;
-
-    // ✅ EMPTY CHANNEL CASE: no anchor yet, so fetch latest page
-    if (!lastId) {
-    const res = await apiListMessages({ channelId, limit: 60, direction: "backward" });
-    if (!isOkMessages(res)) return;
-    if (!res.messages?.length) return;
-
-    forceScrollNextRef.current = true;
-    setMessages(res.messages);
-    setOlderCursor(res.nextCursor);
-
-    const now = Date.now();
-    if (now - lastChannelsRefreshAtRef.current > 15000) {
-      lastChannelsRefreshAtRef.current = now;
-      void refreshChannels(true);
-    }
-
-    return;
-  }
-
-    // ✅ NORMAL CASE: fetch messages after the last one we have
     const res = await apiListMessages({
       channelId,
-      limit: 50,
-      cursorId: lastId,
-      direction: "forward",
+      limit: 40,
+      direction: "backward",
     });
 
     if (!isOkMessages(res)) return;
-    if (!res.messages?.length) return;
 
-    setMessages((prev) => {
-      const seen = new Set(prev.map((m) => m.id));
-      const next = [...prev];
-      for (const m of res.messages) if (!seen.has(m.id)) next.push(m);
-      return next;
-    });
+    // ✅ If user switched channels while the request was in-flight, ignore results
+    if (selectedChannelIdRef.current !== channelId) return;
+
+    const incoming = res.messages || [];
+    if (!incoming.length) return;
+
+    setMessages((prev) => mergeMessagesById(prev, incoming));
+
+    // keep olderCursor fresh so "Load older" remains correct
+    setOlderCursor(res.nextCursor);
 
     const now = Date.now();
     if (now - lastChannelsRefreshAtRef.current > 15000) {
@@ -734,7 +739,7 @@ async function pollMentions() {
     // kick once shortly after initial load so it feels "instant"
     const kickoff = window.setTimeout(() => {
       void pollNewMessages(selectedChannelId);
-    }, 900);
+    }, 300);
 
     pollTimerRef.current = window.setInterval(() => {
       if (!document.hidden) void pollNewMessages(selectedChannelId);
