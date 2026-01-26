@@ -209,6 +209,14 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
         undimSidebar: true,
       },
       {
+        id: "nav-tasks",
+        title: "Tasks",
+        text: "Track what matters — open items, due dates, and follow-ups tied to contacts and listings.",
+        attachTo: { element: "#tour-nav-tasks", on: "right" },
+        offsetX: 0,
+        undimSidebar: true,
+      },
+      {
         id: "nav-hub",
         title: "Hub",
         text: "Your workspace hub — DMs, mentions, and a shared board for fast team context.",
@@ -487,7 +495,7 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
             .avillo-btn-primary {
               border-radius: 12px;
               border: 1px solid rgba(242, 235, 221, 0.55);
-              background: rgba(242, 235, 221, 0.10);
+              background: rgba(242, 235, 221, 0.1);
               color: var(--avillo-cream);
               font-size: 11px;
               font-weight: 800;

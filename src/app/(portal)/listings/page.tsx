@@ -1,3 +1,4 @@
+//app/(portal)/listings/page.tsx
 "use client";
 import type React from "react";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -1864,6 +1865,9 @@ export default function ListingsPage() {
 /* ------------------------------------
  * Small components
  * -----------------------------------*/
+function cx(...parts: Array<string | false | null | undefined>) {
+  return parts.filter(Boolean).join(" ");
+}
 
 function StatCard({
   label,
@@ -1874,6 +1878,7 @@ function StatCard({
   value: number;
   tone?: "green" | "amber" | "blue";
 }) {
+  // keep Listings glow colors the same as you had
   const glow =
     tone === "green"
       ? "shadow-[0_0_25px_rgba(34,197,94,0.28)]"
@@ -1881,17 +1886,30 @@ function StatCard({
       ? "shadow-[0_0_25px_rgba(245,158,11,0.22)]"
       : tone === "blue"
       ? "shadow-[0_0_25px_rgba(59,130,246,0.25)]"
-      : "";
+      : "shadow-[0_0_18px_rgba(15,23,42,0.55)]";
+
+  // Tasks-style ring behavior, but mapped to Listings tones
+  const ring =
+    tone === "green"
+      ? "border-emerald-300/30"
+      : tone === "amber"
+      ? "border-amber-300/30"
+      : tone === "blue"
+      ? "border-sky-300/30"
+      : "border-[#1d2940]";
+
   return (
     <div
-      className={`rounded-2xl border border-[#1d2940] bg-gradient-to-br from-[#050b16] to-[#0a1223] px-4 py-3 text-xs text-[#c0c9de]/90 ${glow}`}
+      className={cx(
+        "rounded-2xl border bg-gradient-to-br from-[#050b16] to-[#0a1223] px-4 py-3 text-xs text-[#c0c9de]/90",
+        ring,
+        glow
+      )}
     >
       <div className="text-[0.65rem] uppercase tracking-[0.22em] text-[#8f9bb8]/80">
         {label}
       </div>
-      <div className="mt-1 text-lg font-semibold text-[#f7f2e9]">
-        {value}
-      </div>
+      <div className="mt-1 text-lg font-semibold text-[#f7f2e9]">{value}</div>
     </div>
   );
 }

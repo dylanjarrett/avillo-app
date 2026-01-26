@@ -676,8 +676,8 @@ export default function DashboardPage() {
             value={taskCounts.openTotal}
             hint={taskCounts.overdue > 0 ? `${taskCounts.overdue} overdue • ${taskCounts.today} due today` : `${taskCounts.today} due today`}
             loading={loading && openTasks.length === 0}
-            ctaLabel="Open People →"
-            ctaHref="/people"
+            ctaLabel="Open Tasks →"
+            ctaHref="/tasks"
           />
           <StatCard
             label="AI runs (7 days)"
@@ -737,7 +737,7 @@ export default function DashboardPage() {
                 title={taskTab === "open" ? "Nothing open right now (nice)." : "No completed tasks yet."}
                 body={
                   taskTab === "open"
-                    ? "Tasks created from People notes and Autopilot will show here automatically."
+                    ? "Tasks created will show here automatically."
                     : "Mark tasks Done and they’ll show up here so you can reference what you finished."
                 }
               />
@@ -827,7 +827,7 @@ export default function DashboardPage() {
           <div className="mt-3 rounded-xl border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] text-[var(--avillo-cream-muted)]">
             {taskTab === "open" ? (
               <>
-                Autopilot tasks will appear here automatically as soon as they’re created. Mark a task{" "}
+                Tasks will appear here automatically as soon as they’re created. Mark a task{" "}
                 <span className="text-[var(--avillo-cream-strong)]">Done</span> to remove it from your open list.
               </>
             ) : (

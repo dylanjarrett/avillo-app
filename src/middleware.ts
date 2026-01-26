@@ -13,13 +13,12 @@ const PROTECTED_PATHS = [
   "/account",
   "/autopilot",
   "/workspace",
+  "/tasks",
   "/hub",
 ];
 
 function isProtectedPath(pathname: string) {
-  return PROTECTED_PATHS.some(
-    (base) => pathname === base || pathname.startsWith(`${base}/`)
-  );
+  return PROTECTED_PATHS.some((base) => pathname === base || pathname.startsWith(`${base}/`));
 }
 
 function isPublicPath(pathname: string) {

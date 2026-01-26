@@ -10,6 +10,7 @@ const TOOL_ITEMS = [
   { href: "/people", label: "People" },
   { href: "/listings", label: "Listings" },
   { href: "/autopilot", label: "Autopilot" },
+  { href: "/tasks", label: "Tasks" },
   { href: "/hub", label: "Hub" },
 ];
 
@@ -36,6 +37,8 @@ function tourIdForHref(href: string) {
       return "tour-nav-listings";
     case "/autopilot":
       return "tour-nav-autopilot";
+    case "/tasks":
+      return "tour-nav-tasks";
     case "/hub":
       return "tour-nav-hub";
     default:
@@ -146,7 +149,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-[#273247] bg-[#0f1729] px-2 py-1 text-[0.7rem] text-[#f7f2e9] transition hover:bg-[#162037]"
+            className="rounded-full border border-[#273247] bg-[#0f1729] px-2 py-1 text-[0.7rem] text-[#f7f2e9] transition hover:bg-[#162037)"
           >
             Close
           </button>
