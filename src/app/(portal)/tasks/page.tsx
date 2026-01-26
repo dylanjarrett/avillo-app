@@ -279,6 +279,17 @@ export default function TasksPage() {
     if (isMobile()) scrollBackToLastListPosition();
   }
 
+  function closeWorkspaceMobileKeepSelection() {
+    if (!isMobile()) return;
+    setWorkspaceOpenMobile(false);
+    // IMPORTANT: do NOT clear selectedTaskId (keeps list stable)
+    scrollBackToLastListPosition();
+  }
+
+  function bounceToListIfMobile() {
+    closeWorkspaceMobileKeepSelection();
+  }
+
   /* ------------------------------------
    * Data loading
    * -----------------------------------*/
@@ -484,6 +495,8 @@ export default function TasksPage() {
   ) {
     if (!taskId) return;
 
+    bounceToListIfMobile();
+
     setSavingDetailsId(taskId);
     setError(null);
 
@@ -534,6 +547,8 @@ export default function TasksPage() {
 
   async function assignTask(taskId: string, assignedToUserId: string) {
     if (!taskId || !assignedToUserId) return;
+
+    bounceToListIfMobile();
 
     setAssigningId(taskId);
     setError(null);
@@ -617,6 +632,9 @@ export default function TasksPage() {
 
   async function markTaskDone(taskId: string) {
     if (!taskId) return;
+    
+    bounceToListIfMobile();
+    
     setBusyId(taskId);
 
     const prevOpen = openTasks;
@@ -650,6 +668,9 @@ export default function TasksPage() {
 
   async function reopenTask(taskId: string) {
     if (!taskId) return;
+
+    bounceToListIfMobile();
+
     setBusyId(taskId);
 
     const prevOpen = openTasks;
@@ -1445,7 +1466,7 @@ function TaskWorkspace({
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {task.contact?.id && (
                 <a
-                  href={`/people?contactId=${task.contact.id}`}
+                  href={task.contact?.id ? `/people?contactId=${task.contact.id}` : "/people"}
                   className="inline-flex items-center rounded-full border border-[#1d2940] bg-slate-950/25 px-2.5 py-1 text-[10px] font-semibold text-[var(--avillo-cream)] hover:border-[rgba(242,235,221,0.55)]"
                 >
                   Open contact →
@@ -1453,7 +1474,7 @@ function TaskWorkspace({
               )}
               {task.listing?.id && (
                 <a
-                  href={`/listings/${task.listing.id}`}
+                  href={task.listing?.id ? `/listings?listingId=${task.listing.id}` : "/listings"}
                   className="inline-flex items-center rounded-full border border-[#1d2940] bg-slate-950/25 px-2.5 py-1 text-[10px] font-semibold text-[var(--avillo-cream)] hover:border-[rgba(242,235,221,0.55)]"
                 >
                   Open listing →
