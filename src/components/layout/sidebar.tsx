@@ -90,22 +90,26 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
 
   function SidebarInner() {
     return (
-      <div className="flex h-full flex-col bg-[#050b16]/80 backdrop-blur-xl pb-6">
-        <div className="px-6 pt-4 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
-          TOOLS
+      <div className="flex h-full flex-col bg-[#050b16]/80 backdrop-blur-xl">
+        {/* Scrollable area (this is what fixes desktop cutoff) */}
+        <div className="flex-1 overflow-y-auto pb-6 scrollbar-thin scrollbar-thumb-[#1d2940] scrollbar-track-transparent">
+          <div className="px-6 pt-4 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
+            TOOLS
+          </div>
+
+          <nav className="flex flex-col gap-1 px-3 pb-4">{TOOL_ITEMS.map(renderNavItem)}</nav>
+
+          <div className="mx-6 my-2 h-px bg-[#1a2435]/60" />
+
+          <div className="px-6 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
+            ADMIN
+          </div>
+
+          <nav className="flex flex-col gap-1 px-3 pb-4">{ACCOUNT_ITEMS.map(renderNavItem)}</nav>
         </div>
 
-        <nav className="flex flex-col gap-1 px-3 pb-4">{TOOL_ITEMS.map(renderNavItem)}</nav>
-
-        <div className="mx-6 my-2 h-px bg-[#1a2435]/60" />
-
-        <div className="px-6 pb-2 text-[0.7rem] font-semibold tracking-[0.24em] text-[#a3b0d0]/70">
-          ADMIN
-        </div>
-
-        <nav className="flex flex-col gap-1 px-3 pb-4">{ACCOUNT_ITEMS.map(renderNavItem)}</nav>
-
-        <div className="mt-auto px-6 text-[0.7rem] text-[#8f9bb8]/70">
+        {/* Footer stays reachable without needing zoom-out */}
+        <div className="border-t border-[#1d2940]/60 px-6 py-4 text-[0.7rem] text-[#8f9bb8]/70">
           Private beta · <span className="text-[#f7f2e9]">Single-seat preview</span>
         </div>
       </div>
