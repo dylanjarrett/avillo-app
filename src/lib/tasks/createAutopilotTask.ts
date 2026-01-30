@@ -1,5 +1,6 @@
 // src/lib/tasks/createAutopilotTask.ts
 import type { Task, TaskSource, TaskStatus } from "@prisma/client";
+import { normalizeToMinute } from "@/lib/time";
 
 type AutopilotTaskInput = {
   userId: string; // actor (runner)
@@ -30,12 +31,6 @@ function clampInt(n: any, min: number, max: number, fallback: number) {
   const x = Number(n);
   if (!Number.isFinite(x)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(x)));
-}
-
-function normalizeToMinute(d: Date) {
-  const x = new Date(d);
-  x.setSeconds(0, 0);
-  return x;
 }
 
 async function getPrisma() {

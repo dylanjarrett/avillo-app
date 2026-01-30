@@ -1,26 +1,36 @@
+// src/app/(portal)/layout.tsx
 "use client";
 
 import React, { useState } from "react";
 import Navbar from "@/components/layout/navbar";
 import Sidebar from "@/components/layout/sidebar";
 import { TourProvider } from "@/components/tour/tour-provider";
+import AIBubble from "@/components/ai/ai-bubble";
 
-export default function PortalLayout({ children }: { children: React.ReactNode }) {
+export default function PortalLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
     <TourProvider>
-      <Navbar sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((prev) => !prev)} />
+      <Navbar
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
+      />
 
       <div
         className="
           relative
           w-full
           min-h-[calc(100vh-5rem)]
-          lg:grid lg:grid-cols-[260px_minmax(0,1fr)]
+          lg:grid
+          lg:grid-cols-[260px_minmax(0,1fr)]
         "
       >
-        {/* Sidebar column */}
+        {/* Sidebar */}
         <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
         {/* Main content */}
@@ -39,6 +49,9 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
           </div>
         </main>
       </div>
+
+      {/* Global floating AI assistant */}
+      <AIBubble />
     </TourProvider>
   );
 }

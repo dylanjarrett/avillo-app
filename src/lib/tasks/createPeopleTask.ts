@@ -1,5 +1,6 @@
 // src/lib/tasks/createPeopleTask.ts
 import type { Task, TaskSource, TaskStatus } from "@prisma/client";
+import { normalizeToMinute } from "@/lib/time";
 
 type Args = {
   userId: string; // caller / actor
@@ -33,12 +34,6 @@ function clampInt(n: any, min: number, max: number, fallback: number) {
   return Math.max(min, Math.min(max, Math.floor(x)));
 }
 
-function normalizeToMinute(d: Date) {
-  const x = new Date(d);
-  x.setSeconds(0, 0);
-  return x;
-}
-
 async function getPrisma() {
   const { prisma } = await import("@/lib/prisma");
   return prisma;
@@ -62,7 +57,8 @@ export async function createPeopleTask(args: Args): Promise<Task | null> {
   const assignedToUserId = (args.assignedToUserId ?? actorUserId) || actorUserId;
 
   const normalizeDue = args.normalizeDueAtToMinute ?? true;
-  const dueAt = args.dueAt ? (normalizeDue ? normalizeToMinute(args.dueAt) : args.dueAt) : null;
+  const dueAtRaw = args.dueAt ?? null;
+  const dueAt = dueAtRaw ? (normalizeDue ? normalizeToMinute(dueAtRaw) : dueAtRaw) : null;
 
   const dedupeWindowMinutes = clampInt(args.dedupeWindowMinutes, 1, 240, 10);
   const windowStart = new Date(Date.now() - dedupeWindowMinutes * 60 * 1000);

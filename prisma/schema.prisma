@@ -192,6 +192,9 @@ model User {
   crmRecords          CRMRecord[]          @relation("CRMRecordCreatedBy")
   automations         Automation[]         @relation("AutomationCreatedBy")
 
+  createdAIArtifacts        AIArtifact[]        @relation("AIArtifactCreatedBy")
+  createdAIContextSnapshots AIContextSnapshot[] @relation("AIContextSnapshotCreatedBy")
+
   smsMessages     SmsMessage[]     @relation("SmsMessageCreatedBy")
   smsSuppressions SmsSuppression[] @relation("SmsSuppressionCreatedBy")
 
@@ -270,6 +273,9 @@ model Workspace {
   chatAttachments     ChatAttachment[]
   chatMentions        ChatMention[]
   chatMembers         ChatChannelMember[]
+  aiArtifacts         AIArtifact[]
+  aiJobs              AIJob[]
+  aiContextSnapshots  AIContextSnapshot[]
 
   @@unique([stripeCustomerId])
   @@unique([stripeSubscriptionId])
@@ -631,6 +637,8 @@ model Contact {
 
   intelligenceOutputs IntelligenceOutput[]
 
+  aiArtifacts AIArtifact[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -756,6 +764,7 @@ model Listing {
   activities          Activity[]
   tasks               Task[]
   intelligenceOutputs IntelligenceOutput[]
+  aiArtifacts         AIArtifact[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -884,6 +893,8 @@ model IntelligenceOutput {
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
+  aiArtifacts AIArtifact[] @relation("AIArtifactIntelligenceOutput")
+
   engineInput  Json?
   inputSummary String?
   payload      Json?
@@ -894,6 +905,143 @@ model IntelligenceOutput {
   @@index([workspaceId, createdAt])
   @@index([workspaceId, listingId, createdAt])
   @@index([workspaceId, contactId, createdAt])
+  @@index([createdByUserId, createdAt])
+}
+
+// ---------------------------
+// AI ARTIFACTS (PERSISTENT AI MEMORY + UI OBJECTS)
+// ---------------------------
+model AIArtifact {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Who generated it (optional)
+  createdByUserId String?
+  createdByUser   User?   @relation("AIArtifactCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // Flexible targeting (optional)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  // What this artifact is (string-keyed to avoid enum migrations)
+  // Examples:
+  //   kind:  "next_best_actions", "daily_brief", "contact_summary", "listing_momentum"
+  //   scope: "workspace" | "contact" | "listing"
+  kind  String @db.VarChar(64)
+  scope String @db.VarChar(24)
+
+  // Versioning so you can iterate without breaking old reads
+  version Int @default(1)
+
+  // Content
+  preview String?
+  payload Json
+
+  // Quality + lifecycle
+  confidence Float?
+  isActive   Boolean   @default(true) // allow replacement without deleting history
+  expiresAt  DateTime?
+
+  // Optional: tie back to a run (audit/debug)
+  intelligenceOutputId String?
+  intelligenceOutput   IntelligenceOutput? @relation("AIArtifactIntelligenceOutput", fields: [intelligenceOutputId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, kind, scope, isActive, createdAt])
+  @@index([workspaceId, kind, scope, isActive, updatedAt])
+  @@index([workspaceId, contactId, kind, isActive, createdAt])
+  @@index([workspaceId, listingId, kind, isActive, createdAt])
+  @@index([createdByUserId, createdAt])
+  @@index([intelligenceOutputId])
+}
+
+// ---------------------------
+// AI JOBS (LIGHTWEIGHT QUEUE FOR TRIGGER-BASED FRESHNESS)
+// ---------------------------
+model AIJob {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // What to compute
+  kind    String @db.VarChar(64) // "next_best_actions"
+  scope   String @db.VarChar(24) // "workspace" | "contact" | "listing"
+  version Int    @default(1)
+
+  // Normalized target identity to guarantee uniqueness even when contactId/listingId is null
+  // Examples:
+  // - scope="workspace" => targetKey="workspace"
+  // - scope="contact"   => targetKey="contact:<contactId>"
+  // - scope="listing"   => targetKey="listing:<listingId>"
+  targetKey String @db.VarChar(128)
+
+  // Optional targeting
+  contactId String?
+  listingId String?
+
+  // Scheduling / locking
+  status   String   @default("queued") // queued|running|done|failed
+  runAt    DateTime @default(now())
+  attempts Int      @default(0)
+
+  lockedAt DateTime?
+  lockId   String?
+
+  payload   Json?
+  lastError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Prevent job spam for same target (works reliably with Postgres NULL semantics)
+  @@unique([workspaceId, kind, scope, version, targetKey])
+  @@index([workspaceId, status, runAt])
+  @@index([workspaceId, status, lockedAt])
+  @@index([workspaceId, kind, scope, runAt])
+  @@index([workspaceId, targetKey])
+  @@index([workspaceId, contactId, kind, runAt])
+  @@index([workspaceId, listingId, kind, runAt])
+}
+
+// ---------------------------
+// AI CONTEXT SNAPSHOTS (OPTIONAL AUDIT/DEBUG; TTL-ABLE)
+// ---------------------------
+model AIContextSnapshot {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  createdByUserId String?
+  createdByUser   User?   @relation("AIContextSnapshotCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // Optional targeting
+  contactId String?
+  listingId String?
+
+  // What this snapshot represents
+  kind    String @db.VarChar(64)
+  scope   String @db.VarChar(24)
+  version Int    @default(1)
+
+  // The assembled context payload (what the AI actually saw)
+  payload Json
+
+  // If you want automatic cleanup later
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([workspaceId, kind, createdAt])
+  @@index([workspaceId, expiresAt])
   @@index([createdByUserId, createdAt])
 }
 

@@ -2,19 +2,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import { dayBoundsForTZ, safeIanaTZ, endOfDayForTZ, parseTaskInstant } from "@/lib/time";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type TaskStatus = "OPEN" | "DONE";
 type TaskScope = "today" | "overdue" | "week" | "all";
-
-function startOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-}
-function endOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-}
 
 function normalizeStatus(raw: any): TaskStatus {
   const v = String(raw ?? "").toUpperCase().trim();
@@ -27,10 +21,11 @@ function normalizeScope(raw: any): TaskScope {
   return "today";
 }
 
-function parseDate(raw?: string | null): Date | null {
-  if (!raw) return null;
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime()) ? null : d;
+function clampId(v: string | null) {
+  if (!v) return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.length > 128 ? s.slice(0, 128) : s;
 }
 
 export async function GET(req: NextRequest) {
@@ -43,30 +38,26 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const scope = normalizeScope(url.searchParams.get("scope"));
     const status = normalizeStatus(url.searchParams.get("status"));
-    const contactId = url.searchParams.get("contactId");
-    const listingId = url.searchParams.get("listingId");
+    const contactId = clampId(url.searchParams.get("contactId"));
+    const listingId = clampId(url.searchParams.get("listingId"));
     const includeDeleted = url.searchParams.get("includeDeleted") === "1";
 
-    const now = new Date();
-    let dueFilter: any = {};
+    // ✅ TZ-aware boundaries
+    const browserTZ = safeIanaTZ(url.searchParams.get("tz"));
+    const { todayStart, tomorrowStart, in7Start } = dayBoundsForTZ(browserTZ);
 
+    let dueFilter: any = {};
     if (scope === "today") {
-      dueFilter = { dueAt: { gte: startOfDay(now), lte: endOfDay(now) } };
+      dueFilter = { dueAt: { gte: todayStart, lt: tomorrowStart } };
     } else if (scope === "overdue") {
-      dueFilter = { dueAt: { lt: startOfDay(now) } };
+      dueFilter = { dueAt: { lt: todayStart } };
     } else if (scope === "week") {
-      const start = startOfDay(now);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 7);
-      dueFilter = { dueAt: { gte: start, lt: end } };
+      dueFilter = { dueAt: { gte: tomorrowStart, lt: in7Start } };
     }
 
     const where: any = {
       workspaceId: ctx.workspaceId,
-
-      // “My tasks” behavior: show tasks assigned to me
       assignedToUserId: ctx.userId,
-
       status,
       ...(includeDeleted ? {} : { deletedAt: null }),
       ...(contactId ? { contactId } : {}),
@@ -116,12 +107,19 @@ export async function GET(req: NextRequest) {
 type CreateTaskBody = {
   title?: string;
   notes?: string;
+
+  // datetime (preferred)
   dueAt?: string | null;
+
+  // date-only ("YYYY-MM-DD") -> end-of-day in tz
+  dueDate?: string | null;
+
+  // timezone (IANA)
+  tz?: string | null;
+
   contactId?: string | null;
   listingId?: string | null;
   source?: "PEOPLE_NOTE" | "AUTOPILOT" | "MANUAL";
-
-  // Optional enterprise: allow creating tasks for someone else
   assignedToUserId?: string | null;
 };
 
@@ -137,7 +135,15 @@ export async function POST(req: NextRequest) {
 
     const title = body.title.trim();
     const notes = body.notes?.trim() || null;
-    const dueAt = parseDate(body.dueAt ?? null);
+
+    // ✅ Normalize tz
+    const browserTZ = safeIanaTZ(body.tz);
+
+    // ✅ Unified dueAt parsing (minute-stable)
+    const dueAtFromInstant = parseTaskInstant(body.dueAt ?? null, browserTZ);
+    const dueAtFromDate = body?.dueDate ? endOfDayForTZ(browserTZ, body.dueDate) : null;
+
+    const dueAt = dueAtFromInstant ?? dueAtFromDate;
 
     // Validate referenced entities are in workspace
     if (body.contactId) {
@@ -157,19 +163,15 @@ export async function POST(req: NextRequest) {
     }
 
     const source = (body.source ?? "MANUAL") as any;
-
     const assignedToUserId = (body.assignedToUserId ?? ctx.userId) || ctx.userId;
 
     const task = await prisma.task.create({
       data: {
         workspaceId: ctx.workspaceId,
-
         createdByUserId: ctx.userId,
         assignedToUserId,
-
         contactId: body.contactId ?? null,
         listingId: body.listingId ?? null,
-
         title,
         notes,
         dueAt,
@@ -183,7 +185,6 @@ export async function POST(req: NextRequest) {
         data: {
           workspaceId: ctx.workspaceId,
           actorUserId: ctx.userId,
-
           contactId: task.contactId,
           type: "task_created",
           summary: `Task created: ${task.title}`,
@@ -194,6 +195,8 @@ export async function POST(req: NextRequest) {
             dueAt: task.dueAt ? task.dueAt.toISOString() : null,
             listingId: task.listingId ?? null,
             assignedToUserId,
+            tz: browserTZ,
+            dueDate: body.dueDate ?? null,
           },
         },
       });

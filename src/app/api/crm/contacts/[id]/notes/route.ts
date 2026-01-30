@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import { parseTaskInstant, safeIanaTZ, normalizeToMinute } from "@/lib/time";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,10 @@ export const dynamic = "force-dynamic";
 type CreateNoteBody = {
   text?: string;
   taskAt?: string | null;
+
+  // Optional: browser IANA timezone, e.g. "America/Los_Angeles"
+  // If taskAt is sent WITHOUT a Z/offset, we interpret it in this tz.
+  tz?: string | null;
 };
 
 function safeTrim(v?: string | null) {
@@ -45,18 +50,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const noteText = safeTrim(body?.text);
     if (!noteText) return NextResponse.json({ error: "Note text is required." }, { status: 400 });
 
-    // Normalize taskAt
-    let taskDate: Date | null = null;
-    let dueAtIso: string | null = null;
-
-    if (body?.taskAt) {
-      const parsed = new Date(body.taskAt);
-      if (!Number.isNaN(parsed.getTime())) {
-        dueAtIso = parsed.toISOString();
-        taskDate = new Date(dueAtIso);
-        taskDate.setSeconds(0, 0); // minute-stable
-      }
-    }
+    // ✅ Canonical task time parsing (src/lib/time.ts)
+    // - ISO with Z/offset is respected (absolute instant)
+    // - local ISO without offset is interpreted in tz (if valid), else UTC
+    // - always minute-stable
+    const tz = safeIanaTZ(body?.tz) ?? null;
+    const taskDate = parseTaskInstant(body?.taskAt ?? null, tz);
 
     const note = await prisma.$transaction(async (tx) => {
       const createdNote = await tx.contactNote.create({
@@ -81,14 +80,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       });
 
       // If note has a task date, create a Task row so it appears on Dashboard
-      // (Partners can have notes, but your UI previously used PEOPLE_NOTE tasks; keep it consistent.)
-      if (taskDate && dueAtIso) {
+      // (Keep consistent with prior behavior: PEOPLE_NOTE task source)
+      if (taskDate) {
         const first = safeTrim(contact.firstName);
         const last = safeTrim(contact.lastName);
         const name = `${first} ${last}`.trim() || safeTrim(contact.email) || "Contact";
 
         const title = `Task for: ${name}`;
-        const windowStart = new Date(Date.now() - 10 * 60 * 1000);
+
+        // ✅ Global minute-stable rule for dedupe window
+        const windowStart = normalizeToMinute(new Date(Date.now() - 10 * 60 * 1000));
 
         const existing = await tx.task.findFirst({
           where: {

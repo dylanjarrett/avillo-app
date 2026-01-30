@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messaging";
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
 import { requireEntitlement } from "@/lib/entitlements";
+import { computeTaskDueAtFromConfig, normalizeToMinute } from "@/lib/time";
 
 /* ------------------------------------
  * Types
@@ -171,29 +172,6 @@ function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
     return d;
   }
   d.setMonth(d.getMonth() + amount);
-  return d;
-}
-
-function parseDueAt(raw: any): Date | null {
-  if (!raw) return null;
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function computeExplicitDueAtFromTaskConfig(config: any, base: Date): Date | null {
-  const direct = config?.dueAt ?? config?.taskAt ?? config?.reminderAt ?? config?.date ?? config?.datetime ?? null;
-  const parsed = parseDueAt(direct);
-  if (parsed) return parsed;
-
-  const minutes = Number(config?.minutes ?? config?.dueInMinutes ?? 0);
-  const hours = Number(config?.hours ?? config?.dueInHours ?? 0);
-  const days = Number(config?.days ?? config?.dueInDays ?? 0);
-
-  if (!minutes && !hours && !days) return null;
-
-  const d = new Date(base);
-  d.setMinutes(d.getMinutes() + minutes + hours * 60);
-  d.setDate(d.getDate() + days);
   return d;
 }
 
@@ -442,8 +420,9 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
 
             const notes = String(step.config?.notes ?? step.config?.description ?? "").trim() || null;
 
-            const explicitDueAt = computeExplicitDueAtFromTaskConfig(step.config, cursorTime);
-            const dueAt = explicitDueAt ?? cursorTime;
+            // ✅ Canonical resolver (src/lib/time.ts)
+            const resolved = computeTaskDueAtFromConfig(step.config, cursorTime);
+            const dueAt = resolved.dueAt ?? normalizeToMinute(cursorTime);
 
             const created = await createAutopilotTask({
               userId,
@@ -464,7 +443,7 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
               payload: {
                 taskId: created?.id ?? null,
                 dueAt: dueAt ? dueAt.toISOString() : null,
-                dueAtSource: explicitDueAt ? "explicit" : "cursor",
+                dueAtSource: resolved.source, // "absolute" | "relative" | "none"
                 cursorAt: cursorTime.toISOString(),
               },
             });
