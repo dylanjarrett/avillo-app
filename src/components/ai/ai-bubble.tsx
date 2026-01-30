@@ -64,6 +64,22 @@ export default function AIBubble() {
   ]);
   const [isTyping, setIsTyping] = useState(false);
 
+  // Mobile detection (used only for behavior; layout classes remain unchanged on desktop)
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    function compute() {
+      // Tailwind's "sm" is 640px; match that to keep behavior consistent with your max-sm classes.
+      setIsMobile(window.matchMedia("(max-width: 640px)").matches);
+    }
+    compute();
+    window.addEventListener("resize", compute, { passive: true });
+    window.addEventListener("orientationchange", compute);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("orientationchange", compute);
+    };
+  }, []);
+
   const inputRef = useRef<HTMLInputElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -197,32 +213,40 @@ export default function AIBubble() {
 
   const sendButtonLabel = useMemo(() => (isTyping ? "Stop" : "Send"), [isTyping]);
 
+  // Mobile fix:
+  // - When the drawer is open on mobile, hide the floating bubble so it cannot overlap the Send button.
+  // Desktop placement stays exactly the same.
+  const showBubbleButton = !(open && isMobile);
+
   return (
     <>
       {/* Bubble (KEEP EXACT FIXED BUTTON STRUCTURE) */}
-      <button
-        type="button"
-        aria-label={open ? "Close Zora" : "Open Zora"}
-        onClick={() => setOpen((v) => !v)}
-        className={[
-          "fixed z-[80]",
-          "right-4",
-          "bottom-4",
-          "pb-[env(safe-area-inset-bottom)]",
-          "h-12 w-12 rounded-full",
-          "border border-white/10",
-          "bg-[#050814]/80 backdrop-blur",
-          "shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_10px_30px_rgba(0,0,0,0.45)]",
-          "hover:bg-[#050814]/90",
-          "active:scale-[0.98]",
-          "transition",
-        ].join(" ")}
-      >
-        <span className="absolute inset-0 rounded-full shadow-[0_0_20px_rgba(230,214,170,0.16)]" />
-        <span className="relative flex h-full w-full items-center justify-center text-[#F4E8C8]">
-          <IconSpark className="h-[18px] w-[18px] text-[#F4E8C8]" />
-        </span>
-      </button>
+      {showBubbleButton && (
+        <button
+          type="button"
+          aria-label={open ? "Close Zora" : "Open Zora"}
+          onClick={() => setOpen((v) => !v)}
+          className={[
+            "fixed z-[80]",
+            // Safe-area aware anchor (prevents rotation/viewport weirdness on iOS Safari)
+            "right-[calc(1rem+env(safe-area-inset-right))]",
+            "bottom-[calc(1rem+env(safe-area-inset-bottom))]",
+            // keep size stable
+            "h-12 w-12 rounded-full",
+            "border border-white/10",
+            "bg-[#050814]/80 backdrop-blur",
+            "shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_10px_30px_rgba(0,0,0,0.45)]",
+            "hover:bg-[#050814]/90",
+            "active:scale-[0.98]",
+            "transition",
+          ].join(" ")}
+        >
+          <span className="absolute inset-0 rounded-full shadow-[0_0_20px_rgba(230,214,170,0.16)]" />
+          <span className="relative flex h-full w-full items-center justify-center text-[#F4E8C8]">
+            <IconSpark className="h-[18px] w-[18px] text-[#F4E8C8]" />
+          </span>
+        </button>
+      )}
 
       {/* Panel */}
       {open && (
@@ -234,8 +258,10 @@ export default function AIBubble() {
           <div
             className={[
               "absolute",
+              // keep your desktop placement exactly as-is
               "right-4 bottom-20",
-              "max-sm:left-3 max-sm:right-3 max-sm:bottom-20",
+              // mobile: keep it above the safe area + leave room for keyboard without shifting the bubble into the Send button
+              "max-sm:left-3 max-sm:right-3 max-sm:bottom-[calc(5rem+env(safe-area-inset-bottom))]",
               "w-[480px] max-w-[calc(100vw-2rem)]",
               "max-sm:w-auto",
               "rounded-2xl",
@@ -358,7 +384,13 @@ export default function AIBubble() {
             </div>
 
             {/* Input */}
-            <div className="relative border-t border-white/10 p-3">
+            <div
+              className={[
+                "relative border-t border-white/10 p-3",
+                // iOS safe area so the composer never gets cramped at the bottom
+                "pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
+              ].join(" ")}
+            >
               <div className="flex gap-2">
                 <input
                   ref={inputRef}
