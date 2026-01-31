@@ -1,7 +1,7 @@
 // src/components/ai/ai-bubble.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 type Msg = { id: string; role: "assistant" | "user"; text: string };
 
@@ -118,15 +118,23 @@ export default function AIBubble() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Focus input + scroll on open
-  useEffect(() => {
+  // Focus input + snap to bottom on open (before paint to avoid visible jump)
+  useLayoutEffect(() => {
     if (!open) return;
-    const t = window.setTimeout(() => {
+
+    const el = bodyRef.current;
+    if (el) {
+      // Disable smooth for the initial position so it doesn't animate from the top
+      el.style.scrollBehavior = "auto";
+      el.scrollTop = el.scrollHeight;
+    }
+
+    // Focus after layout so it doesn't fight scroll on iOS
+    requestAnimationFrame(() => {
       inputRef.current?.focus();
-      const el = bodyRef.current;
-      if (el) el.scrollTo({ top: el.scrollHeight });
-    }, 50);
-    return () => window.clearTimeout(t);
+      // Restore smooth behavior for subsequent message appends
+      if (el) el.style.scrollBehavior = "";
+    });
   }, [open]);
 
   // Scroll to bottom on new messages (only if user is already near bottom)
