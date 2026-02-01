@@ -157,22 +157,12 @@ function formatDueLabel(dueAtIso: string | null) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function taskSourcePillClass(source?: string) {
-  const s = (source || "").toUpperCase();
-  if (s === "AUTOPILOT") {
+function taskSourcePillClass() {
     return "inline-flex items-center rounded-full border border-fuchsia-200/70 bg-fuchsia-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-fuchsia-100";
-  }
-  if (s === "PEOPLE_NOTE") {
-    return "inline-flex items-center rounded-full border border-sky-200/70 bg-sky-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-sky-100";
-  }
-  return "inline-flex items-center rounded-full border border-slate-500/70 bg-slate-800/50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-100";
 }
 
 function taskSourceLabel(source?: string) {
-  const s = (source || "").toUpperCase();
-  if (s === "AUTOPILOT") return "Autopilot";
-  if (s === "PEOPLE_NOTE") return "People";
-  return "Manual";
+  return (source || "").toUpperCase() === "AUTOPILOT" ? "Autopilot" : null;
 }
 
 export default function DashboardPage() {
@@ -755,7 +745,9 @@ export default function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="truncate text-[11px] font-semibold text-slate-50">{t.title || "Task"}</p>
-                        <span className={taskSourcePillClass(t.source)}>{taskSourceLabel(t.source)}</span>
+                        {taskSourceLabel(t.source) && (
+                          <span className={taskSourcePillClass()}>{taskSourceLabel(t.source)}</span>
+                        )}
                       </div>
 
                       {(t.contact?.name || t.listing?.address) && (

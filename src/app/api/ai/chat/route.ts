@@ -320,6 +320,7 @@ export async function POST(req: Request) {
       myRecentContacts,
       myRecentListings,
       lastTouchByContact,
+      workspacePins, // ✅ NEW
     ] = await Promise.all([
       prisma.task.groupBy({
         by: ["status"],
@@ -424,6 +425,20 @@ export async function POST(req: Request) {
         orderBy: { _max: { createdAt: "asc" } },
         take: 20,
       }),
+
+      // ✅ NEW: workspace pin bank (recent)
+      prisma.pin.findMany({
+        where: { workspaceId: wsId },
+        orderBy: { updatedAt: "desc" },
+        take: 20,
+        select: {
+          id: true,
+          name: true,
+          nameKey: true,
+          updatedAt: true,
+          _count: { select: { contactPins: true, listingPins: true } },
+        },
+      }),
     ]);
 
     const openCount = taskCountsByStatus.find((x) => x.status === "OPEN")?._count?._all ?? 0;
@@ -509,7 +524,9 @@ export async function POST(req: Request) {
           dueAt: true,
           status: true,
           source: true,
-          contact: { select: { id: true, firstName: true, lastName: true, stage: true, clientRole: true } },
+          contact: {
+            select: { id: true, firstName: true, lastName: true, stage: true, clientRole: true },
+          },
           listing: { select: { id: true, address: true, status: true, price: true } },
         },
       });
@@ -566,7 +583,7 @@ export async function POST(req: Request) {
             select: { text: true, reminderAt: true, createdAt: true },
           },
 
-          // ✅ PINS (new)
+          // ✅ PINS
           pins: {
             orderBy: { createdAt: "desc" },
             take: 12,
@@ -592,7 +609,7 @@ export async function POST(req: Request) {
           label: c.label ?? null,
           notes: c.notes ?? null,
 
-          // ✅ PINS (new)
+          // ✅ PINS
           pins: c.pins.map((cp) => ({
             id: cp.id,
             pinId: cp.pin.id,
@@ -628,6 +645,25 @@ export async function POST(req: Request) {
             select: { contact: { select: { id: true, firstName: true, lastName: true } }, role: true },
           },
           photos: { take: 6, orderBy: { sortOrder: "asc" }, select: { url: true, isCover: true } },
+
+          // ✅ NEW: listing pins
+          pins: {
+            orderBy: { createdAt: "desc" },
+            take: 12,
+            select: {
+              id: true,
+              createdAt: true,
+              createdByUserId: true,
+              pin: { select: { id: true, name: true } },
+            },
+          },
+
+          // ✅ NEW: listing notes
+          listingNotes: {
+            orderBy: { createdAt: "desc" },
+            take: 8,
+            select: { id: true, text: true, reminderAt: true, createdAt: true },
+          },
         },
       });
 
@@ -645,6 +681,25 @@ export async function POST(req: Request) {
             role: b.role ?? null,
           })),
           photos: l.photos.map((p) => ({ url: p.url, isCover: p.isCover })),
+
+          // ✅ NEW: listing pins
+          pins: l.pins.map((lp) => ({
+            id: lp.id,
+            pinId: lp.pin.id,
+            pinName: lp.pin.name,
+            createdAt: lp.createdAt,
+            createdByUserId: lp.createdByUserId ?? null,
+          })),
+
+          // ✅ NEW: listing notes
+          recentNotes: l.listingNotes.map((n) => ({
+            id: n.id,
+            text: n.text,
+            reminderAt: n.reminderAt ?? null,
+            reminderLabel: formatDateLongInZone(n.reminderAt ?? null, zone),
+            createdAt: n.createdAt,
+          })),
+
           updatedAt: l.updatedAt,
         };
       }
@@ -704,7 +759,14 @@ export async function POST(req: Request) {
 
         const c = await prisma.contact.findFirst({
           where: { workspaceId: wsId, OR },
-          select: { id: true, firstName: true, lastName: true, stage: true, clientRole: true, relationshipType: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            stage: true,
+            clientRole: true,
+            relationshipType: true,
+          },
         });
 
         if (c) {
@@ -750,6 +812,22 @@ export async function POST(req: Request) {
       },
 
       focus: Object.keys(focus).length ? focus : null,
+
+      // ✅ NEW: workspace pin bank summary
+      pins: {
+        workspaceRecent: enforceBudget(
+          workspacePins.map((p) => ({
+            id: p.id,
+            name: p.name,
+            usage: {
+              contacts: p._count.contactPins,
+              listings: p._count.listingPins,
+            },
+            updatedAt: p.updatedAt,
+          })),
+          20
+        ),
+      },
 
       tasks: {
         policy: "PRIVATE_TO_CURRENT_USER",

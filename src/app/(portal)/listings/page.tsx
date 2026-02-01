@@ -7,6 +7,10 @@ import PageHeader from "@/components/layout/page-header";
 import { createClient } from "@supabase/supabase-js";
 import { useListingsMobileWorkspaceScroll } from "@/hooks/useListingsMobileWorkspaceScroll";
 import { FilterPill } from "@/components/ui/filter-pill";
+import ListingPins from "@/components/listings/pins";
+import ListingAutopilotActivityCard from "@/components/listings/listing-autopilot-activity-card";
+import ListingNotesTasksCard from "@/components/listings/listing-notes-tasks-card";
+import { avilloTabPillClass } from "@/components/ui/tabPills";
 
 /* ------------------------------------
  * Types
@@ -130,6 +134,22 @@ export default function ListingsPage() {
 
   // mobile workspace toggle (always visible on md+)
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
+
+  /* ------------------------------------
+   * Workspace tabs (Overview | Activity | Pins)
+   * -----------------------------------*/
+  type WorkspaceTab = "overview" | "activity" | "pins";
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
+
+  type ListingNote = {
+    id: string;
+    text: string;
+    createdAt: string; // ISO
+    taskAt: string | null; // ISO | null
+  };
+
+  const [notesByListingId, setNotesByListingId] = useState<Record<string, ListingNote[]>>({});
+  const [notesLoadedFor, setNotesLoadedFor] = useState<Record<string, boolean>>({});
 
   const isMobile = () =>
     typeof window !== "undefined" && window.innerWidth < 1024;
@@ -273,6 +293,37 @@ export default function ListingsPage() {
     };
   }, []);
 
+  async function prefetchListingNotes(listingId: string) {
+  if (notesLoadedFor[listingId]) return;
+
+  try {
+    const res = await fetch(`/api/listings/${listingId}/activity`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+    });
+
+    if (!res.ok) return;
+
+    const data = (await res.json()) as { items?: any[] };
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    const notes: ListingNote[] = items
+      .filter((it) => it?.kind === "note" && it?.meta?.noteId)
+      .map((it) => ({
+        id: String(it.meta.noteId),
+        text: String(it.subtitle ?? ""),
+        createdAt: String(it.at),
+        taskAt: it?.meta?.taskAt ? String(it.meta.taskAt) : null,
+      }));
+
+    setNotesByListingId((prev) => ({ ...prev, [listingId]: notes }));
+    setNotesLoadedFor((prev) => ({ ...prev, [listingId]: true }));
+  } catch {
+    // best-effort
+  }
+}
+
   /* ------------------------------------
    * Load CRM contacts
    * -----------------------------------*/
@@ -400,6 +451,27 @@ export default function ListingsPage() {
     }
   }, [selectedId, filteredListings.length]);
 
+  // Track previous listing selection so we only reset tabs when the listing changes.
+  const prevListingIdRef = useRef<string | null>(null);
+
+  const [activityRefreshNonce, setActivityRefreshNonce] = useState(0);
+  
+  useEffect(() => {
+    const current = form.id || selectedId || null;
+
+    // If nothing is selected, always reset
+    if (!current) {
+      prevListingIdRef.current = null;
+      setActiveTab("overview");
+      return;
+    }
+
+    // If selection changed (different listing), reset to Overview
+    if (prevListingIdRef.current !== current) {
+      prevListingIdRef.current = current;
+      setActiveTab("overview");
+    }
+  }, [form.id, selectedId]);
 
   function onFormChange<K extends keyof typeof form>(key: K, value: any) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -772,7 +844,7 @@ export default function ListingsPage() {
 
       setForm({
         id: saved.id,
-        address: "",
+        address: saved.address ?? "New listing",
         mlsId: saved.mlsId ?? "",
         price: formatPriceDisplay(saved.price),
         status: (saved.status as ListingStatus) ?? "draft",
@@ -833,13 +905,13 @@ export default function ListingsPage() {
   /* ------------------------------------
    * Save listing (with contact sync)
    * -----------------------------------*/
-  async function handleSaveListing() {
+  async function handleSaveListing(opts?: { keepWorkspaceOpen?: boolean }) {
     if (!form.id) return;
 
     const isMobileView =
       typeof window !== "undefined" && window.innerWidth < 1024;
 
-    if (isMobileView) {
+    if (isMobileView && !opts?.keepWorkspaceOpen) {
       setSelectedId(null);
       setWorkspaceOpenMobile(false);
       scrollBackToLastListPosition();
@@ -1070,6 +1142,26 @@ export default function ListingsPage() {
   }
 
   /* ------------------------------------
+ * Pins helpers
+ * -----------------------------------*/
+function handlePinsRequiresSave() {
+  // Defensive: if we somehow have a selection but no form.id yet, hydrate id and bail.
+  if (!form.id && selectedId) {
+    setForm((prev) => ({ ...prev, id: selectedId }));
+    return;
+  }
+
+  // People behavior: allow Pins to trigger a "silent save" without collapsing the workspace on mobile
+  if (form.id) {
+    void handleSaveListing({ keepWorkspaceOpen: true });
+    return;
+  }
+
+  // Nothing selected → bounce back to Overview
+  setActiveTab("overview");
+}
+
+  /* ------------------------------------
    * Delete listing
    * -----------------------------------*/
   async function handleDeleteListing() {
@@ -1178,6 +1270,7 @@ export default function ListingsPage() {
     captureListScrollY();
 
     setSelectedId(row.id);
+    void prefetchListingNotes(row.id);
     setWorkspaceOpenMobile(true);
 
     const full = listingDetails[row.id];
@@ -1205,6 +1298,9 @@ export default function ListingsPage() {
       hydrateFormFromApi(apiLike);
     }
   }
+
+  const currentListingId = form.id || selectedId || null;
+  const hasSelection = !!(form.id || selectedId);
 
   /* ------------------------------------
    * Derived photos for workspace
@@ -1523,8 +1619,9 @@ export default function ListingsPage() {
                   Listing workspace
                 </p>
                 <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                  Update the core details, attach the seller, tag buyers, and
-                  manage your listing photos.
+                  {hasSelection
+                    ? "Update the core details, attach the seller, tag buyers, and manage your listing photos."
+                    : "Choose a listing from the gallery or create a new one to start."}
                 </p>
               </div>
 
@@ -1542,6 +1639,35 @@ export default function ListingsPage() {
                 <span>Back</span>
               </button>
             </div>
+
+            {/* Tabs (hide on empty state) */}
+            {hasSelection && (
+              <div className="mb-3 flex items-center gap-2 border-b border-slate-800/80 pb-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("overview")}
+                  className={avilloTabPillClass(activeTab === "overview")}
+                >
+                  Overview
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("activity")}
+                  className={avilloTabPillClass(activeTab === "activity")}
+                >
+                  Activity
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("pins")}
+                  className={avilloTabPillClass(activeTab === "pins")}
+                >
+                  Pins
+                </button>
+              </div>
+            )}
 
             {/* Scrollable workspace body */}
             <div className="flex-1 overflow-y-auto">
@@ -1561,296 +1687,351 @@ export default function ListingsPage() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-4 pb-2 text-xs text-[var(--avillo-cream-soft)]">
-                  {/* Photos */}
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[11px] font-semibold text-slate-50">
-                          Listing photos
-                        </p>
-                        <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                          Upload multiple photos and choose which one should be
-                          the cover in your gallery.
-                        </p>
+                <div className="pb-2 text-xs text-[var(--avillo-cream-soft)]">
+                    {activeTab === "overview" && (
+                      <div className="space-y-4">
+                    {/* Photos */}
+                    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold text-slate-50">
+                            Listing photos
+                          </p>
+                          <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
+                            Upload multiple photos and choose which one should be
+                            the cover in your gallery.
+                          </p>
+                        </div>
                       </div>
-                    </div>
 
-                    {form.id ? (
-                      <>
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          className="sr-only"
-                          onChange={(e) => handleSelectFiles(e, form.id)}
-                        />
+                      {form.id ? (
+                        <>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="sr-only"
+                            onChange={(e) => handleSelectFiles(e, form.id)}
+                          />
 
-                        <div
-                          onClick={() => {
-                            if (!form.id) {
-                              alert(
-                                "Save or create the listing before uploading photos."
-                              );
-                              return;
-                            }
-                            fileInputRef.current?.click();
-                          }}
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                          }}
-                          onDrop={(e) => handleDropFiles(e, form.id)}
-                          className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-slate-950/70 px-4 py-4 text-center text-[11px] text-[var(--avillo-cream-muted)] hover:border-amber-200/80 hover:bg-slate-900/80"
-                        >
-                          <span className="mb-1 font-semibold text-[var(--avillo-cream-soft)]">
-                            Drop photos here or tap to upload
-                          </span>
-                          <span className="text-[10px]">
-                            JPG, PNG. Multiple files allowed.
-                          </span>
-                        </div>
-
-                        {workspacePhotos.length > 0 ? (
-                        <div
-                          className={[
-                            "mt-3",
-                            // Force vertical scrolling instead of wrapping forever
-                            "max-h-56 sm:max-h-64 md:max-h-72",
-                            "overflow-y-auto overflow-x-hidden",
-                            // Nice scrolling on iOS + spacing for scrollbar
-                            "pr-1",
-                            "[&::-webkit-scrollbar]:w-2",
-                            "[&::-webkit-scrollbar-track]:bg-transparent",
-                            "[&::-webkit-scrollbar-thumb]:rounded-full",
-                            "[&::-webkit-scrollbar-thumb]:bg-slate-700/70",
-                            "scrollbar-thin scrollbar-thumb-slate-700/70 scrollbar-track-transparent",
-                          ].join(" ")}
-                        >
-                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-                            {workspacePhotos.map((photo) => (
-                              <div
-                                key={photo.url}
-                                className={
-                                  "group relative overflow-hidden rounded-xl border transition " +
-                                  (photo.isCover
-                                    ? "border-amber-200/80 shadow-[0_0_22px_rgba(248,250,252,0.35)]"
-                                    : "border-slate-700/80 hover:border-amber-100/70")
-                                }
-                              >
-                                <div className="relative h-20 w-full md:h-24">
-                                  <Image
-                                    src={photo.url}
-                                    alt="Listing photo"
-                                    fill
-                                    sizes="150px"
-                                    className="object-cover transition group-hover:scale-[1.03]"
-                                  />
-                                </div>
-
-                                {/* Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    removePhoto(form.id as string, photo.url)
-                                  }
-                                  className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-[10px] text-slate-50 hover:bg-red-600/80"
-                                  title="Delete photo"
-                                >
-                                  ✕
-                                </button>
-
-                                {/* Cover toggle */}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setCoverPhoto(form.id as string, photo.url)
-                                  }
-                                  className={
-                                    "absolute inset-x-1 bottom-1 rounded-full px-2 py-1 text-[10px] font-medium transition " +
-                                    (photo.isCover
-                                      ? "bg-amber-100 text-[#050b16]"
-                                      : "bg-black/55 text-[var(--avillo-cream-soft)] hover:bg-black/75")
-                                  }
-                                >
-                                  {photo.isCover ? "Cover photo" : "Set as cover"}
-                                </button>
-                              </div>
-                            ))}
+                          <div
+                            onClick={() => {
+                              if (!form.id) {
+                                alert(
+                                  "Save or create the listing before uploading photos."
+                                );
+                                return;
+                              }
+                              fileInputRef.current?.click();
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                            }}
+                            onDrop={(e) => handleDropFiles(e, form.id)}
+                            className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-700/80 bg-slate-950/70 px-4 py-4 text-center text-[11px] text-[var(--avillo-cream-muted)] hover:border-amber-200/80 hover:bg-slate-900/80"
+                          >
+                            <span className="mb-1 font-semibold text-[var(--avillo-cream-soft)]">
+                              Drop photos here or tap to upload
+                            </span>
+                            <span className="text-[10px]">
+                              JPG, PNG. Multiple files allowed.
+                            </span>
                           </div>
-                        </div>
+
+                          {workspacePhotos.length > 0 ? (
+                          <div
+                            className={[
+                              "mt-3",
+                              // Force vertical scrolling instead of wrapping forever
+                              "max-h-56 sm:max-h-64 md:max-h-72",
+                              "overflow-y-auto overflow-x-hidden",
+                              // Nice scrolling on iOS + spacing for scrollbar
+                              "pr-1",
+                              "[&::-webkit-scrollbar]:w-2",
+                              "[&::-webkit-scrollbar-track]:bg-transparent",
+                              "[&::-webkit-scrollbar-thumb]:rounded-full",
+                              "[&::-webkit-scrollbar-thumb]:bg-slate-700/70",
+                              "scrollbar-thin scrollbar-thumb-slate-700/70 scrollbar-track-transparent",
+                            ].join(" ")}
+                          >
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                              {workspacePhotos.map((photo) => (
+                                <div
+                                  key={photo.url}
+                                  className={
+                                    "group relative overflow-hidden rounded-xl border transition " +
+                                    (photo.isCover
+                                      ? "border-amber-200/80 shadow-[0_0_22px_rgba(248,250,252,0.35)]"
+                                      : "border-slate-700/80 hover:border-amber-100/70")
+                                  }
+                                >
+                                  <div className="relative h-20 w-full md:h-24">
+                                    <Image
+                                      src={photo.url}
+                                      alt="Listing photo"
+                                      fill
+                                      sizes="150px"
+                                      className="object-cover transition group-hover:scale-[1.03]"
+                                    />
+                                  </div>
+
+                                  {/* Delete */}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      removePhoto(form.id as string, photo.url)
+                                    }
+                                    className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-[10px] text-slate-50 hover:bg-red-600/80"
+                                    title="Delete photo"
+                                  >
+                                    ✕
+                                  </button>
+
+                                  {/* Cover toggle */}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setCoverPhoto(form.id as string, photo.url)
+                                    }
+                                    className={
+                                      "absolute inset-x-1 bottom-1 rounded-full px-2 py-1 text-[10px] font-medium transition " +
+                                      (photo.isCover
+                                        ? "bg-amber-100 text-[#050b16]"
+                                        : "bg-black/55 text-[var(--avillo-cream-soft)] hover:bg-black/75")
+                                    }
+                                  >
+                                    {photo.isCover ? "Cover photo" : "Set as cover"}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">
+                            No photos added yet. Upload at least one image to make this workspace feel alive.
+                          </p>
+                        )}
+                        </>
                       ) : (
-                        <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">
-                          No photos added yet. Upload at least one image to make this workspace feel alive.
+                        <p className="mt-3 text-[11px] text-[var(--avillo-cream-muted)]">
+                          Save or create a listing first, then you’ll be able to
+                          upload and manage photos.
                         </p>
                       )}
-                      </>
-                    ) : (
-                      <p className="mt-3 text-[11px] text-[var(--avillo-cream-muted)]">
-                        Save or create a listing first, then you’ll be able to
-                        upload and manage photos.
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Address + MLS + Status + Price */}
-                  <div className="space-y-3">
-                    <div>
-                      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                        Property address
-                      </label>
-                      <input
-                        value={form.address}
-                        onChange={(e) =>
-                          onFormChange("address", e.target.value)
-                        }
-                        placeholder="1234 Ocean View Dr, San Diego, CA"
-                        className="avillo-input w-full"
-                      />
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-[1.2fr_minmax(0,0.9fr)_minmax(0,0.9fr)]">
+                    {/* Address + MLS + Status + Price */}
+                    <div className="space-y-3">
                       <div>
-                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                          MLS ID (optional)
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                          Property address
                         </label>
                         <input
-                          value={form.mlsId}
+                          value={form.address}
                           onChange={(e) =>
-                            onFormChange("mlsId", e.target.value)
+                            onFormChange("address", e.target.value)
                           }
-                          placeholder="MLS #"
+                          placeholder="1234 Ocean View Dr, San Diego, CA"
                           className="avillo-input w-full"
                         />
                       </div>
 
-                      <div>
-                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                          Status
-                        </label>
-                        <select
-                          value={form.status}
-                          onChange={(e) =>
-                            onFormChange(
-                              "status",
-                              e.target.value as any
-                            )
-                          }
-                          className={statusSelectClass(form.status)}
-                        >
-                          <option value="draft">Draft</option>
-                          <option value="active">Active</option>
-                          <option value="pending">Pending</option>
-                          <option value="closed">Closed</option>
-                        </select>
-                      </div>
+                      <div className="grid gap-3 sm:grid-cols-[1.2fr_minmax(0,0.9fr)_minmax(0,0.9fr)]">
+                        <div>
+                          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                            MLS ID (optional)
+                          </label>
+                          <input
+                            value={form.mlsId}
+                            onChange={(e) =>
+                              onFormChange("mlsId", e.target.value)
+                            }
+                            placeholder="MLS #"
+                            className="avillo-input w-full"
+                          />
+                        </div>
 
-                      <div>
-                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                          Price (optional)
-                        </label>
-                        <input
-                          value={form.price ?? ""}
-                          onChange={handlePriceChange}
-                          placeholder="1,450,000"
-                          className="avillo-input w-full"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Seller select */}
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                    <p className="text-[11px] font-semibold text-slate-50">
-                      Seller contact
-                    </p>
-                    <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                      Search your CRM for the seller attached to this listing.
-                    </p>
-                    <div className="mt-3">
-                      <SellerSelect
-                        options={sellerOptions}
-                        loading={contactsLoading}
-                        error={contactsError}
-                        valueId={form.sellerContactId}
-                        onChange={(id) =>
-                          onFormChange("sellerContactId", id)
-                        }
-                      />
-                    </div>
-                    {selectedSeller && (
-                      <p className="mt-2 text-[10px] text-[var(--avillo-cream-muted)]">
-                        Linked to{" "}
-                        <span className="font-medium text-[var(--avillo-cream-soft)]">
-                          {selectedSeller.name}
-                        </span>
-                        {selectedSeller.email && ` · ${selectedSeller.email}`}
-                        {selectedSeller.phone && ` · ${selectedSeller.phone}`}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Buyers select */}
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-                    <p className="text-[11px] font-semibold text-slate-50">
-                      Tagged buyers
-                    </p>
-                    <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                      Add buyers from your CRM who are actively watching or
-                      considering this property.
-                    </p>
-                    <div className="mt-3">
-                      <BuyerMultiSelect
-                        options={buyerOptions}
-                        loading={contactsLoading}
-                        error={contactsError}
-                        selectedIds={form.buyers.map(
-                          (b) => b.contactId
-                        )}
-                        onToggle={toggleBuyer}
-                      />
-                    </div>
-                    {selectedBuyers.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {selectedBuyers.map((b) => (
-                          <button
-                            key={b.id}
-                            type="button"
-                            onClick={() => toggleBuyer(b.id)}
-                            className="inline-flex items-center gap-1 rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1 text-[11px] font-medium text-amber-50 shadow-[0_0_14px_rgba(248,250,252,0.25)]"
+                        <div>
+                          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                            Status
+                          </label>
+                          <select
+                            value={form.status}
+                            onChange={(e) =>
+                              onFormChange(
+                                "status",
+                                e.target.value as any
+                              )
+                            }
+                            className={statusSelectClass(form.status)}
                           >
-                            <span>{b.name}</span>
-                            <span className="ml-0.5 text-[10px] opacity-80">
-                              ✕
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                            <option value="draft">Draft</option>
+                            <option value="active">Active</option>
+                            <option value="pending">Pending</option>
+                            <option value="closed">Closed</option>
+                          </select>
+                        </div>
 
-                  {/* Error + Save/Delete */}
-                  {error && (
-                    <p className="text-[11px] text-red-300">{error}</p>
+                        <div>
+                          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+                            Price (optional)
+                          </label>
+                          <input
+                            value={form.price ?? ""}
+                            onChange={handlePriceChange}
+                            placeholder="1,450,000"
+                            className="avillo-input w-full"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Seller select */}
+                    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                      <p className="text-[11px] font-semibold text-slate-50">
+                        Seller contact
+                      </p>
+                      <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
+                        Search your CRM for the seller attached to this listing.
+                      </p>
+                      <div className="mt-3">
+                        <SellerSelect
+                          options={sellerOptions}
+                          loading={contactsLoading}
+                          error={contactsError}
+                          valueId={form.sellerContactId}
+                          onChange={(id) =>
+                            onFormChange("sellerContactId", id)
+                          }
+                        />
+                      </div>
+                      {selectedSeller && (
+                        <p className="mt-2 text-[10px] text-[var(--avillo-cream-muted)]">
+                          Linked to{" "}
+                          <span className="font-medium text-[var(--avillo-cream-soft)]">
+                            {selectedSeller.name}
+                          </span>
+                          {selectedSeller.email && ` · ${selectedSeller.email}`}
+                          {selectedSeller.phone && ` · ${selectedSeller.phone}`}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Buyers select */}
+                    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+                      <p className="text-[11px] font-semibold text-slate-50">
+                        Tagged buyers
+                      </p>
+                      <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
+                        Add buyers from your CRM who are actively watching or
+                        considering this property.
+                      </p>
+                      <div className="mt-3">
+                        <BuyerMultiSelect
+                          options={buyerOptions}
+                          loading={contactsLoading}
+                          error={contactsError}
+                          selectedIds={form.buyers.map(
+                            (b) => b.contactId
+                          )}
+                          onToggle={toggleBuyer}
+                        />
+                      </div>
+                      {selectedBuyers.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {selectedBuyers.map((b) => (
+                            <button
+                              key={b.id}
+                              type="button"
+                              onClick={() => toggleBuyer(b.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-amber-100/70 bg-amber-50/10 px-3 py-1 text-[11px] font-medium text-amber-50 shadow-[0_0_14px_rgba(248,250,252,0.25)]"
+                            >
+                              <span>{b.name}</span>
+                              <span className="ml-0.5 text-[10px] opacity-80">
+                                ✕
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Error + Save/Delete */}
+                    {error && (
+                      <p className="text-[11px] text-red-300">{error}</p>
+                    )}
+
+                    <div className="flex items-center justify-between gap-3 pb-1">
+                      <button
+                        type="button"
+                        onClick={handleDeleteListing}
+                        disabled={saving || !form.id}
+                        className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Delete listing
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveListing()}
+                        disabled={saving || !form.id}
+                        className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {saving ? "Saving…" : "Save listing"}
+                      </button>
+                    </div>
+                  </div>
                   )}
 
-                  <div className="flex items-center justify-between gap-3 pb-1">
-                    <button
-                      type="button"
-                      onClick={handleDeleteListing}
-                      disabled={saving || !form.id}
-                      className="inline-flex items-center justify-center rounded-full border border-red-400/80 bg-red-500/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-red-200 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Delete listing
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveListing}
-                      disabled={saving || !form.id}
-                      className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {saving ? "Saving…" : "Save listing"}
-                    </button>
+                  {activeTab === "activity" && (
+                    <div className="space-y-3">
+                      {/* Notes + (optional) task creation */}
+                      <ListingNotesTasksCard
+                        listingId={currentListingId}
+                        disabled={!currentListingId}
+                        prefetchedNotes={
+                          currentListingId ? notesByListingId[currentListingId] ?? null : null
+                        }
+                        onNoteCreated={(note) => {
+
+                          setActivityRefreshNonce((n) => n + 1);
+
+                          const id = currentListingId;
+                          if (!id) return;
+
+                          const normalized: ListingNote = {
+                            id: String(note.id),
+                            text: String(note.text ?? ""),
+                            createdAt: String(note.createdAt),
+                            taskAt: note.taskAt ?? null,
+                          };
+
+                          setNotesByListingId((prev) => ({
+                            ...prev,
+                            [id]: [normalized, ...(prev[id] ?? [])],
+                          }));
+                          setNotesLoadedFor((prev) => ({ ...prev, [id]: true }));
+                        }}
+                      />
+                      
+                      {/* Full activity feed */}
+                      <ListingAutopilotActivityCard
+                        key={`${currentListingId ?? "none"}:${activityRefreshNonce}`}
+                        listingId={currentListingId}
+                        enabled={activeTab === "activity"}
+                      />
+                    </div>
+                  )}
+
+                  {/* Pins kept mounted (preserve state across tab changes) */}
+                  <div style={{ display: activeTab === "pins" ? "block" : "none" }}>
+                    <div className="space-y-3">
+                        <ListingPins
+                          listingId={currentListingId ?? undefined}
+                          disabled={!currentListingId}
+                          onRequiresSave={handlePinsRequiresSave}
+                        />
+                    </div>
                   </div>
                 </div>
               )}

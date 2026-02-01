@@ -6,6 +6,7 @@ import PageHeader from "@/components/layout/page-header";
 import { useCrmMobileWorkspaceScroll } from "@/hooks/useCrmMobileWorkspaceScroll";
 import { FilterPill } from "@/components/ui/filter-pill";
 import PeoplePins from "@/components/people/pins";
+import { avilloTabPillClass } from "@/components/ui/tabPills";
 
 /* ------------------------------------
  * Types
@@ -1507,12 +1508,7 @@ export default function CrmPage() {
           <button
             type="button"
             onClick={() => setActiveTab("overview")}
-            className={
-              "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] " +
-              (activeTab === "overview"
-                ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
-                : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50")
-            }
+            className={avilloTabPillClass(activeTab === "overview")}
           >
             Overview
           </button>
@@ -1520,28 +1516,18 @@ export default function CrmPage() {
           <button
             type="button"
             onClick={() => setActiveTab("activity")}
-            className={
-              "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] " +
-              (activeTab === "activity"
-                ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
-                : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50")
-            }
+            className={avilloTabPillClass(activeTab === "activity")}
           >
             Activity
           </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab("pins")}
-              className={
-                "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] " +
-                (activeTab === "pins"
-                  ? "border-amber-100/90 bg-amber-400/15 text-amber-50 shadow-[0_0_16px_rgba(248,250,252,0.32)]"
-                  : "border-slate-700/80 bg-slate-900/70 text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50")
-              }
-            >
-              Pins
-            </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("pins")}
+            className={avilloTabPillClass(activeTab === "pins")}
+          >
+            Pins
+          </button>
         </div>
 
         {/* ----------------------------
@@ -1889,123 +1875,126 @@ export default function CrmPage() {
         ---------------------------- */}
         {activeTab === "activity" && (
           <div className="space-y-4">
-      {/* Autopilot activity (CLIENT only) */}
-      {activeContact.relationshipType !== "partner" && (
-        <AutopilotActivityCard
-          loading={autopilotLoading}
-          items={autopilotItems}
-          tasks={autopilotTasks}
-          expandedRuns={expandedRuns}
-          setExpandedRuns={setExpandedRuns}
-        />
-      )}
+            {/* Notes & tasks */}
+            <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
+              <p className="text-[11px] font-semibold text-amber-100/90">Notes & tasks</p>
 
-    {/* Notes & tasks */}
-    <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
-      <p className="text-[11px] font-semibold text-amber-100/90">Notes & tasks</p>
-
-      {!activeContact.id ? (
-        <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
-          Save this contact first, then you’ll be able to log notes and create tasks tied to your
-          dashboard.
-        </p>
-      ) : (
-        <>
-          {/* Existing notes */}
-          <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
-            {(activeContact.notes ?? []).length === 0 && (
-              <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
-                No notes yet. Log your first touchpoint below.
-              </p>
-            )}
-
-            {activeContact.notes
-              .slice()
-              .sort(
-                (a, b) =>
-                  new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-              )
-              .map((note) => (
-                <div
-                  key={note.id}
-                  className="rounded-md border border-slate-800/80 bg-slate-900/60 px-2 py-1.5"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[10px] text-slate-400">
-                      {new Date(note.createdAt).toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </span>
-
-                    {note.taskAt && (
-                      <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                        Task{" "}
-                        {new Date(note.taskAt).toLocaleString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </span>
+              {!activeContact.id ? (
+                <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                  Save this contact first, then you’ll be able to log notes and create tasks tied to your
+                  dashboard.
+                </p>
+              ) : (
+                <>
+                  {/* Existing notes */}
+                  <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
+                    {(activeContact.notes ?? []).length === 0 && (
+                      <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
+                        No notes yet. Log your first touchpoint below.
+                      </p>
                     )}
+
+                    {activeContact.notes
+                      .slice()
+                      .sort(
+                        (a, b) =>
+                          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                      )
+                      .map((note) => (
+                        <div
+                          key={note.id}
+                          className="rounded-md border border-slate-800/80 bg-slate-900/60 px-2 py-1.5"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(note.createdAt).toLocaleString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                            </span>
+
+                            {note.taskAt && (
+                              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                                Task{" "}
+                                {new Date(note.taskAt).toLocaleString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="mt-1 whitespace-pre-wrap text-[11px] text-slate-50">
+                            {note.text}
+                          </p>
+                        </div>
+                      ))}
                   </div>
 
-                  <p className="mt-1 whitespace-pre-wrap text-[11px] text-slate-50">
-                    {note.text}
-                  </p>
-                </div>
-              ))}
-          </div>
+                  {/* New note composer */}
+                  <div className="mt-3 space-y-2">
+                    <textarea
+                      rows={3}
+                      value={activeContact.id ? noteDrafts[activeContact.id]?.text ?? "" : ""}
+                      onChange={(e) => {
+                        if (!activeContact.id) return;
+                        updateNoteDraft(activeContact.id, "text", e.target.value);
+                      }}
+                      placeholder="Log a quick note, call summary, or next steps…"
+                      className="w-full resize-none rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
+                    />
 
-          {/* New note composer */}
-          <div className="mt-3 space-y-2">
-            <textarea
-              rows={3}
-              value={activeContact.id ? noteDrafts[activeContact.id]?.text ?? "" : ""}
-              onChange={(e) =>
-                activeContact.id &&
-                updateNoteDraft(activeContact.id, "text", e.target.value)
-              }
-              placeholder="Log a quick note, call summary, or next steps…"
-              className="w-full resize-none rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
-            />
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <label className="flex items-center gap-2 text-[10px] text-[var(--avillo-cream-muted)]">
+                        Set to create a Task:
+                        <input
+                          type="datetime-local"
+                          value={activeContact.id ? noteDrafts[activeContact.id]?.taskAt ?? "" : ""}
+                          onChange={(e) => {
+                            if (!activeContact.id) return;
+                            updateNoteDraft(activeContact.id, "taskAt", e.target.value);
+                          }}
+                          className="rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-50 outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
+                        />
+                      </label>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <label className="flex items-center gap-2 text-[10px] text-[var(--avillo-cream-muted)]">
-                Set to create a Task:
-                <input
-                  type="datetime-local"
-                  value={activeContact.id ? noteDrafts[activeContact.id]?.taskAt ?? "" : ""}
-                  onChange={(e) =>
-                    activeContact.id &&
-                    updateNoteDraft(activeContact.id, "taskAt", e.target.value)
-                  }
-                  className="rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-50 outline-none focus:border-sky-400/80 focus:ring-1 focus:ring-sky-400/60"
-                />
-              </label>
-
-              <button
-                type="button"
-                onClick={() => activeContact.id && handleAddNote(activeContact.id)}
-                disabled={
-                  !activeContact.id ||
-                  noteSaving ||
-                  !noteDrafts[activeContact.id]?.text?.trim()
-                }
-                className="inline-flex items-center justify-center rounded-full border border-amber-100/80 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-50 shadow-[0_0_18px_rgba(248,250,252,0.28)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {noteSaving ? "Saving note…" : "Save note"}
-              </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!activeContact.id) return;
+                          handleAddNote(activeContact.id);
+                        }}
+                        disabled={
+                          !activeContact.id ||
+                          noteSaving ||
+                          !noteDrafts[activeContact.id]?.text?.trim()
+                        }
+                        className="inline-flex items-center justify-center rounded-full border border-amber-100/80 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-50 shadow-[0_0_18px_rgba(248,250,252,0.28)] hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {noteSaving ? "Saving note…" : "Save note"}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
+
+            {/* Autopilot activity (CLIENT only) */}
+            {activeContact.relationshipType !== "partner" && (
+              <AutopilotActivityCard
+                loading={autopilotLoading}
+                items={autopilotItems}
+                tasks={autopilotTasks}
+                expandedRuns={expandedRuns}
+                setExpandedRuns={setExpandedRuns}
+              />
+            )}
           </div>
-        </>
-      )}
-    </div>
-  </div>
-)}
+        )}
 
 {/* ----------------------------
     PINS TAB (ALL CONTACTS)

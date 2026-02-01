@@ -136,10 +136,7 @@ function formatDueLabel(dueAtIso: string | null) {
 }
 
 function taskSourceLabel(source?: string) {
-  const s = (source || "").toUpperCase();
-  if (s === "AUTOPILOT") return "Autopilot";
-  if (s === "PEOPLE_NOTE") return "People";
-  return "Manual";
+  return (source || "").toUpperCase() === "AUTOPILOT" ? "Autopilot" : null;
 }
 
 /** fun + intuitive colors by urgency */
@@ -438,12 +435,9 @@ export default function TasksPage() {
           t.notes,
           t.contact?.name,
           t.listing?.address,
-          taskSourceLabel(t.source),
+          taskSourceLabel(t.source) ?? "",
           t.dueAt ? formatDueLabel(t.dueAt) : "",
         ]
-          .join(" ")
-          .toLowerCase()
-          .includes(q)
       );
     }
 
@@ -1076,9 +1070,11 @@ export default function TasksPage() {
                               {t.title || "Task"}
                             </p>
 
-                            <span className="inline-flex items-center rounded-full border border-[#1d2940] bg-slate-950/30 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-soft)]">
+                            {taskSourceLabel(t.source) && (
+                            <span className="inline-flex items-center rounded-full border border-fuchsia-200/70 bg-fuchsia-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-fuchsia-100">
                               {taskSourceLabel(t.source)}
                             </span>
+                          )}
 
                             {tab === "open" && (
                               <span
@@ -1408,9 +1404,11 @@ function TaskWorkspace({
               className="mt-1 w-full rounded-xl border border-[#1d2940] bg-slate-950/30 px-3 py-2 text-[13px] font-semibold text-[#f7f2e9] outline-none placeholder:text-[var(--avillo-cream-muted)]"
             />
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-full border border-[#1d2940] bg-slate-950/30 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-soft)]">
+              {taskSourceLabel(task.source) && (
+              <span className="inline-flex items-center rounded-full border border-fuchsia-200/70 bg-fuchsia-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-fuchsia-100">
                 {taskSourceLabel(task.source)}
               </span>
+            )}
 
               <span
                 className={cx(

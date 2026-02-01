@@ -206,6 +206,7 @@ model User {
 
   createdPins        Pin[]               @relation("PinCreatedBy")
   createdContactPins ContactPin[]        @relation("ContactPinCreatedBy")
+  createdListingPins ListingPin[]        @relation("ListingPinCreatedBy")
   ChatChannelMember  ChatChannelMember[]
   ChatReadState      ChatReadState[]
   ChatReaction       ChatReaction[]
@@ -265,6 +266,7 @@ model Workspace {
   smsSuppressions     SmsSuppression[]
   pins                Pin[]
   contactPins         ContactPin[]
+  listingPins         ListingPin[]
   invites             WorkspaceInvite[]
   chatChannels        ChatChannel[]
   chatMessages        ChatMessage[]
@@ -691,6 +693,7 @@ model Pin {
   updatedAt DateTime @updatedAt
 
   contactPins ContactPin[]
+  listingPins ListingPin[]
 
   // Case-insensitive uniqueness per workspace
   @@unique([workspaceId, nameKey])
@@ -700,7 +703,7 @@ model Pin {
 }
 
 // ---------------------------
-// CONTACT ↔ PIN (ATTACHMENT)
+// PIN (ATTACHMENT)
 // ---------------------------
 model ContactPin {
   id String @id @default(cuid())
@@ -725,6 +728,33 @@ model ContactPin {
   @@index([workspaceId, contactId, pinId])
   // Fast queries for filters/search
   @@index([workspaceId, contactId])
+  @@index([workspaceId, pinId])
+  @@index([createdByUserId])
+}
+
+model ListingPin {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict) — denormalized for fast + safe filtering
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  pinId String
+  pin   Pin    @relation(fields: [pinId], references: [id], onDelete: Cascade)
+
+  createdByUserId String?
+  createdByUser   User?   @relation("ListingPinCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  // Prevent duplicate attachments
+  @@unique([listingId, pinId])
+  @@index([workspaceId, listingId, pinId])
+  // Fast queries for filters/search
+  @@index([workspaceId, listingId])
   @@index([workspaceId, pinId])
   @@index([createdByUserId])
 }
@@ -765,6 +795,10 @@ model Listing {
   tasks               Task[]
   intelligenceOutputs IntelligenceOutput[]
   aiArtifacts         AIArtifact[]
+
+  pins         ListingPin[]
+  listingNotes ListingNote[]
+  crmActivity  CRMActivity[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -860,6 +894,9 @@ model CRMActivity {
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
   type    String
   summary String
   data    Json?
@@ -868,7 +905,9 @@ model CRMActivity {
 
   @@index([workspaceId, createdAt])
   @@index([workspaceId, contactId, createdAt])
+  @@index([workspaceId, listingId, createdAt])
   @@index([actorUserId])
+  @@index([listingId])
 }
 
 // ---------------------------
@@ -1046,7 +1085,7 @@ model AIContextSnapshot {
 }
 
 // ---------------------------
-// CONTACT NOTES (STRUCTURED)
+// NOTES (STRUCTURED)
 // ---------------------------
 model ContactNote {
   id        String  @id @default(cuid())
@@ -1059,6 +1098,19 @@ model ContactNote {
   createdAt DateTime @default(now())
 
   @@index([contactId, createdAt])
+}
+
+model ListingNote {
+  id        String  @id @default(cuid())
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  text       String
+  reminderAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([listingId, createdAt])
 }
 
 // ---------------------------
