@@ -239,17 +239,39 @@ export default function AIBubble() {
             // Safe-area aware anchor (prevents rotation/viewport weirdness on iOS Safari)
             "right-[calc(1rem+env(safe-area-inset-right))]",
             "bottom-[calc(1rem+env(safe-area-inset-bottom))]",
-            // keep size stable
+
+            // keep size stable (unchanged)
             "h-12 w-12 rounded-full",
-            "border border-white/10",
-            "bg-[#050814]/80 backdrop-blur",
-            "shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_10px_30px_rgba(0,0,0,0.45)]",
-            "hover:bg-[#050814]/90",
+
+            // ✅ more contrast + presence
+            "border border-white/15",
+            "ring-1 ring-[#F4E8C8]/25",
+            "bg-[#050814]/85 backdrop-blur",
+
+            // ✅ stronger shadow + glow
+            "shadow-[0_0_0_1px_rgba(255,255,255,0.10),0_14px_44px_rgba(0,0,0,0.60)]",
+
+            // ✅ subtle attention animation (only when closed)
+            !open ? "animate-[zoraFloat_2.2s_ease-in-out_infinite]" : "",
+
+            "hover:bg-[#050814]/95",
             "active:scale-[0.98]",
             "transition",
           ].join(" ")}
         >
-          <span className="absolute inset-0 rounded-full shadow-[0_0_20px_rgba(230,214,170,0.16)]" />
+          {/* ✅ brighter halo */}
+          <span className="absolute inset-0 rounded-full shadow-[0_0_34px_rgba(244,232,200,0.28)]" />
+
+          {/* ✅ outer pulse ring (only when closed) */}
+          {!open && (
+            <span className="pointer-events-none absolute -inset-2 rounded-full border border-[#F4E8C8]/25 blur-[0.2px] animate-[zoraPulse_1.6s_ease-in-out_infinite]" />
+          )}
+
+          {/* ✅ tiny “beacon” dot */}
+          {!open && (
+            <span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-[#F4E8C8] shadow-[0_0_16px_rgba(244,232,200,0.55)]" />
+          )}
+
           <span className="relative flex h-full w-full items-center justify-center text-[#F4E8C8]">
             <IconSpark className="h-[18px] w-[18px] text-[#F4E8C8]" />
           </span>
@@ -268,8 +290,18 @@ export default function AIBubble() {
               "absolute",
               // keep your desktop placement exactly as-is
               "right-4 bottom-20",
+
+              // ✅ CLAMP TO VIEWPORT: prevents the drawer from being cut off on short desktop windows
+              // - dvh is modern (accounts for dynamic browser UI); vh is a safe fallback
+              "max-h-[calc(100dvh-6rem)]",
+              "max-h-[calc(100vh-6rem)]",
+
+              // ✅ FLEX COLUMN: lets the body become the scroll region instead of the whole panel overflowing
+              "flex flex-col",
+
               // mobile: keep it above the safe area + leave room for keyboard without shifting the bubble into the Send button
               "max-sm:left-3 max-sm:right-3 max-sm:bottom-[calc(5rem+env(safe-area-inset-bottom))]",
+
               "w-[480px] max-w-[calc(100vw-2rem)]",
               "max-sm:w-auto",
               "rounded-2xl",
@@ -333,7 +365,14 @@ export default function AIBubble() {
             </div>
 
             {/* Body */}
-            <div ref={bodyRef} className="relative px-4 py-3 space-y-3 max-h-[380px] overflow-auto">
+            <div
+              ref={bodyRef}
+              className={[
+                "relative px-4 py-3 space-y-3",
+                "flex-1 min-h-0",
+                "overflow-y-auto",
+              ].join(" ")}
+            >
               <div className="space-y-2">
                 {messages.map((m) => (
                   <div key={m.id} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
@@ -341,10 +380,14 @@ export default function AIBubble() {
                       className={[
                         "max-w-[92%] rounded-2xl px-3.5 py-2.5",
                         "border border-white/10",
-                        m.role === "user" ? "bg-[#1A2747]/45 text-[#F4E8C8]" : "bg-white/5 text-white/80",
+                        m.role === "user"
+                          ? "bg-[#1A2747]/45 text-[#F4E8C8]"
+                          : "bg-white/5 text-white/80",
                       ].join(" ")}
                     >
-                      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{m.text}</div>
+                      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">
+                        {m.text}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -452,6 +495,35 @@ export default function AIBubble() {
                 }
                 100% {
                   opacity: 0.25;
+                  transform: translateY(0);
+                }
+              }
+
+              /* Subtle attention pulse for the Zora bubble */
+              @keyframes zoraPulse {
+                0% {
+                  opacity: 0.3;
+                  transform: scale(1);
+                }
+                50% {
+                  opacity: 0.75;
+                  transform: scale(1.06);
+                }
+                100% {
+                  opacity: 0.3;
+                  transform: scale(1);
+                }
+              }
+
+              /* Gentle vertical float to catch the eye without being distracting */
+              @keyframes zoraFloat {
+                0% {
+                  transform: translateY(0);
+                }
+                50% {
+                  transform: translateY(-1.5px);
+                }
+                100% {
                   transform: translateY(0);
                 }
               }
