@@ -101,6 +101,55 @@ enum SmsDirection {
   INBOUND
 }
 
+enum PhoneNumberStatus {
+  ACTIVE
+  DISABLED
+  RELEASING
+}
+
+enum PhoneNumberProvider {
+  TWILIO
+}
+
+enum PhoneCapability {
+  SMS
+  MMS
+  VOICE
+}
+
+enum CallDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum CallStatus {
+  QUEUED
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  BUSY
+  FAILED
+  NO_ANSWER
+  CANCELED
+}
+
+enum MessageSource {
+  MANUAL
+  AUTOMATION
+  ZORA
+  SYSTEM
+}
+
+enum CommEventType {
+  SMS_IN
+  SMS_OUT
+  CALL_IN
+  CALL_OUT
+  MISSED_CALL
+  VOICEMAIL
+  DELIVERY_UPDATE
+}
+
 enum ChatChannelType {
   BOARD
   ROOM
@@ -195,8 +244,13 @@ model User {
   createdAIArtifacts        AIArtifact[]        @relation("AIArtifactCreatedBy")
   createdAIContextSnapshots AIContextSnapshot[] @relation("AIContextSnapshotCreatedBy")
 
-  smsMessages     SmsMessage[]     @relation("SmsMessageCreatedBy")
-  smsSuppressions SmsSuppression[] @relation("SmsSuppressionCreatedBy")
+  smsMessages          SmsMessage[]      @relation("SmsMessageCreatedBy")
+  smsSuppressions      SmsSuppression[]  @relation("SmsSuppressionCreatedBy")
+  assignedPhoneNumbers UserPhoneNumber[] @relation("UserAssignedPhoneNumbers")
+  calls                Call[]            @relation("UserCalls")
+  smsMessagesAssigned  SmsMessage[]      @relation("UserSmsMessagesAssigned")
+  conversations        Conversation[]    @relation("UserConversations")
+  commEvents           CommEvent[]       @relation("UserCommEvents")
 
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
@@ -262,6 +316,10 @@ model Workspace {
   crmRecords          CRMRecord[]
   automations         Automation[]
   automationRuns      AutomationRun[]
+  conversations       Conversation[]
+  commEvents          CommEvent[]
+  phoneNumbers        UserPhoneNumber[]
+  calls               Call[]
   smsMessages         SmsMessage[]
   smsSuppressions     SmsSuppression[]
   pins                Pin[]
@@ -428,17 +486,15 @@ model ChatMessage {
   type   ChatMessageType   @default(TEXT)
   status ChatMessageStatus @default(SENT)
 
-  // Idempotency for retries (prevents duplicate posts on re-send)
+  // Idempotency for retries
   clientNonce String? @db.VarChar(64)
 
-  // Threads / replies
   parentId String?
   parent   ChatMessage?  @relation("ChatThread", fields: [parentId], references: [id], onDelete: Cascade)
   replies  ChatMessage[] @relation("ChatThread")
 
   body String
 
-  // Editing + soft delete
   editedAt       DateTime?
   editedByUserId String?
   editedByUser   User?     @relation("ChatMessageEditedBy", fields: [editedByUserId], references: [id], onDelete: SetNull)
@@ -447,22 +503,16 @@ model ChatMessage {
   deletedByUserId String?
   deletedByUser   User?     @relation("ChatMessageDeletedBy", fields: [deletedByUserId], references: [id], onDelete: SetNull)
 
-  // Simplifies UI queries: fetch messages where isVisible=true
-  isVisible Boolean @default(true)
-
-  // Delivery failure details (queue/realtime hooks)
+  isVisible     Boolean @default(true)
   failureReason String?
 
-  // Moderation hooks (keep lightweight but useful)
   moderationAction  ChatModerationAction @default(NONE)
   moderatedAt       DateTime?
   moderatedByUserId String?
   moderatedByUser   User?                @relation("ChatMessageModeratedBy", fields: [moderatedByUserId], references: [id], onDelete: SetNull)
   moderationNotes   String?
 
-  // Optional structured payload for future rich text/embeds
-  payload Json?
-
+  payload   Json?
   createdAt DateTime @default(now())
 
   reactions     ChatReaction[]
@@ -470,7 +520,7 @@ model ChatMessage {
   mentions      ChatMention[]
   ChatReadState ChatReadState[]
 
-  @@unique([channelId, authorUserId, clientNonce])
+  @@unique([workspaceId, channelId, authorUserId, clientNonce])
   @@index([workspaceId, createdAt])
   @@index([channelId, createdAt])
   @@index([authorUserId, createdAt])
@@ -609,46 +659,45 @@ model Contact {
 
   relationshipType RelationshipType @default(CLIENT)
 
-  // Pipeline + role (CLIENT only; keep null for PARTNER)
   stage      ContactStage? @default(NEW)
   clientRole ClientRole?
   label      String?
 
-  // Common attributes
   pins   ContactPin[]
   notes  String?
   source String?
 
-  // Client profile fields
   priceRange String?
   areas      String?
   timeline   String?
 
-  // Partner profile
   partnerProfile PartnerProfile?
 
-  // Structured note entries per contact
   contactNotes ContactNote[]
   tasks        Task[]
 
-  // Relationships to listings
   listingsAsSeller Listing[]          @relation("SellerListings")
   buyerListings    ListingBuyerLink[]
   activities       Activity[]
   crmActivity      CRMActivity[]
 
+  calls         Call[]
+  conversations Conversation[]
+  events        CommEvent[]
+
   intelligenceOutputs IntelligenceOutput[]
+  aiArtifacts         AIArtifact[]
 
-  aiArtifacts AIArtifact[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  SmsMessage SmsMessage[]
 
   @@index([workspaceId, relationshipType])
   @@index([workspaceId, relationshipType, stage])
   @@index([workspaceId, relationshipType, clientRole])
   @@index([workspaceId, ownerUserId])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, phone]) // ✅ fast inbound From-number lookup
 }
 
 // Partner profile is a "detail table" for Contact when relationshipType=PARTNER
@@ -799,6 +848,12 @@ model Listing {
   pins         ListingPin[]
   listingNotes ListingNote[]
   crmActivity  CRMActivity[]
+
+  // ✅ Comms + automations context
+  conversations Conversation[]
+  commEvents    CommEvent[]
+  smsMessages   SmsMessage[]
+  calls         Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1314,12 +1369,15 @@ model AutomationRun {
   automationId String
   automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 
-  // Tenant boundary (strict) — denormalized for safe querying
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   contactId String?
   listingId String?
+
+  smsMessages SmsMessage[]
+  calls       Call[]
+  commEvents  CommEvent[]
 
   trigger        String?
   triggerPayload Json?
@@ -1333,6 +1391,7 @@ model AutomationRun {
   steps AutomationRunStep[]
 
   @@index([workspaceId, executedAt])
+  @@index([workspaceId, automationId, executedAt]) 
   @@index([automationId])
   @@index([contactId])
   @@index([listingId])
@@ -1356,6 +1415,220 @@ model AutomationRunStep {
   @@index([runId])
   @@index([stepType])
   @@index([status])
+}
+
+// ---------------------------
+// Phone
+// ---------------------------
+model Conversation {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Owner agent of this conversation (because the Avillo number is user-owned)
+  assignedToUserId String
+  assignedToUser   User   @relation("UserConversations", fields: [assignedToUserId], references: [id], onDelete: Cascade)
+
+  // The Avillo number used for this thread
+  phoneNumberId String
+  phoneNumber   UserPhoneNumber @relation("PhoneNumberConversations", fields: [phoneNumberId], references: [id], onDelete: Restrict)
+
+  // Optional CRM linkage
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  // Optional listing context (lets automations/zora reason inside listing scope)
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  // Deterministic key so inbound webhooks can upsert the same thread reliably:
+  // Example: "pn:<phoneNumberId>:contact:<contactId>" or "pn:<phoneNumberId>:lead:<fromE164>"
+  threadKey String @db.VarChar(160)
+
+  // Display + automation helpers
+  displayName    String?
+  lastMessageAt  DateTime?
+  lastInboundAt  DateTime?
+  lastOutboundAt DateTime?
+
+  // Zora memory hooks (optional but super useful)
+  zoraSummary String?
+  zoraState   Json?
+  lastZoraAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  smsMessages SmsMessage[]
+  calls       Call[]
+  events      CommEvent[]
+
+  @@unique([workspaceId, threadKey])
+  @@index([workspaceId, assignedToUserId, lastMessageAt])
+  @@index([workspaceId, contactId, lastMessageAt])
+  @@index([workspaceId, listingId, lastMessageAt])
+  @@index([workspaceId, phoneNumberId, lastMessageAt])
+}
+
+model CommEvent {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  type   CommEventType
+  source MessageSource @default(SYSTEM)
+
+  // Core routing context
+  assignedToUserId String?
+  assignedToUser   User?   @relation("UserCommEvents", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+
+  phoneNumberId String?
+  phoneNumber   UserPhoneNumber? @relation("PhoneNumberCommEvents", fields: [phoneNumberId], references: [id], onDelete: SetNull)
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  // Event linkage
+  smsMessageId String?
+  smsMessage   SmsMessage? @relation(fields: [smsMessageId], references: [id], onDelete: Cascade)
+
+  callId String?
+  call   Call?   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  // Optional: link to the automation run that generated the event
+  automationRunId String?
+  automationRun   AutomationRun? @relation(fields: [automationRunId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime @default(now())
+  payload    Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, occurredAt])
+  @@index([workspaceId, assignedToUserId, occurredAt])
+  @@index([workspaceId, conversationId, occurredAt])
+  @@index([workspaceId, contactId, occurredAt])
+  @@index([workspaceId, listingId, occurredAt])
+  @@index([workspaceId, phoneNumberId, occurredAt])
+  // Link lookups (not unique; safe with nulls)
+  @@index([smsMessageId])
+  @@index([callId])
+  @@index([automationRunId])
+}
+
+model UserPhoneNumber {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // ✅ Assigned per user
+  assignedToUserId String
+  assignedToUser   User   @relation("UserAssignedPhoneNumbers", fields: [assignedToUserId], references: [id], onDelete: Cascade)
+
+  provider PhoneNumberProvider @default(TWILIO)
+  status   PhoneNumberStatus   @default(ACTIVE)
+
+  // E.164 format (e.g. +15035551212)
+  e164 String @db.VarChar(32)
+
+  twilioIncomingPhoneNumberSid String? @db.VarChar(64)
+  twilioMessagingServiceSid    String? @db.VarChar(64)
+
+  capabilities PhoneCapability[] @default([SMS, VOICE])
+  label        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  smsMessages   SmsMessage[]   @relation("SmsMessagePhoneNumber")
+  calls         Call[]         @relation("CallPhoneNumber")
+  conversations Conversation[] @relation("PhoneNumberConversations")
+  events        CommEvent[]    @relation("PhoneNumberCommEvents")
+
+  @@unique([e164])
+  @@index([workspaceId, assignedToUserId, status])
+  @@index([workspaceId, e164])
+  @@index([twilioIncomingPhoneNumberSid])
+}
+
+model Call {
+  id String @id @default(cuid())
+
+  // Tenant boundary (strict)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Which Avillo number was used/received the call
+  phoneNumberId String
+  phoneNumber   UserPhoneNumber @relation("CallPhoneNumber", fields: [phoneNumberId], references: [id], onDelete: Restrict)
+
+  // Agent owner (denormalized, critical for automations)
+  assignedToUserId String
+  assignedToUser   User   @relation("UserCalls", fields: [assignedToUserId], references: [id], onDelete: Cascade)
+
+  // ✅ Automations/Zora attribution + loop prevention
+  source MessageSource @default(SYSTEM)
+
+  // Threading
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // Optional CRM linkage
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  // Optional listing context
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  direction CallDirection
+  status    CallStatus    @default(QUEUED)
+
+  fromNumber String @db.VarChar(32)
+  toNumber   String @db.VarChar(32)
+
+  // Twilio Call SID (CA...)
+  twilioCallSid String @db.VarChar(64)
+
+  durationSec Int?
+  startedAt   DateTime?
+  endedAt     DateTime?
+
+  recordingUrl String?
+  recordingSid String? @db.VarChar(64)
+
+  error String?
+
+  // Link back to the run that generated it
+  automationRunId String?
+  automationRun   AutomationRun? @relation(fields: [automationRunId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Event stream linkage
+  events CommEvent[]
+
+  @@unique([twilioCallSid])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, assignedToUserId, createdAt])
+  @@index([workspaceId, phoneNumberId, createdAt])
+  @@index([workspaceId, conversationId, createdAt])
+  @@index([workspaceId, contactId, createdAt])
+  @@index([workspaceId, listingId, createdAt])
+  @@index([automationRunId])
 }
 
 // ---------------------------
@@ -1391,19 +1664,57 @@ model SmsMessage {
   createdByUserId String?
   createdByUser   User?   @relation("SmsMessageCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
-  contactId  String?
+  // ✅ Automations/Zora attribution + loop prevention
+  source MessageSource @default(MANUAL)
+
+  // Which Avillo number was used/received this message
+  phoneNumberId String?
+  phoneNumber   UserPhoneNumber? @relation("SmsMessagePhoneNumber", fields: [phoneNumberId], references: [id], onDelete: SetNull)
+
+  // Deterministic owner (set on inbound by To-number lookup)
+  assignedToUserId String?
+  assignedToUser   User?   @relation("UserSmsMessagesAssigned", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+
+  // Threading (the key to next-level automations)
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // CRM context
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  // Optional listing context
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
   direction  SmsDirection
   fromNumber String
   toNumber   String
   body       String
-  twilioSid  String?
-  status     String?
-  error      String?
+
+  // Twilio Message SID (SM...)
+  twilioSid String? @unique
+
+  status String?
+  error  String?
+
+  // Link back to the run that generated it
+  automationRunId String?
+  automationRun   AutomationRun? @relation(fields: [automationRunId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
+  // Event stream linkage
+  events CommEvent[]
+
   @@index([workspaceId, createdAt])
   @@index([workspaceId, toNumber])
-  @@index([contactId])
+  @@index([workspaceId, fromNumber])
+  @@index([workspaceId, phoneNumberId, createdAt])
+  @@index([workspaceId, assignedToUserId, createdAt])
+  @@index([workspaceId, conversationId, createdAt])
+  @@index([workspaceId, contactId, createdAt])
+  @@index([workspaceId, listingId, createdAt])
+  @@index([automationRunId])
   @@index([createdByUserId])
 }
