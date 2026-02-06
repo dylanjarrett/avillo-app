@@ -60,6 +60,11 @@ enum AccessLevel {
   EXPIRED
 }
 
+enum RecordVisibility {
+  PRIVATE
+  WORKSPACE
+}
+
 enum IntelligenceEngine {
   LISTING
   SELLER
@@ -243,6 +248,10 @@ model User {
 
   createdAIArtifacts        AIArtifact[]        @relation("AIArtifactCreatedBy")
   createdAIContextSnapshots AIContextSnapshot[] @relation("AIContextSnapshotCreatedBy")
+
+  ownedIntelligenceOutputs IntelligenceOutput[] @relation("IntelligenceOwner")
+  ownedAutomationRuns      AutomationRun[]      @relation("AutomationRunOwner")
+  ownedAIArtifacts         AIArtifact[]         @relation("AIArtifactOwner")
 
   smsMessages          SmsMessage[]      @relation("SmsMessageCreatedBy")
   smsSuppressions      SmsSuppression[]  @relation("SmsSuppressionCreatedBy")
@@ -659,6 +668,9 @@ model Contact {
 
   relationshipType RelationshipType @default(CLIENT)
 
+  // CHANGED: unified enum
+  visibility RecordVisibility @default(PRIVATE)
+
   stage      ContactStage? @default(NEW)
   clientRole ClientRole?
   label      String?
@@ -692,12 +704,13 @@ model Contact {
   updatedAt  DateTime     @updatedAt
   SmsMessage SmsMessage[]
 
-  @@index([workspaceId, relationshipType])
-  @@index([workspaceId, relationshipType, stage])
-  @@index([workspaceId, relationshipType, clientRole])
-  @@index([workspaceId, ownerUserId])
   @@index([workspaceId, createdAt])
-  @@index([workspaceId, phone]) // ✅ fast inbound From-number lookup
+  @@index([workspaceId, phone])
+  @@index([workspaceId, relationshipType, visibility])
+  @@index([workspaceId, relationshipType, ownerUserId])
+  @@index([workspaceId, relationshipType, ownerUserId, stage])
+  @@index([workspaceId, relationshipType, ownerUserId, clientRole])
+  @@index([workspaceId, relationshipType, visibility, createdAt])
 }
 
 // Partner profile is a "detail table" for Contact when relationshipType=PARTNER
@@ -825,6 +838,8 @@ model Listing {
   ownerUserId String?
   ownerUser   User?   @relation("ListingOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
+  visibility RecordVisibility @default(PRIVATE)
+
   // Primary seller contact for this listing
   seller          Contact? @relation("SellerListings", fields: [sellerContactId], references: [id])
   sellerContactId String?
@@ -860,6 +875,8 @@ model Listing {
 
   @@index([workspaceId, createdAt])
   @@index([workspaceId, ownerUserId])
+  @@index([workspaceId, visibility, createdAt])
+  @@index([workspaceId, ownerUserId, visibility, createdAt])
 }
 
 // ---------------------------
@@ -979,6 +996,11 @@ model IntelligenceOutput {
   createdByUserId String?
   createdByUser   User?   @relation("IntelligenceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
+  ownerUserId String?
+  ownerUser   User?   @relation("IntelligenceOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  visibility RecordVisibility @default(PRIVATE)
+
   engine IntelligenceEngine
 
   listingId String?
@@ -1000,6 +1022,9 @@ model IntelligenceOutput {
   @@index([workspaceId, listingId, createdAt])
   @@index([workspaceId, contactId, createdAt])
   @@index([createdByUserId, createdAt])
+  @@index([workspaceId, ownerUserId, createdAt])
+  @@index([workspaceId, visibility, createdAt])
+  @@index([workspaceId, ownerUserId, visibility, createdAt])
 }
 
 // ---------------------------
@@ -1016,6 +1041,11 @@ model AIArtifact {
   createdByUserId String?
   createdByUser   User?   @relation("AIArtifactCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
+  ownerUserId String?
+  ownerUser   User?   @relation("AIArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  visibility RecordVisibility @default(PRIVATE)
+
   // Flexible targeting (optional)
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -1024,9 +1054,6 @@ model AIArtifact {
   listing   Listing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
   // What this artifact is (string-keyed to avoid enum migrations)
-  // Examples:
-  //   kind:  "next_best_actions", "daily_brief", "contact_summary", "listing_momentum"
-  //   scope: "workspace" | "contact" | "listing"
   kind  String @db.VarChar(64)
   scope String @db.VarChar(24)
 
@@ -1055,6 +1082,9 @@ model AIArtifact {
   @@index([workspaceId, listingId, kind, isActive, createdAt])
   @@index([createdByUserId, createdAt])
   @@index([intelligenceOutputId])
+  @@index([workspaceId, ownerUserId, createdAt])
+  @@index([workspaceId, visibility, createdAt])
+  @@index([workspaceId, ownerUserId, visibility, createdAt])
 }
 
 // ---------------------------
@@ -1320,9 +1350,10 @@ model Automation {
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  // Who created it (optional)
   createdByUserId String?
   createdByUser   User?   @relation("AutomationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  visibility RecordVisibility @default(PRIVATE)
 
   name        String
   description String?
@@ -1353,6 +1384,8 @@ model Automation {
   @@index([workspaceId, active])
   @@index([status])
   @@index([createdByUserId])
+  @@index([workspaceId, visibility, active])
+  @@index([workspaceId, createdByUserId, visibility])
 }
 
 model AutomationStepGroup {
@@ -1371,6 +1404,9 @@ model AutomationRun {
 
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  ownerUserId String?
+  ownerUser   User?   @relation("AutomationRunOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   contactId String?
   listingId String?
@@ -1391,11 +1427,12 @@ model AutomationRun {
   steps AutomationRunStep[]
 
   @@index([workspaceId, executedAt])
-  @@index([workspaceId, automationId, executedAt]) 
+  @@index([workspaceId, automationId, executedAt])
   @@index([automationId])
   @@index([contactId])
   @@index([listingId])
   @@index([status])
+  @@index([workspaceId, ownerUserId, executedAt])
 }
 
 model AutomationRunStep {
