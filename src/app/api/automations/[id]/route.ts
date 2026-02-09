@@ -2,6 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  whereReadableAutomation,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -65,10 +69,16 @@ export async function GET(_: NextRequest, { params }: { params: { id: string } }
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };    
+
     const ent = await getAutomationEntitlements(ctx.workspaceId);
 
     const automation = await prisma.automation.findFirst({
-      where: { id: params.id, workspaceId: ctx.workspaceId },
+      where: { id: params.id, ...whereReadableAutomation(vctx) },
       include: {
         steps: true,
         runs: {
@@ -97,6 +107,12 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const ent = await getAutomationEntitlements(ctx.workspaceId);
     if (!ent.canWrite) {
       return NextResponse.json(
@@ -109,7 +125,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     if (!body) return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
 
     const existing = await prisma.automation.findFirst({
-      where: { id: params.id, workspaceId: ctx.workspaceId },
+      where: { id: params.id, ...whereReadableAutomation(vctx) },
       select: { id: true },
     });
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -165,7 +181,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     });
 
     const updatedFull = await prisma.automation.findFirst({
-      where: { id: existing.id, workspaceId: ctx.workspaceId },
+      where: { id: existing.id, ...whereReadableAutomation(vctx) },
       include: {
         steps: true,
         runs: {
@@ -197,6 +213,12 @@ export async function DELETE(_: NextRequest, { params }: { params: { id: string 
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const ent = await getAutomationEntitlements(ctx.workspaceId);
     if (!ent.canWrite) {
       return NextResponse.json(
@@ -206,7 +228,7 @@ export async function DELETE(_: NextRequest, { params }: { params: { id: string 
     }
 
     const existing = await prisma.automation.findFirst({
-      where: { id: params.id, workspaceId: ctx.workspaceId },
+      where: { id: params.id, ...whereReadableAutomation(vctx) },
       select: { id: true },
     });
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });

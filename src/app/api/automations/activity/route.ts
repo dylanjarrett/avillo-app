@@ -3,6 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireEntitlement } from "@/lib/entitlements";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  whereReadableAutomation,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +29,13 @@ function normalizeTaskStatus(v: any) {
 export async function GET(req: NextRequest) {
   try {
     const ctx = await requireWorkspace();
-    if (!ctx.ok) return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
+    if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
+
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };  
 
     const gate = await requireEntitlement(ctx.workspaceId, "AUTOMATIONS_READ");
     if (!gate.ok) return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
@@ -49,6 +59,7 @@ export async function GET(req: NextRequest) {
       where: {
         workspaceId: ctx.workspaceId,
         contactId: contact.id,
+        automation: whereReadableAutomation(vctx),
       },
       orderBy: { executedAt: "desc" },
       take: 15,

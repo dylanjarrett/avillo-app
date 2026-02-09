@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
 import { processTriggers } from "@/lib/automations/processTriggers";
 import { RelationshipType } from "@prisma/client";
+import {
+  type VisibilityCtx,
+  requireReadableListing,
+  requireReadableContact,
+  requireReadableForListingBuyerLinkWrite,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,11 +19,8 @@ type Relationship = "seller" | "buyer";
 type Body = {
   listingId?: string;
   contactId?: string;
-
   relationship?: Relationship;
-
-  // legacy
-  role?: string | null;
+  role?: string | null; // legacy
 };
 
 function isRelationship(v: any): v is Relationship {
@@ -38,6 +41,12 @@ export async function POST(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const body = (await req.json().catch(() => null)) as Body | null;
     const listingId = safeTrim(body?.listingId);
     const contactId = safeTrim(body?.contactId);
@@ -46,7 +55,6 @@ export async function POST(req: NextRequest) {
       return jsonError("listingId and contactId are required.", 400);
     }
 
-    // Normalize relationship vs role
     let relationship: Relationship | undefined = body?.relationship;
     let buyerRole: string | null | undefined = body?.role ?? null;
 
@@ -59,19 +67,21 @@ export async function POST(req: NextRequest) {
       return jsonError("relationship ('seller' | 'buyer') is required (role also accepted).", 400);
     }
 
-    const listing = await prisma.listing.findFirst({
-      where: { id: listingId, workspaceId: ctx.workspaceId },
-      select: { id: true, address: true, status: true, sellerContactId: true },
+    const listing = await requireReadableListing(prisma as any, vctx, listingId, {
+      id: true,
+      address: true,
+      status: true,
+      sellerContactId: true,
     });
-    if (!listing) return jsonError("Listing not found.", 404);
 
-    const contact = await prisma.contact.findFirst({
-      where: { id: contactId, workspaceId: ctx.workspaceId },
-      select: { id: true, firstName: true, lastName: true, email: true, relationshipType: true },
+    const contact = await requireReadableContact(prisma as any, vctx, contactId, {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      relationshipType: true,
     });
-    if (!contact) return jsonError("Contact not found.", 404);
 
-    // Optional but strongly recommended: block partner contacts from being attached to listings
     if ((contact.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER) {
       return jsonError("Partner contacts can’t be linked to listings.", 400);
     }
@@ -100,6 +110,8 @@ export async function POST(req: NextRequest) {
       }
 
       if (relationship === "buyer") {
+        await requireReadableForListingBuyerLinkWrite(tx as any, vctx, listing.id, contact.id);
+
         const existing = await tx.listingBuyerLink.findFirst({
           where: { listingId: listing.id, contactId: contact.id },
           select: { id: true, role: true },
@@ -140,7 +152,6 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    // Fire automations AFTER commit
     if (relationship === "seller" && !hadSellerBefore) {
       await processTriggers("LISTING_CREATED", {
         userId: ctx.userId,
@@ -151,7 +162,12 @@ export async function POST(req: NextRequest) {
       } as any);
     }
 
-    return NextResponse.json({ success: true, listingId: listing.id, contactId: contact.id, relationship });
+    return NextResponse.json({
+      success: true,
+      listingId: listing.id,
+      contactId: contact.id,
+      relationship,
+    });
   } catch (err) {
     console.error("listings/assign-contact POST error:", err);
     return NextResponse.json(

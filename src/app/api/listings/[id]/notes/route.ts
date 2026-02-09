@@ -1,8 +1,9 @@
-//api/listings/[id]/notes/route
+// /api/listings/[id]/notes/route
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
 import { parseTaskInstant, safeIanaTZ, normalizeToMinute } from "@/lib/time";
+import { type VisibilityCtx, requireReadableListing } from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,9 +11,6 @@ export const dynamic = "force-dynamic";
 type CreateNoteBody = {
   text?: string;
   taskAt?: string | null;
-
-  // Optional: browser IANA timezone, e.g. "America/Los_Angeles"
-  // If taskAt is sent WITHOUT a Z/offset, we interpret it in this tz.
   tz?: string | null;
 };
 
@@ -21,40 +19,36 @@ function safeTrim(v?: string | null) {
   return t.length ? t : "";
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const ctx = await requireWorkspace();
-    // keeping same guard style as your People route
-    // (if your requireWorkspace returns { ok, status, error } in your codebase)
-    // If yours throws instead, remove these 2 lines.
     // @ts-ignore
     if (ctx?.ok === false) return NextResponse.json(ctx.error, { status: ctx.status });
 
     const workspaceId = (ctx as any).workspaceId ?? ctx?.workspaceId;
     const userId = (ctx as any).userId ?? ctx?.userId;
 
+    const vctx: VisibilityCtx = {
+      workspaceId,
+      userId,
+      isWorkspaceAdmin: false,
+    };
+
     const listingId = params?.id;
     if (!listingId) {
       return NextResponse.json({ error: "Listing id is required." }, { status: 400 });
     }
 
-    // workspace-scoped listing lookup
-    const listing = await prisma.listing.findFirst({
-      where: { id: listingId, workspaceId },
-      select: { id: true, address: true },
+    const listing = await requireReadableListing(prisma as any, vctx, listingId, {
+      id: true,
+      address: true,
     });
-
-    if (!listing) return NextResponse.json({ error: "Listing not found." }, { status: 404 });
 
     const body = (await req.json().catch(() => null)) as CreateNoteBody | null;
 
     const noteText = safeTrim(body?.text);
     if (!noteText) return NextResponse.json({ error: "Note text is required." }, { status: 400 });
 
-    // ✅ Canonical task time parsing (src/lib/time.ts)
     const tz = safeIanaTZ(body?.tz) ?? null;
     const taskDate = parseTaskInstant(body?.taskAt ?? null, tz);
 
@@ -78,12 +72,8 @@ export async function POST(
         },
       });
 
-      // If note has a task date, create a Task row so it appears on Dashboard
-      // Keep consistent with People behavior: PEOPLE_NOTE task source
       if (taskDate) {
         const title = `Task for listing: ${safeTrim(listing.address) || "Listing"}`;
-
-        // ✅ Global minute-stable rule for dedupe window
         const windowStart = normalizeToMinute(new Date(Date.now() - 10 * 60 * 1000));
 
         const existing = await tx.task.findFirst({

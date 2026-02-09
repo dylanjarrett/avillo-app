@@ -3,6 +3,14 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
 import { requireEntitlement } from "@/lib/entitlements";
+import {
+  type VisibilityCtx,
+  requireReadableListing,
+  whereReadableListingNote,
+  whereReadableTask,
+  whereReadableCRMActivity,
+  whereReadableActivity,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,18 +52,20 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (ctx?.ok === false) return NextResponse.json(ctx.error, { status: ctx.status });
 
     const workspaceId = (ctx as any).workspaceId ?? ctx?.workspaceId;
+    const userId = (ctx as any).userId ?? ctx?.userId;
+
+    const vctx: VisibilityCtx = {
+      workspaceId,
+      userId,
+      isWorkspaceAdmin: false,
+    };
 
     const listingId = params?.id;
     if (!listingId) {
       return NextResponse.json({ error: "Listing id is required." }, { status: 400 });
     }
 
-    const listing = await prisma.listing.findFirst({
-      where: { id: listingId, workspaceId },
-      select: { id: true },
-    });
-
-    if (!listing) return NextResponse.json({ error: "Listing not found." }, { status: 404 });
+    const listing = await requireReadableListing(prisma as any, vctx, listingId, { id: true });
 
     const url = new URL(req.url);
     const autopilotOnly = url.searchParams.get("autopilot") === "1";
@@ -69,8 +79,6 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     }
 
     // ---- AUTOPILOT-ONLY MODE (MATCH PEOPLE API SHAPE EXACTLY) ----
-    // This returns: { items: runItems, tasks: autopilotTasks }
-    // so the Listings UI can reuse the exact same AutopilotActivityCard logic.
     if (autopilotOnly) {
       if (!canReadAutomations) {
         return NextResponse.json({ items: [], tasks: [] }, { status: 200 });
@@ -99,7 +107,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
       const autopilotTasks = await prisma.task.findMany({
         where: {
-          workspaceId,
+          ...whereReadableTask(vctx),
           listingId: listing.id,
           source: "AUTOPILOT",
           deletedAt: null,
@@ -120,7 +128,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         const steps = (r.steps ?? []).map((s) => ({
           id: s.id,
           stepType: s.stepType || "STEP",
-          status: normalizeRunStatus(s.status), // => "success"/"failed"/...
+          status: normalizeRunStatus(s.status),
           message: s.message ?? "",
           executedAt: s.executedAt.toISOString(),
           stepIndex: s.stepIndex,
@@ -135,7 +143,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
           runId: r.id,
           automationId: r.automationId,
           automationName: r.automation?.name ?? "Automation",
-          status: normalizeRunStatus(r.status), // => "success"/"failed"/...
+          status: normalizeRunStatus(r.status),
           message: r.message ?? "",
           executedAt: r.executedAt.toISOString(),
           steps,
@@ -149,23 +157,30 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
           id: t.id,
           title: t.title,
           dueAt: t.dueAt ? t.dueAt.toISOString() : null,
-          status: normalizeTaskStatus(t.status), // => "open"/"done"
+          status: normalizeTaskStatus(t.status),
           createdAt: t.createdAt.toISOString(),
           completedAt: t.completedAt ? t.completedAt.toISOString() : null,
         })),
       });
     }
 
-    // ---- FULL FEED MODE (unchanged consumer contract: { items: FeedItem[] }) ----
+    // ---- FULL FEED MODE ----
     const [notes, tasks, crm, activity, runs] = await Promise.all([
       prisma.listingNote.findMany({
-        where: { listingId: listing.id },
+        where: {
+          listingId: listing.id,
+          ...whereReadableListingNote(vctx),
+        },
         orderBy: { createdAt: "desc" },
         take: 100,
         select: { id: true, text: true, reminderAt: true, createdAt: true },
       }),
       prisma.task.findMany({
-        where: { workspaceId, listingId: listing.id, deletedAt: null },
+        where: {
+          ...whereReadableTask(vctx),
+          listingId: listing.id,
+          deletedAt: null,
+        },
         orderBy: { createdAt: "desc" },
         take: 150,
         select: {
@@ -180,13 +195,19 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         },
       }),
       prisma.cRMActivity.findMany({
-        where: { workspaceId, listingId: listing.id },
+        where: {
+          ...whereReadableCRMActivity(vctx),
+          listingId: listing.id,
+        },
         orderBy: { createdAt: "desc" },
         take: 150,
         select: { id: true, type: true, summary: true, createdAt: true, data: true },
       }),
       prisma.activity.findMany({
-        where: { workspaceId, listingId: listing.id },
+        where: {
+          ...whereReadableActivity(vctx),
+          listingId: listing.id,
+        },
         orderBy: { createdAt: "desc" },
         take: 150,
         select: { id: true, type: true, details: true, createdAt: true },

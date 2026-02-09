@@ -4,6 +4,10 @@ import { prisma } from "@/lib/prisma";
 import { runAutomation } from "@/lib/automations/runAutomation";
 import { requireEntitlement } from "@/lib/entitlements";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  whereReadableAutomation,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +15,12 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const ctx = await requireWorkspace();
   if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
+
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };  
 
   const gate = await requireEntitlement(ctx.workspaceId, "AUTOMATIONS_RUN");
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
@@ -24,7 +34,7 @@ export async function POST(req: Request) {
 
   // Validate automation belongs to tenant
   const automation = await prisma.automation.findFirst({
-    where: { id: automationId, workspaceId: ctx.workspaceId },
+    where: { id: automationId, ...whereReadableAutomation(vctx) },
     include: { steps: true },
   });
 

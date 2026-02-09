@@ -1,7 +1,13 @@
-// src/app/api/intelligence/recent/route.ts
+// 2) src/app/api/intelligence/recent/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  whereReadableIntelligenceOutput,
+  whereReadableListing,
+  whereReadableContact,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,8 +49,14 @@ export async function GET() {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const outputs = await prisma.intelligenceOutput.findMany({
-      where: { workspaceId: ctx.workspaceId },
+      where: { ...whereReadableIntelligenceOutput(vctx) },
       orderBy: { createdAt: "desc" },
       take: 20,
       select: {
@@ -59,7 +71,7 @@ export async function GET() {
       },
     });
 
-    // Load attached listings / contacts for display (workspace-safe)
+    // Load attached listings / contacts for display (must be readable; avoids leaking PRIVATE labels)
     const listingIds = Array.from(
       new Set(outputs.map((o) => o.listingId).filter((id): id is string => Boolean(id)))
     );
@@ -70,13 +82,13 @@ export async function GET() {
     const [listings, contacts] = await Promise.all([
       listingIds.length
         ? prisma.listing.findMany({
-            where: { id: { in: listingIds }, workspaceId: ctx.workspaceId },
+            where: { id: { in: listingIds }, ...whereReadableListing(vctx) },
             select: { id: true, address: true },
           })
         : Promise.resolve([]),
       contactIds.length
         ? prisma.contact.findMany({
-            where: { id: { in: contactIds }, workspaceId: ctx.workspaceId },
+            where: { id: { in: contactIds }, ...whereReadableContact(vctx) },
             select: { id: true, firstName: true, lastName: true, email: true },
           })
         : Promise.resolve([]),
@@ -109,7 +121,7 @@ export async function GET() {
       let contextLabel: string | null = null;
       let contextId: string | null = null;
 
-      // Only show context if the related object is found within workspace scope
+      // Only show context if the related object is readable (map lookup will fail otherwise)
       if (o.listingId) {
         contextType = "listing";
         contextId = o.listingId;

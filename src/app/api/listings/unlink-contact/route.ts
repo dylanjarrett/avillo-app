@@ -2,6 +2,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  type VisibilityCtx,
+  requireReadableListing,
+  requireReadableContact,
+  requireReadableForListingBuyerLinkWrite,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,11 +17,8 @@ type Relationship = "seller" | "buyer";
 type Body = {
   listingId?: string;
   contactId?: string;
-
   relationship?: Relationship;
-
-  // legacy
-  role?: string | null;
+  role?: string | null; // legacy
 };
 
 function isRelationship(v: any): v is Relationship {
@@ -36,6 +39,12 @@ export async function POST(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const body = (await req.json().catch(() => null)) as Body | null;
 
     const listingId = safeTrim(body?.listingId);
@@ -45,8 +54,8 @@ export async function POST(req: NextRequest) {
       body?.relationship && isRelationship(body.relationship)
         ? body.relationship
         : isRelationship(body?.role)
-        ? (body?.role as Relationship)
-        : undefined;
+          ? (body?.role as Relationship)
+          : undefined;
 
     if (!listingId || !contactId || !relationship) {
       return jsonError(
@@ -55,17 +64,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const listing = await prisma.listing.findFirst({
-      where: { id: listingId, workspaceId: ctx.workspaceId },
-      select: { id: true, address: true, status: true, sellerContactId: true },
+    const listing = await requireReadableListing(prisma as any, vctx, listingId, {
+      id: true,
+      address: true,
+      status: true,
+      sellerContactId: true,
     });
-    if (!listing) return jsonError("Listing not found.", 404);
 
-    const contact = await prisma.contact.findFirst({
-      where: { id: contactId, workspaceId: ctx.workspaceId },
-      select: { id: true },
-    });
-    if (!contact) return jsonError("Contact not found.", 404);
+    const contact = await requireReadableContact(prisma as any, vctx, contactId, { id: true });
 
     await prisma.$transaction(async (tx) => {
       if (relationship === "seller") {
@@ -91,6 +97,8 @@ export async function POST(req: NextRequest) {
       }
 
       if (relationship === "buyer") {
+        await requireReadableForListingBuyerLinkWrite(tx as any, vctx, listing.id, contact.id);
+
         await tx.listingBuyerLink.deleteMany({
           where: { listingId: listing.id, contactId: contact.id },
         });
@@ -110,7 +118,12 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    return NextResponse.json({ success: true, listingId: listing.id, contactId: contact.id, relationship });
+    return NextResponse.json({
+      success: true,
+      listingId: listing.id,
+      contactId: contact.id,
+      relationship,
+    });
   } catch (err) {
     console.error("listings/unlink-contact POST error:", err);
     return NextResponse.json(

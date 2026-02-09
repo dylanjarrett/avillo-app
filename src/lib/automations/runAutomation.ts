@@ -4,6 +4,7 @@ import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messag
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
 import { requireEntitlement } from "@/lib/entitlements";
 import { computeTaskDueAtFromConfig, normalizeToMinute } from "@/lib/time";
+import { whereReadableContact, whereReadableListing, type VisibilityCtx } from "@/lib/visibility"; 
 
 /* ------------------------------------
  * Types
@@ -207,10 +208,20 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
   const contactId = safeId(ctx.contactId);
   const listingId = safeId(ctx.listingId);
 
+  const vctx: VisibilityCtx = {
+    workspaceId,
+    userId,
+    isWorkspaceAdmin: false,
+  };
+
   const [user, contact, listing] = await Promise.all([
     prisma.user.findUnique({ where: { id: userId } }),
-    contactId ? prisma.contact.findFirst({ where: { id: contactId, workspaceId } }) : Promise.resolve(null),
-    listingId ? prisma.listing.findFirst({ where: { id: listingId, workspaceId } }) : Promise.resolve(null),
+    contactId
+      ? prisma.contact.findFirst({ where: { id: contactId, ...whereReadableContact(vctx) } })
+      : Promise.resolve(null),
+    listingId
+      ? prisma.listing.findFirst({ where: { id: listingId, ...whereReadableListing(vctx) } })
+      : Promise.resolve(null),
   ]);
 
   if (!user) return;
@@ -276,11 +287,11 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
   let runStatus: RunStatus = "SUCCESS";
   let runMessage: string | null = null;
 
-  // ✅ REQUIRED by schema: workspaceId on AutomationRun
   const run = await prisma.automationRun.create({
     data: {
       automationId,
       workspaceId,
+      ownerUserId: userId, 
 
       contactId: contactId ?? null,
       listingId: listingId ?? null,

@@ -2,6 +2,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  whereReadableListing,
+  type VisibilityCtx,
+  gateVisibility,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +20,12 @@ export async function GET(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const url = new URL(req.url);
     const statusParam = safeLower(url.searchParams.get("status"));
     const q = safeLower(url.searchParams.get("q"));
@@ -23,13 +34,43 @@ export async function GET(req: NextRequest) {
 
     const listings = await prisma.listing.findMany({
       where: {
-        workspaceId: ctx.workspaceId,
+        ...whereReadableListing(vctx),
         ...(statusFilter ? { status: statusFilter } : {}),
       },
       orderBy: { createdAt: "desc" },
       include: {
-        seller: true,
-        buyers: { include: { contact: true } },
+        seller: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            visibility: true,
+            ownerUserId: true,
+          },
+        },
+        buyers: {
+          where: {
+            contact: {
+              // avoid leaking private contacts that are not readable
+              ...(gateVisibility({ ctx: vctx }) as any),
+              workspaceId: ctx.workspaceId,
+            },
+          },
+          include: {
+            contact: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                visibility: true,
+                ownerUserId: true,
+              },
+            },
+          },
+        },
         photos: { orderBy: { sortOrder: "asc" } },
       },
       take: 500,
@@ -49,9 +90,18 @@ export async function GET(req: NextRequest) {
     });
 
     const payload = filtered.map((l) => {
-      const sellerName = l.seller
-        ? `${l.seller.firstName ?? ""} ${l.seller.lastName ?? ""}`.trim() || l.seller.email || ""
-        : null;
+      const sellerReadable =
+        !l.seller
+          ? false
+          : vctx.isWorkspaceAdmin
+            ? true
+            : l.seller.visibility === "WORKSPACE" ||
+              (l.seller.visibility === "PRIVATE" && l.seller.ownerUserId === ctx.userId);
+
+      const sellerName =
+        l.seller && sellerReadable
+          ? `${l.seller.firstName ?? ""} ${l.seller.lastName ?? ""}`.trim() || l.seller.email || ""
+          : null;
 
       const coverPhoto = l.photos.find((p) => p.isCover) ?? l.photos[0] ?? null;
 
@@ -74,18 +124,21 @@ export async function GET(req: NextRequest) {
           sortOrder: p.sortOrder,
         })),
 
-        seller: l.seller
-          ? {
-              id: l.seller.id,
-              name: sellerName,
-              email: l.seller.email,
-              phone: l.seller.phone,
-            }
-          : null,
+        seller:
+          l.seller && sellerReadable
+            ? {
+                id: l.seller.id,
+                name: sellerName,
+                email: l.seller.email,
+                phone: l.seller.phone,
+              }
+            : null,
 
         buyers: l.buyers.map((b) => {
           const c = b.contact;
-          const buyerName = c ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || c.email || "" : "";
+          const buyerName = c
+            ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || c.email || ""
+            : "";
           return {
             id: b.id,
             role: b.role,

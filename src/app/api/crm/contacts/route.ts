@@ -1,9 +1,20 @@
 // src/app/api/crm/contacts/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { Prisma, ContactStage, RelationshipType, ClientRole } from "@prisma/client";
+import {
+  Prisma,
+  ContactStage,
+  RelationshipType,
+  ClientRole,
+} from "@prisma/client";
 import { processTriggers } from "@/lib/automations/processTriggers";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  whereReadableContact,
+  whereReadableListing,
+  normalizeContactWrite,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,7 +67,9 @@ function stageToLower(stage?: ContactStage | null): StageLower | null {
   }
 }
 
-function normalizeRelationshipType(raw?: string | null): RelationshipTypeLower | undefined {
+function normalizeRelationshipType(
+  raw?: string | null
+): RelationshipTypeLower | undefined {
   if (raw == null) return undefined; // allow "field omitted" semantics upstream
   const v = String(raw).toLowerCase().trim();
   if (v === "client" || v === "partner") return v;
@@ -131,7 +144,9 @@ function shapeContact(contactRecord: any, linkedListings: LinkedListing[] = []) 
     contactRecord.email ||
     "Unnamed contact";
 
-  const relationshipEnum = (contactRecord.relationshipType ?? RelationshipType.CLIENT) as RelationshipType;
+  const relationshipEnum = (contactRecord.relationshipType ??
+    RelationshipType.CLIENT) as RelationshipType;
+
   const relationshipType: RelationshipTypeLower =
     relationshipEnum === RelationshipType.PARTNER ? "partner" : "client";
 
@@ -162,6 +177,7 @@ function shapeContact(contactRecord: any, linkedListings: LinkedListing[] = []) 
       ? contactRecord.contactNotes.map(shapeContactNote)
       : [],
 
+    // IMPORTANT: partners can never have linked listings
     linkedListings: isPartner ? [] : linkedListings,
 
     pins: Array.isArray(contactRecord.pins)
@@ -177,19 +193,33 @@ function shapeContact(contactRecord: any, linkedListings: LinkedListing[] = []) 
 
 /* ----------------------------------------------------
  * Linked listings
+ * - Listings are PRIVATE to the user (via whereReadableListing)
+ * - Partner contacts NEVER link to listings
+ * - Client must be owned by user to attach linked listings
  * ---------------------------------------------------*/
 
-async function getLinkedListingsForContact(workspaceId: string, contactId: string) {
+async function getLinkedListingsForOwnedClientContact(
+  vctx: VisibilityCtx,
+  contactId: string
+) {
   const linked: LinkedListing[] = [];
 
   const [sellerListings, buyerLinks] = await Promise.all([
     prisma.listing.findMany({
-      where: { workspaceId, sellerContactId: contactId },
+      where: {
+        ...whereReadableListing(vctx), // ensures listings are private/owned
+        sellerContactId: contactId,
+      },
       select: { id: true, address: true, status: true },
     }),
     prisma.listingBuyerLink.findMany({
-      where: { contactId, listing: { workspaceId } },
-      select: { listing: { select: { id: true, address: true, status: true } } },
+      where: {
+        contactId,
+        listing: { ...whereReadableListing(vctx) }, // ensures listing is readable
+      },
+      select: {
+        listing: { select: { id: true, address: true, status: true } },
+      },
     }),
   ]);
 
@@ -217,12 +247,18 @@ export async function GET(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json({ contacts: [] }, { status: 200 });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const url = new URL(req.url);
     const includePartners = url.searchParams.get("includePartners") !== "false";
 
     const contacts = await prisma.contact.findMany({
       where: {
-        workspaceId: ctx.workspaceId,
+        ...whereReadableContact(vctx),
         ...(includePartners ? {} : { relationshipType: RelationshipType.CLIENT }),
       },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
@@ -233,46 +269,25 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    // Build linked listing map (workspace-scoped) in two queries
-    const [listings, buyerLinks] = await Promise.all([
-      prisma.listing.findMany({
-        where: { workspaceId: ctx.workspaceId },
-        select: { id: true, address: true, status: true, sellerContactId: true },
-      }),
-      prisma.listingBuyerLink.findMany({
-        where: { listing: { workspaceId: ctx.workspaceId } },
-        select: {
-          contactId: true,
-          listing: { select: { id: true, address: true, status: true } },
-        },
-      }),
-    ]);
+    const items = await Promise.all(
+      contacts.map(async (c: any) => {
+        const relationship = (c.relationshipType ??
+          RelationshipType.CLIENT) as RelationshipType;
 
-    const linkedByContact: Record<string, LinkedListing[]> = {};
+        // Partners NEVER link to listings.
+        if (relationship === RelationshipType.PARTNER) {
+          return shapeContact(c, []);
+        }
 
-    for (const l of listings) {
-      if (!l.sellerContactId) continue;
-      (linkedByContact[l.sellerContactId] ??= []).push({
-        id: l.id,
-        address: l.address,
-        status: l.status,
-        role: "seller",
-      });
-    }
+        // Clients: only attach linked listings for OWNED contacts
+        const isOwner = (c.ownerUserId ?? null) === ctx.userId;
+        const linked = isOwner
+          ? await getLinkedListingsForOwnedClientContact(vctx, c.id)
+          : [];
 
-    for (const link of buyerLinks) {
-      (linkedByContact[link.contactId] ??= []).push({
-        id: link.listing.id,
-        address: link.listing.address,
-        status: link.listing.status,
-        role: "buyer",
-      });
-    }
-
-    const items = contacts.map((c: any) => {
-      const isPartner = (c.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER;
-      return shapeContact(c, isPartner ? [] : linkedByContact[c.id] ?? []);
-    });
+        return shapeContact(c, linked);
+      })
+    );
 
     return NextResponse.json({ contacts: items });
   } catch (err) {
@@ -325,8 +340,16 @@ export async function POST(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const body = (await req.json().catch(() => null)) as SaveContactBody | null;
-    if (!body) return NextResponse.json({ error: "Missing contact payload." }, { status: 400 });
+    if (!body) {
+      return NextResponse.json({ error: "Missing contact payload." }, { status: 400 });
+    }
 
     const {
       id,
@@ -376,7 +399,9 @@ export async function POST(req: NextRequest) {
     // - If field omitted => undefined (do NOT default to CLIENT on update)
     // - If provided but invalid/empty => undefined (do NOT change)
     const relationshipPatch: RelationshipTypeLower | undefined =
-      ("relationshipType" in body ? normalizeRelationshipType(relationshipType ?? null) : undefined);
+      "relationshipType" in body
+        ? normalizeRelationshipType(relationshipType ?? null)
+        : undefined;
 
     const prismaRelationshipEnum: RelationshipType | undefined =
       relationshipPatch === "partner"
@@ -391,8 +416,11 @@ export async function POST(req: NextRequest) {
     // UPDATE
     // -----------------------------
     if (id) {
+      // Use whereReadableContact so:
+      // - clients: only owner can read/update
+      // - partners: workspace readable (edit allowed by any workspace member under this route)
       const existing = await prisma.contact.findFirst({
-        where: { id, workspaceId: ctx.workspaceId },
+        where: { id, ...whereReadableContact(vctx) },
         include: {
           contactNotes: true,
           partnerProfile: true,
@@ -402,23 +430,42 @@ export async function POST(req: NextRequest) {
 
       if (!existing) return NextResponse.json({ error: "Contact not found." }, { status: 404 });
 
-      const wasPartner = (existing.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.PARTNER;
+      const wasPartner =
+        (existing.relationshipType ?? RelationshipType.CLIENT) ===
+        RelationshipType.PARTNER;
 
       // If partner profile fields are being submitted, infer PARTNER unless explicitly set to CLIENT.
-      const inferredPartner = partnerProfileTouched && prismaRelationshipEnum !== RelationshipType.CLIENT;
+      const inferredPartner =
+        partnerProfileTouched && prismaRelationshipEnum !== RelationshipType.CLIENT;
 
-      const willBePartner =
-        inferredPartner
-          ? true
-          : prismaRelationshipEnum != null
-            ? prismaRelationshipEnum === RelationshipType.PARTNER
-            : wasPartner;
+      const willBePartner = inferredPartner
+        ? true
+        : prismaRelationshipEnum != null
+          ? prismaRelationshipEnum === RelationshipType.PARTNER
+          : wasPartner;
 
       const previousStageEnum: ContactStage | null = wasPartner
         ? null
         : (existing.stage as ContactStage | null) ?? ContactStage.NEW;
 
-      const data: Prisma.ContactUpdateInput = {};
+      // Enforce invariants:
+      // - CLIENT contacts always PRIVATE + owned by current user
+      // - PARTNER contacts always WORKSPACE + ownerUserId null (or as you allow; helper sets null)
+      const normalizedWrite = normalizeContactWrite({
+        relationshipType: willBePartner ? RelationshipType.PARTNER : RelationshipType.CLIENT,
+        currentUserId: ctx.userId,
+      });
+
+      const data: Prisma.ContactUpdateInput = {
+        relationshipType: normalizedWrite.relationshipType,
+        visibility: normalizedWrite.visibility,
+      };
+
+      if (normalizedWrite.ownerUserId) {
+        data.ownerUser = { connect: { id: normalizedWrite.ownerUserId } };
+      } else if (existing.ownerUserId) {
+        data.ownerUser = { disconnect: true };
+      }
 
       if ("firstName" in body) data.firstName = body.firstName ?? "";
       if ("lastName" in body) data.lastName = body.lastName ?? "";
@@ -426,20 +473,13 @@ export async function POST(req: NextRequest) {
       if ("email" in body) data.email = body.email ?? "";
       if ("phone" in body) data.phone = body.phone ?? "";
 
-      // Relationship update: only if explicitly valid OR inferred by partner profile edits
-      if (inferredPartner) {
-        data.relationshipType = RelationshipType.PARTNER;
-      } else if (prismaRelationshipEnum != null) {
-        data.relationshipType = prismaRelationshipEnum;
-      }
-
-      // client-only updates
+      // Client-only updates
       if (!willBePartner) {
         if ("stage" in body) data.stage = normalizedStageEnum ?? ContactStage.NEW;
         if ("clientRole" in body) data.clientRole = normalizedClientRoleEnum ?? null;
       }
 
-      // partner-only invariants
+      // Partner-only invariants (no client fields; ensure partner profile)
       if (willBePartner) {
         data.stage = null;
         data.clientRole = null;
@@ -458,10 +498,11 @@ export async function POST(req: NextRequest) {
       if ("source" in body) data.source = normalizeLowerTrim(body.source ?? "") ?? "";
 
       const becamePartner = !wasPartner && willBePartner;
-      const switchedToClient = wasPartner && !willBePartner;
 
       contactRecord = await prisma.$transaction(async (tx) => {
-        // Convert to PARTNER: unlink from listing associations
+        // IMPORTANT:
+        // Partner contacts cannot be tagged to a listing.
+        // So if this contact becomes a partner, forcibly unlink ALL listing associations.
         if (becamePartner) {
           await tx.listingBuyerLink.deleteMany({
             where: { contactId: existing.id, listing: { workspaceId: ctx.workspaceId } },
@@ -471,11 +512,6 @@ export async function POST(req: NextRequest) {
             where: { workspaceId: ctx.workspaceId, sellerContactId: existing.id },
             data: { sellerContactId: null },
           });
-        }
-
-        // Convert to CLIENT: remove partner profile
-        if (switchedToClient) {
-          await tx.partnerProfile.deleteMany({ where: { contactId: existing.id } });
         }
 
         const updated = await tx.contact.update({
@@ -512,7 +548,9 @@ export async function POST(req: NextRequest) {
       });
 
       // Trigger stage-change automations (CLIENT only)
-      const savedRelationship = (contactRecord.relationshipType ?? RelationshipType.CLIENT) as RelationshipType;
+      const savedRelationship = (contactRecord.relationshipType ??
+        RelationshipType.CLIENT) as RelationshipType;
+
       const savedStageEnum: ContactStage | null =
         savedRelationship === RelationshipType.CLIENT
           ? (contactRecord.stage as ContactStage | null) ?? ContactStage.NEW
@@ -524,16 +562,19 @@ export async function POST(req: NextRequest) {
         savedStageEnum &&
         previousStageEnum !== savedStageEnum
       ) {
-        await processTriggers("LEAD_STAGE_CHANGE", {
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
-          contactId: contactRecord.id,
-          listingId: null,
-          payload: {
-            fromStage: stageToLower(previousStageEnum),
-            toStage: stageToLower(savedStageEnum),
-          },
-        } as any);
+        await processTriggers(
+          "LEAD_STAGE_CHANGE",
+          {
+            userId: ctx.userId,
+            workspaceId: ctx.workspaceId,
+            contactId: contactRecord.id,
+            listingId: null,
+            payload: {
+              fromStage: stageToLower(previousStageEnum),
+              toStage: stageToLower(savedStageEnum),
+            },
+          } as any
+        );
       }
     }
 
@@ -546,19 +587,34 @@ export async function POST(req: NextRequest) {
       // - Else if partner profile fields were provided => partner
       // - Else => client
       const isPartner =
-        prismaRelationshipEnum === RelationshipType.PARTNER || (prismaRelationshipEnum == null && partnerProfileTouched);
+        prismaRelationshipEnum === RelationshipType.PARTNER ||
+        (prismaRelationshipEnum == null && partnerProfileTouched);
+
+      // Enforce invariants on create
+      const normalizedWrite = normalizeContactWrite({
+        relationshipType: isPartner ? RelationshipType.PARTNER : RelationshipType.CLIENT,
+        currentUserId: ctx.userId,
+      });
 
       contactRecord = await prisma.contact.create({
         data: {
-          workspaceId: ctx.workspaceId,
-          createdByUserId: ctx.userId,
+          workspace: { connect: { id: ctx.workspaceId } },
+
+          // audit
+          createdByUser: { connect: { id: ctx.userId } },
+
+          // enforced invariants
+          relationshipType: normalizedWrite.relationshipType,
+          visibility: normalizedWrite.visibility,
+
+          ...(normalizedWrite.ownerUserId
+            ? { ownerUser: { connect: { id: normalizedWrite.ownerUserId } } }
+            : {}),
 
           firstName: firstName ?? "",
           lastName: lastName ?? "",
           email: email ?? "",
           phone: phone ?? "",
-
-          relationshipType: isPartner ? RelationshipType.PARTNER : RelationshipType.CLIENT,
 
           stage: isPartner ? null : normalizedStageEnum ?? ContactStage.NEW,
           clientRole: isPartner ? null : normalizedClientRoleEnum ?? null,
@@ -569,7 +625,6 @@ export async function POST(req: NextRequest) {
           timeline: timeline ?? "",
           source: normalizedSource ?? "",
 
-          // If partner, ensure partnerProfile exists (even if empty) when partner was inferred/touched.
           ...(isPartner
             ? {
                 partnerProfile: {
@@ -605,24 +660,28 @@ export async function POST(req: NextRequest) {
 
       // Trigger NEW_CONTACT automations (CLIENT only)
       if ((contactRecord.relationshipType ?? RelationshipType.CLIENT) === RelationshipType.CLIENT) {
-        await processTriggers("NEW_CONTACT", {
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
-          contactId: contactRecord.id,
-          listingId: null,
-          payload: {
-            stage: stageToLower((contactRecord.stage as ContactStage | null) ?? ContactStage.NEW),
-            source: contactRecord.source ?? "",
-          },
-        } as any);
+        await processTriggers(
+          "NEW_CONTACT",
+          {
+            userId: ctx.userId,
+            workspaceId: ctx.workspaceId,
+            contactId: contactRecord.id,
+            listingId: null,
+            payload: {
+              stage: stageToLower((contactRecord.stage as ContactStage | null) ?? ContactStage.NEW),
+              source: contactRecord.source ?? "",
+            },
+          } as any
+        );
       }
     }
 
-    const relationship = (contactRecord.relationshipType ?? RelationshipType.CLIENT) as RelationshipType;
+    const relationship =
+      (contactRecord.relationshipType ?? RelationshipType.CLIENT) as RelationshipType;
 
     const linkedListings =
       relationship === RelationshipType.CLIENT
-        ? await getLinkedListingsForContact(ctx.workspaceId, contactRecord.id)
+        ? await getLinkedListingsForOwnedClientContact(vctx, contactRecord.id)
         : [];
 
     return NextResponse.json({ contact: shapeContact(contactRecord, linkedListings) });
@@ -640,6 +699,8 @@ export async function POST(req: NextRequest) {
 
 /* ----------------------------------------------------
  * DELETE /api/crm/contacts
+ * - Clients: only owner can delete
+ * - Partners: allow delete only if createdByUserId = current user (conservative)
  * ---------------------------------------------------*/
 export async function DELETE(req: NextRequest) {
   try {
@@ -650,8 +711,17 @@ export async function DELETE(req: NextRequest) {
     if (!body?.id) return NextResponse.json({ error: "Contact id is required." }, { status: 400 });
 
     const existing = await prisma.contact.findFirst({
-      where: { id: body.id, workspaceId: ctx.workspaceId },
-      select: { id: true },
+      where: {
+        id: body.id,
+        workspaceId: ctx.workspaceId,
+        OR: [
+          // client owner
+          { ownerUserId: ctx.userId },
+          // partner creator (conservative)
+          { createdByUserId: ctx.userId },
+        ],
+      },
+      select: { id: true, relationshipType: true },
     });
 
     if (!existing) return NextResponse.json({ error: "Contact not found." }, { status: 404 });
@@ -659,6 +729,7 @@ export async function DELETE(req: NextRequest) {
     const contactId = existing.id;
 
     await prisma.$transaction(async (tx) => {
+      // Always delete listing links for this contact (cleanup)
       await tx.listingBuyerLink.deleteMany({
         where: { contactId, listing: { workspaceId: ctx.workspaceId } },
       });

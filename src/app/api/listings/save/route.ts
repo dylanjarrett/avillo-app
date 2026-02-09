@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
 import { processTriggers } from "@/lib/automations/processTriggers";
 import type { AutomationContext } from "@/lib/automations/types";
+import {
+  type VisibilityCtx,
+  whereReadableListing,
+  normalizeListingWrite,
+  gateVisibility,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +48,12 @@ export async function POST(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const body = (await req.json().catch(() => null)) as SaveListingBody | null;
     if (!body?.listing) return NextResponse.json({ error: "Missing listing payload." }, { status: 400 });
 
@@ -69,7 +81,7 @@ export async function POST(req: NextRequest) {
 
     if (id) {
       const existing = await prisma.listing.findFirst({
-        where: { id, workspaceId: ctx.workspaceId },
+        where: { id, ...whereReadableListing(vctx) },
       });
       if (!existing) return NextResponse.json({ error: "Listing not found." }, { status: 404 });
 
@@ -105,6 +117,7 @@ export async function POST(req: NextRequest) {
       }
     } else {
       const createStatus = incomingStatus ?? "draft";
+      const normalized = normalizeListingWrite({ currentUserId: ctx.userId });
 
       listingRecord = await prisma.listing.create({
         data: {
@@ -112,6 +125,9 @@ export async function POST(req: NextRequest) {
           status: createStatus,
           workspaceId: ctx.workspaceId,
           createdByUserId: ctx.userId,
+
+          visibility: normalized.visibility,
+          ownerUserId: normalized.ownerUserId,
         },
       });
 
@@ -161,13 +177,42 @@ export async function POST(req: NextRequest) {
     }
 
     /* ------------------------------------
-     * Reload listing (workspace boundary enforced)
+     * Reload listing (readable boundary enforced)
      * -----------------------------------*/
     const fullListing = await prisma.listing.findFirst({
-      where: { id: listingId!, workspaceId: ctx.workspaceId },
+      where: { id: listingId!, ...whereReadableListing(vctx) },
       include: {
-        seller: true,
-        buyers: { include: { contact: true } },
+        seller: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            visibility: true,
+            ownerUserId: true,
+          },
+        },
+        buyers: {
+          where: {
+            contact: {
+              ...(gateVisibility({ ctx: vctx }) as any),
+              workspaceId: ctx.workspaceId,
+            },
+          },
+          include: {
+            contact: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                visibility: true,
+                ownerUserId: true,
+              },
+            },
+          },
+        },
         photos: { orderBy: { sortOrder: "asc" } },
       },
     });
@@ -176,11 +221,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Listing saved, but could not be reloaded." }, { status: 500 });
     }
 
-    const sellerName = fullListing.seller
-      ? `${fullListing.seller.firstName ?? ""} ${fullListing.seller.lastName ?? ""}`.trim() ||
-        fullListing.seller.email ||
-        ""
-      : null;
+    const sellerReadable =
+      !fullListing.seller
+        ? false
+        : vctx.isWorkspaceAdmin
+          ? true
+          : fullListing.seller.visibility === "WORKSPACE" ||
+            (fullListing.seller.visibility === "PRIVATE" && fullListing.seller.ownerUserId === ctx.userId);
+
+    const sellerName =
+      fullListing.seller && sellerReadable
+        ? `${fullListing.seller.firstName ?? ""} ${fullListing.seller.lastName ?? ""}`.trim() ||
+          fullListing.seller.email ||
+          ""
+        : null;
 
     const coverPhoto = fullListing.photos.find((p) => p.isCover) ?? fullListing.photos[0] ?? null;
 
@@ -203,9 +257,15 @@ export async function POST(req: NextRequest) {
         sortOrder: p.sortOrder,
       })),
 
-      seller: fullListing.seller
-        ? { id: fullListing.seller.id, name: sellerName, email: fullListing.seller.email, phone: fullListing.seller.phone }
-        : null,
+      seller:
+        fullListing.seller && sellerReadable
+          ? {
+              id: fullListing.seller.id,
+              name: sellerName,
+              email: fullListing.seller.email,
+              phone: fullListing.seller.phone,
+            }
+          : null,
 
       buyers: fullListing.buyers.map((b) => {
         const c = b.contact;
@@ -222,9 +282,6 @@ export async function POST(req: NextRequest) {
       updatedAt: fullListing.updatedAt,
     };
 
-    /* ------------------------------------
-     * Fire LISTING_CREATED (only if new + has seller)
-     * -----------------------------------*/
     if (isNewListing && fullListing.sellerContactId) {
       try {
         const triggerContext: AutomationContext = {

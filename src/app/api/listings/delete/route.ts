@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import { type VisibilityCtx, requireReadableListing } from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,21 +21,22 @@ export async function POST(req: NextRequest) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
     const payload = (await req.json().catch(() => null)) as { id?: string } | null;
     const id = safeTrim(payload?.id);
     if (!id) return jsonError("Missing listing id.", 400);
 
-    const listing = await prisma.listing.findFirst({
-      where: { id, workspaceId: ctx.workspaceId },
-      select: { id: true },
-    });
-    if (!listing) return jsonError("Listing not found.", 404);
+    const listing = await requireReadableListing(prisma as any, vctx, id, { id: true });
 
     await prisma.$transaction(async (tx) => {
       await tx.listingBuyerLink.deleteMany({ where: { listingId: listing.id } });
       await tx.listingPhoto.deleteMany({ where: { listingId: listing.id } });
 
-      // Optional: keep timelines clean (best-effort)
       try {
         await tx.cRMActivity.deleteMany({
           where: {

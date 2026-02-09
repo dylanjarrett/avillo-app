@@ -4,6 +4,13 @@ import OpenAI from "openai";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
 import { dayBoundsForTZ, safeIanaTZ } from "@/lib/time";
+import {
+  whereReadableContact,
+  whereReadableListing,
+  whereReadableCRMActivity,
+  whereReadablePin,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -275,6 +282,11 @@ export async function POST(req: Request) {
 
     const wsId = ctx.workspaceId;
     const userId = ctx.userId;
+    const vctx: VisibilityCtx = {
+      workspaceId: wsId,
+      userId,
+      isWorkspaceAdmin: false,
+    };
 
     // ----------------------------
     // Time boundaries (browser tz preferred) — via canonical shared lib
@@ -373,18 +385,21 @@ export async function POST(req: Request) {
 
       prisma.contact.groupBy({
         by: ["relationshipType", "stage"],
-        where: { workspaceId: wsId },
+        where: whereReadableContact(vctx),
         _count: { _all: true },
       }),
 
       prisma.listing.groupBy({
         by: ["status"],
-        where: { workspaceId: wsId },
+        where: whereReadableListing(vctx),
         _count: { _all: true },
       }),
 
       prisma.cRMActivity.findMany({
-        where: { workspaceId: wsId, actorUserId: userId },
+        where: {
+          ...whereReadableCRMActivity(vctx),
+          actorUserId: userId,
+        },
         orderBy: { createdAt: "desc" },
         take: 12,
         select: {
@@ -397,7 +412,10 @@ export async function POST(req: Request) {
       }),
 
       prisma.contact.findMany({
-        where: { workspaceId: wsId, ownerUserId: userId },
+        where: {
+          ...whereReadableContact(vctx),
+          ownerUserId: userId,
+        },
         orderBy: { updatedAt: "desc" },
         take: 10,
         select: {
@@ -412,7 +430,10 @@ export async function POST(req: Request) {
       }),
 
       prisma.listing.findMany({
-        where: { workspaceId: wsId, ownerUserId: userId },
+        where: {
+          ...whereReadableListing(vctx),
+          ownerUserId: userId,
+        },
         orderBy: { updatedAt: "desc" },
         take: 10,
         select: { id: true, address: true, status: true, price: true, updatedAt: true },
@@ -420,15 +441,18 @@ export async function POST(req: Request) {
 
       prisma.cRMActivity.groupBy({
         by: ["contactId"],
-        where: { workspaceId: wsId, actorUserId: userId, contactId: { not: null } },
+        where: {
+          ...whereReadableCRMActivity(vctx),
+          actorUserId: userId,
+          contactId: { not: null },
+        },
         _max: { createdAt: true },
         orderBy: { _max: { createdAt: "asc" } },
         take: 20,
       }),
 
-      // ✅ NEW: workspace pin bank (recent)
       prisma.pin.findMany({
-        where: { workspaceId: wsId },
+        where: whereReadablePin(vctx),
         orderBy: { updatedAt: "desc" },
         take: 20,
         select: {
@@ -447,7 +471,7 @@ export async function POST(req: Request) {
     // Never touched: owned contacts with no CRMActivity by me
     const neverTouched = await prisma.contact.findMany({
       where: {
-        workspaceId: wsId,
+        ...whereReadableContact(vctx),
         ownerUserId: userId,
         crmActivity: { none: { actorUserId: userId } },
       },
@@ -564,7 +588,7 @@ export async function POST(req: Request) {
 
     if (focusContactId) {
       const c = await prisma.contact.findFirst({
-        where: { id: focusContactId, workspaceId: wsId },
+        where: { id: focusContactId, ...whereReadableContact(vctx) },
         select: {
           id: true,
           firstName: true,
@@ -631,7 +655,7 @@ export async function POST(req: Request) {
 
     if (focusListingId) {
       const l = await prisma.listing.findFirst({
-        where: { id: focusListingId, workspaceId: wsId },
+        where: { id: focusListingId, ...whereReadableListing(vctx) },
         select: {
           id: true,
           address: true,
@@ -758,7 +782,10 @@ export async function POST(req: Request) {
         }
 
         const c = await prisma.contact.findFirst({
-          where: { workspaceId: wsId, OR },
+          where: {
+            ...whereReadableContact(vctx),
+            OR,
+          },
           select: {
             id: true,
             firstName: true,
@@ -782,7 +809,10 @@ export async function POST(req: Request) {
 
       if (!focus.listing && hintListing) {
         const l = await prisma.listing.findFirst({
-          where: { workspaceId: wsId, address: { contains: hintListing, mode: "insensitive" } },
+          where: {
+            ...whereReadableListing(vctx),
+            address: { contains: hintListing, mode: "insensitive" },
+          },
           select: { id: true, address: true, status: true, price: true },
         });
         if (l) focus.listing = { id: l.id, address: l.address, status: l.status, price: l.price ?? null };

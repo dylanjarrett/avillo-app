@@ -1,8 +1,14 @@
-// src/app/api/intelligence/save-output/route.ts
+// 3) src/app/api/intelligence/save-output/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
 import { requireEntitlement } from "@/lib/entitlements";
+import {
+  whereReadableListing,
+  whereReadableContact,
+  normalizeIntelligenceOutputWrite,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -90,17 +96,17 @@ function derivePreview(engine: EngineWire, payload: unknown): string {
   return "";
 }
 
-async function validateContextInWorkspace(opts: {
-  workspaceId: string;
+async function validateContextReadable(opts: {
+  vctx: VisibilityCtx;
   contextType?: ContextTypeWire;
   contextId?: string | null;
 }) {
-  const { workspaceId, contextType, contextId } = opts;
+  const { vctx, contextType, contextId } = opts;
   if (!contextType || contextType === "none" || !contextId) return;
 
   if (contextType === "listing") {
     const ok = await prisma.listing.findFirst({
-      where: { id: contextId, workspaceId },
+      where: { id: contextId, ...whereReadableListing(vctx) },
       select: { id: true },
     });
     if (!ok) throw new Error("Invalid listing context");
@@ -108,7 +114,7 @@ async function validateContextInWorkspace(opts: {
 
   if (contextType === "contact") {
     const ok = await prisma.contact.findFirst({
-      where: { id: contextId, workspaceId },
+      where: { id: contextId, ...whereReadableContact(vctx) },
       select: { id: true },
     });
     if (!ok) throw new Error("Invalid contact context");
@@ -120,7 +126,13 @@ export async function POST(req: Request) {
     const ctx = await requireWorkspace();
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
-    // Pro-only entitlement (userId keyed)
+    const vctx: VisibilityCtx = {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      isWorkspaceAdmin: false,
+    };
+
+    // Pro-only entitlement (workspace keyed)
     const gate = await requireEntitlement(ctx.workspaceId, "INTELLIGENCE_SAVE");
     if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
@@ -138,13 +150,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid engine type" }, { status: 400 });
     }
 
-    // Validate context belongs to this workspace
+    // Validate context is readable (prevents attaching to other users' PRIVATE records)
     try {
-      await validateContextInWorkspace({
-        workspaceId: ctx.workspaceId,
-        contextType,
-        contextId,
-      });
+      await validateContextReadable({ vctx, contextType, contextId });
     } catch {
       return NextResponse.json({ error: "Invalid context" }, { status: 400 });
     }
@@ -164,10 +172,18 @@ export async function POST(req: Request) {
 
     const preview = derivePreview(engine, cleanedPayload);
 
+    // Enforce visibility invariants for IntelligenceOutput
+    const normalizedWrite = normalizeIntelligenceOutputWrite({
+      currentUserId: ctx.userId,
+    });
+
     const created = await prisma.intelligenceOutput.create({
       data: {
         workspaceId: ctx.workspaceId,
-        createdByUserId: ctx.userId,
+
+        visibility: normalizedWrite.visibility,
+        createdByUserId: normalizedWrite.createdByUserId,
+        ownerUserId: normalizedWrite.ownerUserId,
 
         engine: engineEnum,
         listingId,

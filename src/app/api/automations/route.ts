@@ -2,6 +2,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
+import {
+  whereReadableAutomation,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -71,15 +75,22 @@ async function getAutomationEntitlements(workspaceId: string): Promise<AutoEnt> 
 
 export async function GET() {
   const ctx = await requireWorkspace();
-
   if (!ctx.ok) {
-    return NextResponse.json(ctx.error ?? { error: "Unauthorized" }, { status: ctx.status ?? 401 });
+    return NextResponse.json(ctx.error ?? { error: "Unauthorized" }, {
+      status: ctx.status ?? 401,
+    });
   }
+
+  const vctx: VisibilityCtx = {
+    workspaceId: ctx.workspaceId,
+    userId: ctx.userId,
+    isWorkspaceAdmin: false,
+  };
 
   const ent = await getAutomationEntitlements(ctx.workspaceId);
 
   const automations = await prisma.automation.findMany({
-    where: { workspaceId: ctx.workspaceId },
+    where: whereReadableAutomation(vctx),
     include: { steps: true },
     orderBy: { createdAt: "desc" },
   });
@@ -96,6 +107,12 @@ export async function GET() {
 export async function POST(req: Request) {
   const ctx = await requireWorkspace();
   if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
+
+  const vctx: VisibilityCtx = {
+    workspaceId: ctx.workspaceId,
+    userId: ctx.userId,
+    isWorkspaceAdmin: false,
+  };
 
   const ent = await getAutomationEntitlements(ctx.workspaceId);
   if (!ent.canWrite) {
@@ -151,7 +168,7 @@ export async function POST(req: Request) {
   });
 
   const full = await prisma.automation.findFirst({
-    where: { id: created.id, workspaceId: ctx.workspaceId },
+    where: { id: created.id, ...whereReadableAutomation(vctx) },
     include: { steps: true },
   });
 
