@@ -10,8 +10,8 @@ const apiKeySid = process.env.TWILIO_API_KEY_SID || "";
 const apiKeySecret = process.env.TWILIO_API_KEY_SECRET || "";
 
 /**
- * Important: avoid crashing at import-time if env vars are missing.
- * We create the client lazily and throw a clear error only when actually used.
+ * Avoid crashing at import-time if env vars are missing.
+ * Create client lazily and throw only when actually used.
  */
 let _client: Twilio | null = null;
 
@@ -69,11 +69,11 @@ export async function sendSms(opts: {
   if (!toE164) throw new Error("Invalid 'to' phone number");
   if (!body.trim()) throw new Error("Message body is empty");
 
-  // ✅ Defense-in-depth: entitlement gate (routes also gate)
+  // Defense-in-depth: entitlement gate (routes also gate)
   const gate = await requireEntitlement(workspaceId, "COMMS_ACCESS");
-  if (!gate.ok) throw new Error(gate.error.message || "Comms is not enabled for this workspace.");
+  if (!gate.ok) throw new Error(gate.error?.message || "Comms is not enabled for this workspace.");
 
-  // ✅ Resolve sender number from DB (user-owned)
+  // Resolve sender number (user-owned, workspace-scoped)
   const pn =
     (phoneNumberIdOverride
       ? await prisma.userPhoneNumber.findFirst({
@@ -114,20 +114,27 @@ export async function sendSms(opts: {
 
   const now = new Date();
 
-  // ✅ If caller supplies conversationId, enforce user-private boundary + patch otherPartyE164
+  // If caller supplies conversationId, enforce user-private boundary AND ensure it matches this phone number
   let convId = conversationId;
+
   if (convId) {
     const conv = await prisma.conversation.findFirst({
       where: {
         id: convId,
         workspaceId,
-        assignedToUserId: userId, // hard boundary (prevents cross-user injection)
+        assignedToUserId: userId,
       },
       select: { id: true, phoneNumberId: true, otherPartyE164: true },
     });
+
     if (!conv) throw new Error("Conversation not found.");
 
-    // Best-effort backfill to enable fast UI/search + ensure consistent model
+    // Prevent cross-number contamination
+    if (conv.phoneNumberId !== pn.id) {
+      throw new Error("Conversation does not belong to your active phone number.");
+    }
+
+    // Backfill otherPartyE164 if missing
     if (!conv.otherPartyE164) {
       await prisma.conversation.update({
         where: { id: convId },
@@ -136,11 +143,10 @@ export async function sendSms(opts: {
     }
   }
 
-  // ✅ Ensure Conversation (unless caller passed one)
+  // Ensure Conversation (deterministic threadKey by number + other party)
   if (!convId) {
     const threadKey = threadKeyForSms({
       phoneNumberId: pn.id,
-      contactId: contactId ?? null,
       otherPartyE164: toE164,
     });
 
@@ -153,23 +159,20 @@ export async function sendSms(opts: {
         contactId: contactId ?? null,
         listingId: listingId ?? null,
         threadKey,
-
-        otherPartyE164: toE164, // ✅ NEW
-
-        lastMessageAt: new Date(),
-        lastOutboundAt: new Date(),
+        otherPartyE164: toE164,
+        lastMessageAt: now,
+        lastOutboundAt: now,
       },
       update: {
         contactId: contactId ?? undefined,
         listingId: listingId ?? undefined,
-
-        otherPartyE164: toE164, // ✅ NEW
-
-        lastMessageAt: new Date(),
-        lastOutboundAt: new Date(),
+        otherPartyE164: toE164,
+        lastMessageAt: now,
+        lastOutboundAt: now,
       },
       select: { id: true },
     });
+
     convId = conv.id;
   }
 
@@ -198,6 +201,7 @@ export async function sendSms(opts: {
       twilioSid: message.sid,
       status: message.status,
       automationRunId: opts.automationRunId ?? null,
+      createdAt: now,
     },
     select: { id: true },
   });
@@ -217,6 +221,7 @@ export async function sendSms(opts: {
       automationRunId: opts.automationRunId ?? null,
       occurredAt: now,
       payload: { twilioSid: message.sid, status: message.status },
+      createdAt: now,
     },
   });
 

@@ -66,7 +66,6 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const where: any = {
     workspaceId: ws.workspaceId,
     conversationId,
-    assignedToUserId: ws.userId, // ✅ user-private boundary at message level too
   };
 
   // Stable cursor: older than (createdAt desc, id desc)

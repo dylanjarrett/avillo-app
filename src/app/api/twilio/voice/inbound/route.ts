@@ -11,13 +11,7 @@ export const dynamic = "force-dynamic";
 
 function voiceTwimlDial(toNumberE164: string) {
   const vr = new twilio.twiml.VoiceResponse();
-  vr.dial(
-    {
-      callerId: undefined, // Twilio presents original caller to agent by default
-      timeout: 25,
-    },
-    toNumberE164
-  );
+  vr.dial({ timeout: 25 }, toNumberE164);
   return vr.toString();
 }
 
@@ -33,7 +27,7 @@ export async function POST(req: NextRequest) {
 
   const from = normalizeE164(params.get("From") || "");
   const to = normalizeE164(params.get("To") || "");
-  const callSid = params.get("CallSid") || "";
+  const callSid = (params.get("CallSid") || "").trim();
 
   if (!from || !to || !callSid) {
     return new NextResponse("OK", { status: 200 });
@@ -53,7 +47,7 @@ export async function POST(req: NextRequest) {
   const workspaceId = pn.workspaceId;
   const assignedToUserId = pn.assignedToUserId;
 
-  // ✅ Entitlement gate (webhook-safe): if comms disabled, do not write anything
+  // Webhook-safe gate: don't write if disabled
   const gate = await requireEntitlement(workspaceId, "COMMS_ACCESS");
   if (!gate.ok) {
     const xml = voiceTwimlSay("This number is inactive.");
@@ -71,20 +65,23 @@ export async function POST(req: NextRequest) {
     return new NextResponse(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
   }
 
-  // Optional contact link
+  // Optional contact link (best-effort)
   const contact = await prisma.contact.findFirst({
-    where: { workspaceId, phone: from },
+    where: {
+      workspaceId,
+      OR: [{ phone: from }, { phone: from.replace(/^\+1/, "") }],
+    },
     select: { id: true },
   });
 
   // Ensure conversation (deterministic threadKey)
   const threadKey = threadKeyForSms({
     phoneNumberId: pn.id,
-    contactId: contact?.id ?? null,
     otherPartyE164: from,
   });
 
   const now = new Date();
+
   const conversation = await prisma.conversation.upsert({
     where: { workspaceId_threadKey: { workspaceId, threadKey } },
     create: {
@@ -93,17 +90,13 @@ export async function POST(req: NextRequest) {
       phoneNumberId: pn.id,
       contactId: contact?.id ?? null,
       threadKey,
-
-      otherPartyE164: from, // ✅ NEW
-
-      lastMessageAt: new Date(),
+      otherPartyE164: from,
+      lastMessageAt: now,
     },
     update: {
       contactId: contact?.id ?? undefined,
-
-      otherPartyE164: from, // ✅ NEW
-
-      lastMessageAt: new Date(),
+      otherPartyE164: from,
+      lastMessageAt: now,
     },
     select: { id: true },
   });
@@ -124,6 +117,7 @@ export async function POST(req: NextRequest) {
         fromNumber: from,
         toNumber: to,
         twilioCallSid: callSid,
+        createdAt: now,
       },
       select: { id: true },
     });
@@ -155,12 +149,12 @@ export async function POST(req: NextRequest) {
           callId,
           occurredAt: now,
           payload: { from, to, twilioCallSid: callSid },
+          createdAt: now,
         },
       });
     }
   }
 
-  // Dial the agent
   const xml = voiceTwimlDial(agentPhone);
   return new NextResponse(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
 }

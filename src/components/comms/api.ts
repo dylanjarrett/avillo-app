@@ -1,8 +1,8 @@
-// src/components/comms/apis.ts
+// src/components/comms/api.ts
 import type { CallItem, Conversation, SmsMessage } from "./comms-types";
 
 /* -----------------------------
- * Core helpers
+ * Core helpers (API + error parsing)
  * ---------------------------- */
 
 function isAbortError(err: any) {
@@ -11,6 +11,51 @@ function isAbortError(err: any) {
     err?.code === "ABORT_ERR" ||
     String(err?.message ?? "").toLowerCase().includes("aborted")
   );
+}
+
+/**
+ * Used by UI to decide whether to show the "Comms locked" banner.
+ * Keep this in api.ts so every fetch can reliably throw a consistent message.
+ */
+export function looksLikeEntitlementError(msg?: string | null) {
+  const s = String(msg ?? "").toLowerCase();
+  return (
+    s.includes("choose a plan") ||
+    (s.includes("plan") && s.includes("continue")) ||
+    s.includes("subscription") ||
+    s.includes("past due") ||
+    s.includes("canceled") ||
+    s.includes("inactive") ||
+    (s.includes("requires") && s.includes("pro")) ||
+    (s.includes("comms") && (s.includes("enabled") || s.includes("not")))
+  );
+}
+
+/**
+ * UI-safe message normalization for thrown errors from API calls.
+ * (CommsShell previously had this inline.)
+ */
+export function normalizeApiError(e: any, fallback: string) {
+  const raw =
+    (typeof e?.message === "string" && e.message) ||
+    (typeof e?.error === "string" && e.error) ||
+    "";
+  const msg = String(raw || "").trim();
+  if (!msg) return fallback;
+
+  const head = msg.slice(0, 250).toLowerCase();
+  const looksLikeHtml =
+    head.includes("<!doctype") ||
+    head.includes("<html") ||
+    head.includes("<head") ||
+    head.includes("<body") ||
+    head.includes("<meta") ||
+    head.includes("<link") ||
+    head.includes("next_static");
+  if (looksLikeHtml) return fallback;
+
+  if (msg.length > 500) return msg.slice(0, 500) + "…";
+  return msg;
 }
 
 async function safeParseResponse(res: Response): Promise<{ data: any; text: string | null }> {
@@ -23,7 +68,15 @@ async function safeParseResponse(res: Response): Promise<{ data: any; text: stri
     }
     const text = await res.text().catch(() => "");
     // attempt JSON if server forgot content-type
-    const maybeJson = text ? (() => { try { return JSON.parse(text); } catch { return null; } })() : null;
+    const maybeJson = text
+      ? (() => {
+          try {
+            return JSON.parse(text);
+          } catch {
+            return null;
+          }
+        })()
+      : null;
     return { data: maybeJson ?? {}, text: maybeJson ? null : text };
   } catch {
     return { data: {}, text: null };
@@ -89,6 +142,7 @@ function toConversation(raw: any): Conversation | null {
 
   const title = raw?.displayName || contactName || raw?.title || raw?.contactName;
   const phone =
+    raw?.otherPartyE164 ?? 
     raw?.phone ??
     contact?.phone ??
     raw?.otherPhone ??
@@ -110,23 +164,92 @@ function toConversation(raw: any): Conversation | null {
 }
 
 function toMessage(raw: any, conversationId: string): SmsMessage | null {
-  const id = String(raw?.id ?? "");
-  const createdAt = raw?.createdAt ?? raw?.sentAt ?? raw?.receivedAt;
-  if (!id || !createdAt) return null;
+  if (!raw) return null;
 
-  const dirRaw = String(raw?.direction ?? raw?.dir ?? raw?.type ?? "").toUpperCase();
+  // ---------- id (accept many shapes, but require one) ----------
+  const id = String(
+    raw.id ??
+      raw.sid ??
+      raw.messageSid ??
+      raw.smsSid ??
+      raw.twilioSid ??
+      raw.providerSid ??
+      raw.providerMessageId ??
+      raw.message_id ??
+      raw.messageId ??
+      ""
+  ).trim();
+
+  if (!id) return null;
+
+  // ---------- createdAt (NEVER drop for missing timestamps) ----------
+  const createdAtRaw =
+    raw.createdAt ??
+    raw.created_at ??
+    raw.sentAt ??
+    raw.sent_at ??
+    raw.receivedAt ??
+    raw.received_at ??
+    raw.dateCreated ??
+    raw.date_created ??
+    raw.timestamp ??
+    raw.time ??
+    null;
+
+  // Normalize to a usable ISO string when possible; otherwise fall back to "now"
+  let createdAt = "";
+  if (createdAtRaw instanceof Date) {
+    createdAt = createdAtRaw.toISOString();
+  } else if (typeof createdAtRaw === "number") {
+    createdAt = new Date(createdAtRaw).toISOString();
+  } else if (typeof createdAtRaw === "string") {
+    const s = createdAtRaw.trim();
+    // If it's parseable, keep the original string (often already ISO)
+    createdAt = Number.isNaN(Date.parse(s)) ? "" : s;
+  }
+
+  if (!createdAt) createdAt = new Date().toISOString();
+
+  // ---------- from/to ----------
+  const fromRaw = raw.fromNumber ?? raw.from ?? raw.fromE164 ?? raw.from_e164 ?? null;
+  const toRaw = raw.toNumber ?? raw.to ?? raw.toE164 ?? raw.to_e164 ?? null;
+
+  const from = fromRaw != null ? String(fromRaw).trim() : null;
+  const to = toRaw != null ? String(toRaw).trim() : null;
+
+  // ---------- direction ----------
+  const dirRaw = String(
+    raw.direction ??
+      raw.dir ??
+      raw.type ??
+      raw.messageDirection ??
+      raw.message_direction ??
+      ""
+  )
+    .toUpperCase()
+    .trim();
+
   const direction: SmsMessage["direction"] =
-    dirRaw === "INBOUND" ? "INBOUND" : dirRaw === "OUTBOUND" ? "OUTBOUND" : "SYSTEM";
+    dirRaw === "INBOUND"
+      ? "INBOUND"
+      : dirRaw === "OUTBOUND"
+        ? "OUTBOUND"
+        : "SYSTEM";
+
+  // ---------- body/status ----------
+  const body = String(raw.body ?? raw.text ?? raw.message ?? raw.content ?? "");
+  const statusRaw = raw.status ?? raw.messageStatus ?? raw.message_status ?? null;
+  const status = statusRaw != null ? String(statusRaw) : null;
 
   return {
     id,
     conversationId,
     direction,
-    body: String(raw?.body ?? raw?.text ?? raw?.message ?? ""),
-    from: raw?.fromNumber ?? raw?.from ?? null,
-    to: raw?.toNumber ?? raw?.to ?? null,
-    status: raw?.status ?? null,
-    createdAt: String(createdAt),
+    body,
+    from: from || null,
+    to: to || null,
+    status,
+    createdAt,
   };
 }
 
@@ -187,9 +310,10 @@ export async function listMessages(conversationId: string, signal?: AbortSignal)
     });
 
     const raw = data?.items ?? data?.messages ?? data?.data ?? [];
-    return (Array.isArray(raw) ? raw : [])
-      .map((m) => toMessage(m, conversationId))
-      .filter(Boolean) as SmsMessage[];
+    const mapped = (Array.isArray(raw) ? raw : []).map((m) => toMessage(m, conversationId));
+    const dropped = mapped.filter((x) => !x).length;
+    if (dropped) console.warn("[comms] dropped messages during mapping:", dropped, raw);
+    return mapped.filter(Boolean) as SmsMessage[];
   } catch (err) {
     if (isAbortError(err)) return [];
     throw err;
@@ -274,4 +398,37 @@ export async function provisionMyNumber(input?: { areaCode?: string | null }) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ areaCode: input?.areaCode ?? null }),
   });
+}
+
+/* -----------------------------
+ * Convenience: shared "refresh & reselect" behavior
+ * (extracted from CommsShell)
+ * ---------------------------- */
+
+/**
+ * Refreshes conversations, sorts them, and finds a matching conversation by normalized phone.
+ * Returns:
+ * - sorted list (always)
+ * - match conversation (if found)
+ */
+export async function refreshConversationsSortedAndFindByPhone(input: {
+  targetPhone: string;
+  signal?: AbortSignal;
+}): Promise<{ items: Conversation[]; match: Conversation | null }> {
+  const { targetPhone, signal } = input;
+
+  const items = await listConversations(signal);
+
+  const sorted = items
+    .slice()
+    .sort((a, b) => {
+      const at = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+      const bt = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+      return bt - at;
+    });
+
+  const normalize = (v: string | null | undefined) => String(v ?? "").replace(/[^\d+]/g, "").trim();
+  const match = sorted.find((c) => normalize(c.phone || c.subtitle || "") === normalize(targetPhone)) ?? null;
+
+  return { items: sorted, match };
 }

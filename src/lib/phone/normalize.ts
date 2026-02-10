@@ -1,25 +1,38 @@
-//lib/phone/normalize.ts
+// src/lib/phone/normalize.ts
+
+/**
+ * Normalize to E.164-ish:
+ * - strips all non-digits
+ * - US-centric:
+ *    10 digits => +1XXXXXXXXXX
+ *    11 digits starting with 1 => +1XXXXXXXXXX
+ * - otherwise => +<digits>
+ *
+ * Returns "" if invalid/unusable.
+ *
+ * NOTE: Prisma fields use @db.VarChar(32), so we also sanity-check length.
+ */
 export function normalizeE164(input: string) {
   const raw = String(input ?? "").trim();
   if (!raw) return "";
 
-  // Keep only digits (and a leading + if present)
-  const hasPlus = raw.startsWith("+");
-  const digitsOnly = raw.replace(/\D/g, "");
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
 
-  if (!digitsOnly) return "";
+  let e164 = "";
 
-  // If user provided a +, we still normalize formatting consistently
-  // US-centric normalization:
-  // - 10 digits => +1XXXXXXXXXX
-  // - 11 digits starting with 1 => +1XXXXXXXXXX
-  // Otherwise: assume already includes country code and prefix +
-  if (digitsOnly.length === 10) return `+1${digitsOnly}`;
-  if (digitsOnly.length === 11 && digitsOnly.startsWith("1")) return `+${digitsOnly}`;
+  if (digits.length === 10) e164 = `+1${digits}`;
+  else if (digits.length === 11 && digits.startsWith("1")) e164 = `+${digits}`;
+  else {
+    // E.164 allows up to 15 digits after +. Keep it within reason.
+    if (digits.length < 8 || digits.length > 15) return "";
+    e164 = `+${digits}`;
+  }
 
-  // If they typed +<country><number> but it wasn't US-length, keep it as +digits
-  // If they typed without +, still return +digits
-  return `+${digitsOnly}`;
+  // Extra guard for schema: VarChar(32) (we're way under, but be safe)
+  if (e164.length > 32) return "";
+
+  return e164;
 }
 
 export function upperTrim(input: string) {

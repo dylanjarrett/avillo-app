@@ -13,6 +13,9 @@ import {
   startCall,
   getMyNumber,
   provisionMyNumber,
+  looksLikeEntitlementError,
+  normalizeApiError,
+  refreshConversationsSortedAndFindByPhone,
   type MyNumber,
 } from "./api";
 import { cx, formatWhen, initials, normalizePhone } from "./comms-utils";
@@ -32,45 +35,24 @@ function isLocalConvoId(id?: string | null) {
   return !!id && String(id).startsWith("local-");
 }
 
-function looksLikeEntitlementError(msg?: string | null) {
-  const s = String(msg ?? "").toLowerCase();
-  return (
-    s.includes("choose a plan") ||
-    (s.includes("plan") && s.includes("continue")) ||
-    s.includes("subscription") ||
-    s.includes("past due") ||
-    s.includes("canceled") ||
-    s.includes("inactive") ||
-    (s.includes("requires") && s.includes("pro")) ||
-    (s.includes("comms") && (s.includes("enabled") || s.includes("not")))
-  );
-}
-
-function normalizeApiError(e: any, fallback: string) {
-  const raw =
-    (typeof e?.message === "string" && e.message) ||
-    (typeof e?.error === "string" && e.error) ||
-    "";
-  const msg = String(raw || "").trim();
-  if (!msg) return fallback;
-
-  const head = msg.slice(0, 250).toLowerCase();
-  const looksLikeHtml =
-    head.includes("<!doctype") ||
-    head.includes("<html") ||
-    head.includes("<head") ||
-    head.includes("<body") ||
-    head.includes("<meta") ||
-    head.includes("<link") ||
-    head.includes("next_static");
-  if (looksLikeHtml) return fallback;
-
-  if (msg.length > 500) return msg.slice(0, 500) + "…";
-  return msg;
-}
-
 function isMobile() {
   return typeof window !== "undefined" && window.innerWidth < 1024;
+}
+
+function shortPhone(p?: string | null) {
+  const s = String(p ?? "").trim();
+  if (!s) return "";
+  return s;
+}
+
+function sortConvos(items: Conversation[]) {
+  return items
+    .slice()
+    .sort((a, b) => {
+      const at = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+      const bt = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+      return bt - at;
+    });
 }
 
 export default function CommsShell() {
@@ -78,6 +60,7 @@ export default function CommsShell() {
     useCrmMobileWorkspaceScroll();
 
   const listScrollRef = useRef<HTMLDivElement | null>(null);
+  const threadScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Layout
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
@@ -90,6 +73,7 @@ export default function CommsShell() {
   const [loadingConvos, setLoadingConvos] = useState(true);
   const [convos, setConvos] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
   const activeConvo = useMemo(
     () => (selectedId ? convos.find((c) => c.id === selectedId) ?? null : null),
     [selectedId, convos]
@@ -112,6 +96,9 @@ export default function CommsShell() {
   const [commsLocked, setCommsLocked] = useState(false);
   const [commsLockMsg, setCommsLockMsg] = useState<string | null>(null);
 
+  // Deleting convo
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   // My number
   const [myNumber, setMyNumber] = useState<MyNumber | null>(null);
   const [loadingMyNumber, setLoadingMyNumber] = useState(true);
@@ -120,12 +107,28 @@ export default function CommsShell() {
   const [provisioningNumber, setProvisioningNumber] = useState(false);
 
   const hasMyNumber = !!myNumber?.e164;
+
   const activeDraft = activeConvo?.id ? drafts[activeConvo.id] ?? "" : "";
   const activeIsLocal = isLocalConvoId(activeConvo?.id);
   const actionsDisabled = commsLocked || sending || !hasMyNumber;
 
   // Quick start
   const [newTo, setNewTo] = useState("");
+  const [showComposer, setShowComposer] = useState(false);
+
+  function lockComms(msg?: string | null) {
+    setCommsLocked(true);
+    setCommsLockMsg(msg || "Comms requires a Pro plan (or Beta access).");
+  }
+
+  function unlockComms() {
+    setCommsLocked(false);
+    setCommsLockMsg(null);
+  }
+
+  function safeSetLockFromMessage(msg?: string | null) {
+    if (looksLikeEntitlementError(msg)) lockComms(msg);
+  }
 
   // ---------- Load my number ----------
   useEffect(() => {
@@ -143,11 +146,7 @@ export default function CommsShell() {
 
         const msg = normalizeApiError(e, "We couldn’t load your phone number.");
         setMyNumberError(msg);
-
-        if (looksLikeEntitlementError(msg)) {
-          setCommsLocked(true);
-          setCommsLockMsg(msg);
-        }
+        safeSetLockFromMessage(msg);
       } finally {
         setLoadingMyNumber(false);
       }
@@ -174,11 +173,7 @@ export default function CommsShell() {
     } catch (e: any) {
       const msg = normalizeApiError(e, "We couldn’t provision a number. Please try again.");
       setMyNumberError(msg);
-
-      if (looksLikeEntitlementError(msg)) {
-        setCommsLocked(true);
-        setCommsLockMsg(msg);
-      }
+      safeSetLockFromMessage(msg);
     } finally {
       setProvisioningNumber(false);
     }
@@ -195,36 +190,23 @@ export default function CommsShell() {
 
         const items = await listConversations(controller.signal);
 
-        // success => clear lock if previously set
-        setCommsLocked(false);
-        setCommsLockMsg(null);
+        unlockComms();
 
-        const sorted = items
-          .slice()
-          .sort((a, b) => {
-            const at = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
-            const bt = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
-            return bt - at;
-          });
-
+        const sorted = sortConvos(items);
         setConvos(sorted);
 
-        // keep selection if it still exists
         if (selectedId && !sorted.find((c) => c.id === selectedId)) {
           setSelectedId(null);
         }
       } catch (e: any) {
         if (isAbortError(e)) return;
 
-        const msg = e?.message || "We couldn’t load your conversations.";
+        const msg = normalizeApiError(e, "We couldn’t load your conversations.");
         setError(msg);
         setConvos([]);
         setSelectedId(null);
 
-        if (looksLikeEntitlementError(msg)) {
-          setCommsLocked(true);
-          setCommsLockMsg(msg);
-        }
+        safeSetLockFromMessage(msg);
       } finally {
         setLoadingConvos(false);
       }
@@ -301,21 +283,34 @@ export default function CommsShell() {
         setMsgsError(null);
 
         const items = await listMessages(activeConvo.id, controller.signal);
+
+        // Stable-ish sort: handle bad/empty dates without nuking ordering
+        const toMs = (v: any) => {
+          const t = Date.parse(String(v ?? ""));
+          return Number.isNaN(t) ? 0 : t;
+        };
+
         const sorted = items
           .slice()
-          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          .sort((a, b) => {
+            const at = toMs(a.createdAt);
+            const bt = toMs(b.createdAt);
+            // tie-breaker to keep React list stable when timestamps match/are missing
+            if (at === bt) return String(a.id).localeCompare(String(b.id));
+            return at - bt;
+          });
+
         setMessages(sorted);
       } catch (e: any) {
         if (isAbortError(e)) return;
 
-        const msg = e?.message || "Failed to load messages.";
+        const msg = normalizeApiError(e, "Failed to load messages.");
         setMsgsError(msg);
-        setMessages([]);
 
-        if (looksLikeEntitlementError(msg)) {
-          setCommsLocked(true);
-          setCommsLockMsg(msg);
-        }
+        // Don't wipe history on transient failures; keep last good state
+        // setMessages([]);  // ❌ remove this
+
+        safeSetLockFromMessage(msg);
       } finally {
         setLoadingMsgs(false);
       }
@@ -324,6 +319,17 @@ export default function CommsShell() {
     load();
     return () => controller.abort();
   }, [activeConvo?.id, mode, commsLocked]);
+
+  // Auto-scroll thread to bottom when messages change (Apple-y feel)
+  useEffect(() => {
+    if (mode !== "chat") return;
+    const el = threadScrollRef.current;
+    if (!el) return;
+    const t = setTimeout(() => {
+      el.scrollTop = el.scrollHeight;
+    }, 0);
+    return () => clearTimeout(t);
+  }, [messages.length, activeConvo?.id, mode]);
 
   // ---------- Load calls ----------
   useEffect(() => {
@@ -354,14 +360,11 @@ export default function CommsShell() {
       } catch (e: any) {
         if (isAbortError(e)) return;
 
-        const msg = e?.message || "Failed to load calls.";
+        const msg = normalizeApiError(e, "Failed to load calls.");
         setCallsError(msg);
         setCalls([]);
 
-        if (looksLikeEntitlementError(msg)) {
-          setCommsLocked(true);
-          setCommsLockMsg(msg);
-        }
+        safeSetLockFromMessage(msg);
       } finally {
         setLoadingCalls(false);
       }
@@ -372,24 +375,36 @@ export default function CommsShell() {
   }, [activeConvo?.id, mode, commsLocked]);
 
   async function refreshConversationsAndReselectByPhone(targetPhone: string) {
-    const controller = new AbortController();
-    const items = await listConversations(controller.signal);
+    const normalized = normalizePhone(targetPhone || "");
+    if (!normalized) return null;
 
-    const sorted = items
-      .slice()
-      .sort((a, b) => {
-        const at = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
-        const bt = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
-        return bt - at;
+    try {
+      const { items, match } = await refreshConversationsSortedAndFindByPhone({
+        targetPhone: normalized,
       });
 
-    setConvos(sorted);
+      setConvos((prev) => {
+        if (!match) {
+          const draft = prev.find(
+            (c) => isLocalConvoId(c.id) && normalizePhone(c.phone || c.subtitle || "") === normalized
+          );
+          if (draft) return [draft, ...items];
+        }
+        return items;
+      });
 
-    const match =
-      sorted.find((c) => normalizePhone(c.phone || c.subtitle || "") === targetPhone) ?? null;
+      if (match) {
+        setSelectedId(match.id);
+        return match;
+      }
 
-    if (match) setSelectedId(match.id);
-    return match;
+      return null;
+    } catch (e: any) {
+      const msg = normalizeApiError(e, "We couldn’t refresh conversations.");
+      setError(msg);
+      safeSetLockFromMessage(msg);
+      return null;
+    }
   }
 
   async function handleSend() {
@@ -413,7 +428,6 @@ export default function CommsShell() {
       setSending(true);
       setMsgsError(null);
 
-      // optimistic bubble
       const optimistic: SmsMessage = {
         id: `optimistic-${Date.now()}`,
         conversationId: activeConvo.id,
@@ -436,7 +450,18 @@ export default function CommsShell() {
 
       const match = await refreshConversationsAndReselectByPhone(to);
 
-      // reload messages only if real id exists
+      if (activeIsLocal && match?.id && !isLocalConvoId(match.id)) {
+        const localId = activeConvo.id;
+
+        setConvos((prev) => prev.filter((c) => c.id !== localId));
+
+        setDrafts((prev) => {
+          const next = { ...prev };
+          delete next[localId];
+          return next;
+        });
+      }
+
       if (match?.id && !isLocalConvoId(match.id)) {
         const items = await listMessages(match.id);
         const sorted = items
@@ -445,13 +470,9 @@ export default function CommsShell() {
         setMessages(sorted);
       }
     } catch (e: any) {
-      const msg = e?.message || "Failed to send message.";
+      const msg = normalizeApiError(e, "Failed to send message.");
       setMsgsError(msg);
-
-      if (looksLikeEntitlementError(msg)) {
-        setCommsLocked(true);
-        setCommsLockMsg(msg);
-      }
+      safeSetLockFromMessage(msg);
     } finally {
       setSending(false);
     }
@@ -482,13 +503,9 @@ export default function CommsShell() {
       await refreshConversationsAndReselectByPhone(to);
       setMode("calls");
     } catch (e: any) {
-      const msg = e?.message || "Failed to start call.";
+      const msg = normalizeApiError(e, "Failed to start call.");
       setCallsError(msg);
-
-      if (looksLikeEntitlementError(msg)) {
-        setCommsLocked(true);
-        setCommsLockMsg(msg);
-      }
+      safeSetLockFromMessage(msg);
     }
   }
 
@@ -513,6 +530,7 @@ export default function CommsShell() {
       setSelectedId(found.id);
       setNewTo("");
       setMode("chat");
+      setShowComposer(false);
       return;
     }
 
@@ -533,12 +551,14 @@ export default function CommsShell() {
     setSelectedId(localId);
     setNewTo("");
     setMode("chat");
+    setShowComposer(false);
   }
 
   function onPickConvo(id: string) {
     setSelectedId(id);
     setMsgsError(null);
     setCallsError(null);
+    setError(null);
   }
 
   function backToList() {
@@ -546,26 +566,83 @@ export default function CommsShell() {
     scrollBackToListHeader(() => {});
   }
 
+  async function handleDeleteThread(convo: Conversation) {
+    if (!convo?.id) return;
+    if (commsLocked) return;
+
+    const id = convo.id;
+
+    // Draft/local threads should just disappear
+    if (isLocalConvoId(id)) {
+      setConvos((prev) => prev.filter((c) => c.id !== id));
+      if (selectedId === id) {
+        setSelectedId(null);
+        setMessages([]);
+        setCalls([]);
+      }
+      return;
+    }
+
+    const ok = window.confirm("Delete this conversation thread? This can’t be undone.");
+    if (!ok) return;
+
+    const prev = convos;
+
+    setDeletingId(id);
+    setError(null);
+
+    // optimistic remove
+    setConvos((p) => p.filter((c) => c.id !== id));
+    if (selectedId === id) {
+      setSelectedId(null);
+      setMessages([]);
+      setCalls([]);
+      setMsgsError(null);
+      setCallsError(null);
+    }
+
+    try {
+      // NOTE: this matches the rest of your API patterns (sms conversations).
+      // If your route path differs, change it here.
+      const res = await fetch(`/api/sms/conversations/${id}`, { method: "DELETE" });
+
+      if (!res.ok) {
+        const msg = normalizeApiError({ status: res.status }, "Failed to delete conversation.");
+        setConvos(prev);
+        setError(msg);
+      }
+    } catch (e: any) {
+      const msg = normalizeApiError(e, "Failed to delete conversation.");
+      setConvos(prev);
+      setError(msg);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  // Apple-ish: “Messages-style” top title
+  const headerTitle = "Messages";
+  const headerSubtitle = commsLocked
+    ? "Locked"
+    : loadingMyNumber
+      ? "Loading number…"
+      : hasMyNumber
+        ? `From: ${myNumber?.e164}`
+        : "No number";
+
   return (
     <section className="mx-auto w-full max-w-6xl">
-      <div className="overflow-hidden rounded-2xl border border-slate-800/70 bg-slate-950/70 shadow-[0_0_40px_rgba(15,23,42,0.85)]">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800/70 bg-slate-950/85 px-4 py-3">
+      {/* Apple-like window */}
+      <div className="overflow-hidden rounded-[26px] border border-slate-800/70 bg-slate-950/65 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+        {/* Top chrome */}
+        <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/70 px-4 py-3">
           <div className="min-w-0">
-            <p className="truncate text-[13px] font-semibold text-slate-50">Comms</p>
-            <p className="truncate text-[11px] text-[var(--avillo-cream-muted)]">
-              {commsLocked
-                ? "Locked"
-                : loadingMyNumber
-                  ? "Loading number…"
-                  : hasMyNumber
-                    ? `From: ${myNumber?.e164}`
-                    : "No number"}
-            </p>
+            <p className="truncate text-[13px] font-semibold text-slate-50">{headerTitle}</p>
+            <p className="truncate text-[11px] text-[var(--avillo-cream-muted)]">{headerSubtitle}</p>
           </div>
 
           <div className="flex items-center gap-2">
-            <Segmented
+            <PillTabs
               value={mode}
               onChange={setMode}
               disabled={commsLocked}
@@ -574,12 +651,20 @@ export default function CommsShell() {
                 { value: "calls", label: "Calls" },
               ]}
             />
+
+            <IconButton
+              label="New message"
+              onClick={() => setShowComposer((v) => !v)}
+              disabled={commsLocked || !hasMyNumber}
+            >
+              ✎
+            </IconButton>
           </div>
         </div>
 
-        {/* Lock */}
+        {/* Lock banner */}
         {commsLocked && (
-          <div className="border-b border-amber-200/30 bg-amber-500/10 px-4 py-3">
+          <div className="border-b border-amber-200/20 bg-amber-500/10 px-4 py-3">
             <p className="text-[11px] font-semibold text-amber-100">Comms locked</p>
             <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
               {commsLockMsg || "Comms requires a Pro plan (or Beta access)."}
@@ -587,110 +672,130 @@ export default function CommsShell() {
           </div>
         )}
 
-        {/* Setup (only if not locked) */}
-        {!commsLocked && (
-          <div className="border-b border-slate-800/70 px-4 py-3">
-            {!hasMyNumber ? (
-              <div className="space-y-2">
-                <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-                  You need a number to call/text.
-                </p>
-                {myNumberError && (
-                  <div className="rounded-xl border border-rose-400/60 bg-rose-950/40 px-3 py-2 text-[11px] text-rose-50">
-                    {myNumberError}
-                  </div>
-                )}
-                <div className="flex items-center gap-2">
-                  <input
-                    value={areaCode}
-                    onChange={(e) => setAreaCode(e.target.value)}
-                    placeholder="Area code (optional)"
-                    className="avillo-input w-full text-slate-50"
-                    disabled={loadingMyNumber || provisioningNumber}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleProvisionMyNumber}
-                    disabled={loadingMyNumber || provisioningNumber}
-                    className="shrink-0 rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold text-amber-50 hover:bg-amber-50/20 disabled:opacity-60"
-                  >
-                    {provisioningNumber ? "…" : "Get"}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-                  Ready to send + call.
-                </p>
-                <div className="flex items-center gap-2">
-                  <input
-                    value={newTo}
-                    onChange={(e) => setNewTo(e.target.value)}
-                    placeholder="Start by number…"
-                    className="avillo-input w-[220px] text-slate-50"
-                    disabled={!hasMyNumber}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleStartNewThread}
-                    disabled={!hasMyNumber}
-                    className="rounded-full border border-slate-800/70 bg-slate-950/60 px-3 py-2 text-[11px] font-semibold text-[var(--avillo-cream-soft)] hover:border-amber-100/60 hover:text-amber-50 disabled:opacity-60"
-                  >
-                    New
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Body */}
-        <div className="grid lg:grid-cols-[360px_1fr]">
-          {/* List */}
-          <div
+        <div className="grid lg:grid-cols-[340px_1fr]">
+          {/* Sidebar */}
+          <aside
             ref={listHeaderRef}
             className={cx(
-              "border-r border-slate-800/70 bg-slate-950/55",
+              "border-r border-slate-800/60 bg-slate-950/55",
               workspaceOpenMobile ? "hidden" : "block",
               "lg:block"
             )}
           >
-            <div className="p-4">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search"
-                className="avillo-input w-full text-slate-50"
-                disabled={commsLocked}
-              />
+            {/* Sidebar header */}
+            <div className="border-b border-slate-800/60 px-3 py-3">
+              {/* Number setup card */}
+              {!commsLocked && (
+                <div className="mb-3">
+                  {!hasMyNumber ? (
+                    <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3">
+                      <p className="text-[12px] font-semibold text-slate-50">Get a number</p>
+                      <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
+                        You need a number to text and call.
+                      </p>
+
+                      {myNumberError && (
+                        <div className="mt-2 rounded-xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[11px] text-rose-50">
+                          {myNumberError}
+                        </div>
+                      )}
+
+                      <div className="mt-2 flex items-center gap-2">
+                        <input
+                          value={areaCode}
+                          onChange={(e) => setAreaCode(e.target.value)}
+                          placeholder="Area code (optional)"
+                          className="w-full rounded-xl border border-slate-800/70 bg-slate-950/70 px-3 py-2 text-[12px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-amber-200/40 disabled:opacity-60"
+                          disabled={loadingMyNumber || provisioningNumber}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleProvisionMyNumber}
+                          disabled={loadingMyNumber || provisioningNumber}
+                          className="shrink-0 rounded-xl border border-amber-100/50 bg-amber-50/10 px-3 py-2 text-[12px] font-semibold text-amber-50 hover:bg-amber-50/15 disabled:opacity-60"
+                        >
+                          {provisioningNumber ? "…" : "Get"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* Search */}
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[12px] text-[var(--avillo-cream-muted)]">
+                  ⌕
+                </span>
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search"
+                  className="w-full rounded-2xl border border-slate-800/70 bg-slate-950/65 py-2 pl-8 pr-3 text-[12px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-slate-600/60 disabled:opacity-60"
+                  disabled={commsLocked}
+                />
+              </div>
+
+              {/* Compose drawer */}
+              {!commsLocked && hasMyNumber && showComposer && (
+                <div className="mt-3 rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3">
+                  <p className="text-[11px] font-semibold text-slate-50">New message</p>
+                  <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
+                    Enter a phone number to start a thread.
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      value={newTo}
+                      onChange={(e) => setNewTo(e.target.value)}
+                      placeholder="To: +1…"
+                      className="w-full rounded-xl border border-slate-800/70 bg-slate-950/70 px-3 py-2 text-[12px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-slate-600/60 disabled:opacity-60"
+                      disabled={!hasMyNumber}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleStartNewThread();
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleStartNewThread}
+                      disabled={!hasMyNumber || !normalizePhone(newTo)}
+                      className="shrink-0 rounded-xl border border-slate-700/70 bg-slate-900/50 px-3 py-2 text-[12px] font-semibold text-slate-50 hover:bg-slate-900/70 disabled:opacity-50"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {error && !commsLocked && (
-                <div className="mt-3 rounded-xl border border-rose-400/60 bg-rose-950/40 px-3 py-2 text-[11px] text-rose-50">
+                <div className="mt-3 rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[11px] text-rose-50">
                   {error}
                 </div>
               )}
             </div>
 
+            {/* Conversation list */}
             <div
               ref={listScrollRef}
-              className="max-h-[calc(100vh-280px)] overflow-y-auto px-2 pb-3"
+              className="max-h-[calc(100vh-240px)] overflow-y-auto px-2 py-2"
             >
               {loadingConvos && (
-                <p className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+                <div className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
                   Loading…
-                </p>
+                </div>
               )}
 
               {!loadingConvos && filteredConvos.length === 0 && (
-                <p className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-                  No results.
-                </p>
+                <div className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
+                  No conversations.
+                </div>
               )}
 
               {!loadingConvos &&
                 filteredConvos.map((c) => {
                   const isSelected = c.id === selectedId;
                   const isLocal = isLocalConvoId(c.id);
+                  const deleting = deletingId === c.id;
 
                   return (
                     <button
@@ -700,82 +805,109 @@ export default function CommsShell() {
                       onClick={() => onPickConvo(c.id)}
                       disabled={commsLocked}
                       className={cx(
-                        "mb-1 w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                        "group w-full rounded-2xl px-3 py-3 text-left transition-colors",
                         isSelected
-                          ? "border-amber-200/60 bg-slate-900/80"
-                          : "border-slate-800/70 bg-slate-950/40 hover:bg-slate-900/70 hover:border-slate-700/70",
+                          ? "bg-slate-900/70 ring-1 ring-slate-700/70"
+                          : "hover:bg-slate-900/45",
                         commsLocked ? "opacity-60 cursor-not-allowed" : ""
                       )}
                     >
                       <div className="flex items-center gap-3">
-                        <span className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-800/80 bg-slate-950/70 text-[11px] font-semibold text-slate-50">
-                          {initials(c.title || "U")}
-                        </span>
+                        <div className="relative">
+                          <div
+                            className={cx(
+                              "flex h-10 w-10 items-center justify-center rounded-full border text-[11px] font-semibold",
+                              isSelected
+                                ? "border-slate-600/70 bg-slate-950/60 text-slate-50"
+                                : "border-slate-800/70 bg-slate-950/60 text-slate-50"
+                            )}
+                          >
+                            {initials(c.title || "U")}
+                          </div>
+                          {typeof c.unreadCount === "number" && c.unreadCount > 0 ? (
+                            <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500/90 px-1.5 text-[10px] font-semibold text-slate-950">
+                              {c.unreadCount > 99 ? "99+" : c.unreadCount}
+                            </span>
+                          ) : null}
+                        </div>
 
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <p className="truncate text-[12px] font-semibold text-slate-50">
                               {c.title || "Unknown"}
                               {isLocal ? (
-                                <span className="ml-2 rounded-full border border-amber-200/40 bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-amber-100">
+                                <span className="ml-2 rounded-full border border-amber-200/25 bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-amber-100">
                                   draft
                                 </span>
                               ) : null}
                             </p>
+
                             <p className="shrink-0 text-[10px] text-[var(--avillo-cream-muted)]">
                               {formatWhen(c.lastMessageAt)}
                             </p>
                           </div>
 
                           <p className="mt-0.5 truncate text-[11px] text-[var(--avillo-cream-muted)]">
-                            {c.phone || c.subtitle || "—"}
+                            {c.lastMessagePreview || c.phone || c.subtitle || "—"}
                           </p>
                         </div>
 
-                        <MiniIconButton
-                          label="Call"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            onPickConvo(c.id);
-                            setTimeout(() => void handleStartCallFor(c), 0);
-                          }}
-                          disabled={actionsDisabled}
-                        >
-                          ☎︎
-                        </MiniIconButton>
+                        {/* Hover actions (like Dashboard/Intelligence) */}
+                        <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                          <IconButton
+                            label="Call"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              onPickConvo(c.id);
+                              setTimeout(() => void handleStartCallFor(c), 0);
+                            }}
+                            disabled={actionsDisabled || deleting}
+                          >
+                            ☎︎
+                          </IconButton>
+
+                          <DangerIconButton
+                            label="Delete thread"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void handleDeleteThread(c);
+                            }}
+                            disabled={commsLocked || deleting}
+                          >
+                            {deleting ? "…" : "🗑"}
+                          </DangerIconButton>
+                        </div>
                       </div>
                     </button>
                   );
                 })}
             </div>
-          </div>
+          </aside>
 
-          {/* Detail */}
-          <div
+          {/* Main panel */}
+          <main
             ref={workspaceRef as any}
-            className={cx(
-              "min-h-[520px] bg-gradient-to-b from-slate-950/40 to-slate-950/70",
-              workspaceOpenMobile ? "block" : "hidden",
-              "lg:block"
-            )}
+            className={cx(workspaceOpenMobile ? "block" : "hidden", "lg:block")}
           >
-            <div className="flex items-center justify-between gap-2 border-b border-slate-800/70 px-4 py-3">
+            {/* Main header */}
+            <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/45 px-4 py-3">
               <div className="min-w-0">
                 {activeConvo ? (
                   <>
-                    <p className="truncate text-[12px] font-semibold text-slate-50">
+                    <p className="truncate text-[13px] font-semibold text-slate-50">
                       {activeConvo.title || "Unknown"}
                     </p>
                     <p className="truncate text-[11px] text-[var(--avillo-cream-muted)]">
-                      {activeConvo.phone || activeConvo.subtitle || "No number"}
+                      {shortPhone(activeConvo.phone || activeConvo.subtitle) || "No number"}
                     </p>
                   </>
                 ) : (
                   <>
-                    <p className="text-[12px] font-semibold text-slate-50">Select a thread</p>
+                    <p className="text-[13px] font-semibold text-slate-50">Select a conversation</p>
                     <p className="text-[11px] text-[var(--avillo-cream-muted)]">
-                      Pick someone on the left.
+                      Choose a thread on the left.
                     </p>
                   </>
                 )}
@@ -784,70 +916,29 @@ export default function CommsShell() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setWorkspaceOpenMobile(false);
-                    scrollBackToListHeader(() => {});
-                  }}
-                  className="lg:hidden rounded-full border border-slate-800/70 bg-slate-950/60 px-3 py-1.5 text-[11px] font-semibold text-[var(--avillo-cream-soft)] hover:border-amber-100/60 hover:text-amber-50"
+                  onClick={backToList}
+                  className="lg:hidden rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-1.5 text-[12px] font-semibold text-[var(--avillo-cream-soft)] hover:bg-slate-900/55"
                 >
                   Back
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => setMode("chat")}
-                  disabled={!activeConvo || commsLocked}
-                  className={cx(
-                    "rounded-full border border-slate-800/70 bg-slate-950/60 px-3 py-1.5 text-[11px] font-semibold",
-                    mode === "chat"
-                      ? "text-amber-50 border-amber-200/40"
-                      : "text-[var(--avillo-cream-soft)]",
-                    !activeConvo || commsLocked ? "opacity-60 cursor-not-allowed" : ""
-                  )}
-                >
-                  Chat
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setMode("calls")}
-                  disabled={!activeConvo || commsLocked}
-                  className={cx(
-                    "rounded-full border border-slate-800/70 bg-slate-950/60 px-3 py-1.5 text-[11px] font-semibold",
-                    mode === "calls"
-                      ? "text-emerald-100 border-emerald-200/40"
-                      : "text-[var(--avillo-cream-soft)]",
-                    !activeConvo || commsLocked ? "opacity-60 cursor-not-allowed" : ""
-                  )}
-                >
-                  Calls
-                </button>
-
-                <button
-                  type="button"
+                <IconButton
+                  label="Call"
                   onClick={handleStartCall}
                   disabled={!activeConvo || actionsDisabled}
-                  className={cx(
-                    "rounded-full border border-emerald-200/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100",
-                    !activeConvo || actionsDisabled ? "opacity-60 cursor-not-allowed" : ""
-                  )}
-                  title="Call"
                 >
                   ☎︎
-                </button>
+                </IconButton>
               </div>
             </div>
 
+            {/* Content */}
             <div className="p-4">
               {!activeConvo ? (
-                <div className="flex h-[460px] flex-col items-center justify-center text-center text-[11px] text-[var(--avillo-cream-muted)]">
-                  <p className="font-semibold text-[var(--avillo-cream-soft)]">Simple Comms</p>
-                  <p className="mt-1 max-w-sm">
-                    Select a thread. Chat shows messages. Calls shows call activity.
-                  </p>
-                </div>
+                <EmptyState />
               ) : mode === "chat" ? (
-                <ThreadSimple
+                <ThreadApple
+                  scrollRef={threadScrollRef}
                   isLocal={activeIsLocal}
                   loading={loadingMsgs}
                   error={msgsError}
@@ -859,7 +950,7 @@ export default function CommsShell() {
                   onSend={handleSend}
                 />
               ) : (
-                <CallsSimple
+                <CallsApple
                   isLocal={activeIsLocal}
                   loading={loadingCalls}
                   error={callsError}
@@ -869,7 +960,7 @@ export default function CommsShell() {
                 />
               )}
             </div>
-          </div>
+          </main>
         </div>
       </div>
     </section>
@@ -877,10 +968,23 @@ export default function CommsShell() {
 }
 
 /* -----------------------------
- * Minimal UI bits
+ * Apple-ish UI bits
  * ----------------------------*/
 
-function Segmented({
+function EmptyState() {
+  return (
+    <div className="flex h-[560px] flex-col items-center justify-center text-center">
+      <div className="rounded-3xl border border-slate-800/60 bg-slate-950/45 px-6 py-5 shadow-[0_0_40px_rgba(0,0,0,0.25)]">
+        <p className="text-[13px] font-semibold text-slate-50">Simple Comms</p>
+        <p className="mt-1 max-w-sm text-[12px] text-[var(--avillo-cream-muted)]">
+          Pick a thread to chat. Switch to Calls to see call history.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function PillTabs({
   value,
   onChange,
   disabled,
@@ -894,7 +998,7 @@ function Segmented({
   return (
     <div
       className={cx(
-        "inline-flex overflow-hidden rounded-full border border-slate-800/70 bg-slate-950/60",
+        "inline-flex overflow-hidden rounded-full border border-slate-800/70 bg-slate-950/55 p-0.5",
         disabled ? "opacity-60 cursor-not-allowed" : ""
       )}
     >
@@ -907,8 +1011,10 @@ function Segmented({
             onClick={() => onChange(o.value)}
             disabled={disabled}
             className={cx(
-              "px-3 py-1.5 text-[11px] font-semibold",
-              active ? "bg-slate-900/80 text-slate-50" : "text-[var(--avillo-cream-muted)]"
+              "px-3 py-1.5 text-[12px] font-semibold transition-colors",
+              active
+                ? "rounded-full bg-slate-900/80 text-slate-50"
+                : "text-[var(--avillo-cream-muted)] hover:text-slate-50"
             )}
           >
             {o.label}
@@ -919,14 +1025,14 @@ function Segmented({
   );
 }
 
-function MiniIconButton({
+function IconButton({
   label,
   onClick,
   children,
   disabled,
 }: {
   label: string;
-  onClick?: (e: any) => void;
+  onClick?: (e?: any) => void;
   children: React.ReactNode;
   disabled?: boolean;
 }) {
@@ -934,11 +1040,12 @@ function MiniIconButton({
     <button
       type="button"
       title={label}
+      aria-label={label}
       onClick={onClick}
       disabled={disabled}
       className={cx(
-        "inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-800/70 bg-slate-950/60 text-[12px] text-[var(--avillo-cream-soft)]",
-        disabled ? "opacity-50 cursor-not-allowed" : "hover:border-amber-100/60 hover:text-amber-50"
+        "inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-800/70 bg-slate-950/55 text-[13px] text-[var(--avillo-cream-soft)]",
+        disabled ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-900/55 hover:border-slate-700/70"
       )}
     >
       {children}
@@ -946,7 +1053,38 @@ function MiniIconButton({
   );
 }
 
-function ThreadSimple({
+function DangerIconButton({
+  label,
+  onClick,
+  children,
+  disabled,
+}: {
+  label: string;
+  onClick?: (e?: any) => void;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      disabled={disabled}
+      className={cx(
+        "inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-800/70 bg-slate-950/55 text-[13px] text-rose-200/90",
+        disabled
+          ? "opacity-50 cursor-not-allowed"
+          : "hover:bg-rose-500/10 hover:border-rose-300/40 hover:text-rose-200"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ThreadApple({
+  scrollRef,
   isLocal,
   loading,
   error,
@@ -957,6 +1095,7 @@ function ThreadSimple({
   onDraftChange,
   onSend,
 }: {
+  scrollRef: React.RefObject<HTMLDivElement>;
   isLocal: boolean;
   loading: boolean;
   error: string | null;
@@ -968,85 +1107,101 @@ function ThreadSimple({
   onSend: () => void;
 }) {
   return (
-    <div className="space-y-3">
-      {error && (
-        <div className="rounded-xl border border-rose-400/60 bg-rose-950/40 px-3 py-2 text-[11px] text-rose-50">
-          {error}
+    <div className="rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)]">
+      {(error || isLocal) && (
+        <div className="border-b border-slate-800/60 px-4 py-3">
+          {error && (
+            <div className="rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[12px] text-rose-50">
+              {error}
+            </div>
+          )}
+          {isLocal && !error && (
+            <div className="rounded-2xl border border-amber-200/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-50">
+              Draft thread — send the first text to create it.
+            </div>
+          )}
         </div>
       )}
 
-      {isLocal && (
-        <div className="rounded-xl border border-amber-200/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-50">
-          Draft thread — send the first text to create it.
-        </div>
-      )}
+      <div ref={scrollRef} className="max-h-[560px] overflow-y-auto px-4 py-4 overscroll-contain">
+        {loading && (
+          <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
+            Loading…
+          </div>
+        )}
 
-      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/45">
-        <div className="max-h-[520px] overflow-y-auto p-3 pr-2 overscroll-contain">
-          {loading && (
-            <p className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-              Loading…
-            </p>
-          )}
+        {!loading && messages.length === 0 && (
+          <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
+            No messages yet.
+          </div>
+        )}
 
-          {!loading && messages.length === 0 && (
-            <p className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-              No messages yet.
-            </p>
-          )}
-
-          {!loading &&
-            messages.map((m) => {
-              const outbound = m.direction === "OUTBOUND";
-              return (
-                <div
-                  key={m.id}
-                  className={cx("mb-2 flex", outbound ? "justify-end" : "justify-start")}
-                >
+        {!loading &&
+          messages.map((m) => {
+            const outbound = m.direction === "OUTBOUND";
+            return (
+              <div key={m.id} className={cx("mb-2 flex", outbound ? "justify-end" : "justify-start")}>
+                    <div className="max-w-[78%]">
+                      <div className={cx(
+                      "rounded-[22px] px-3 py-2 text-[13px] leading-none flex items-center justify-center text-center",
+                      outbound ? "bg-slate-50 text-slate-950" : "bg-slate-900/70 text-slate-50 border border-slate-800/60"
+                    )}>
+                      <p className="whitespace-pre-wrap w-full">{m.body}</p>
+                    </div>
                   <div
                     className={cx(
-                      "max-w-[86%] rounded-2xl px-3 py-2 text-[12px]",
-                      outbound
-                        ? "bg-amber-500/15 text-amber-50 border border-amber-200/30"
-                        : "bg-slate-900/60 text-slate-50 border border-slate-800/60"
+                      "mt-1 text-[10px] text-[var(--avillo-cream-muted)]",
+                      outbound ? "text-right pr-1" : "pl-1"
                     )}
                   >
-                    <p className="whitespace-pre-wrap leading-relaxed">{m.body}</p>
-                    <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                      {formatWhen(m.createdAt)}
-                    </p>
+                    {formatWhen(m.createdAt)}
                   </div>
                 </div>
-              );
-            })}
-        </div>
+              </div>
+            );
+          })}
+      </div>
 
-        <div className="border-t border-slate-800/70 p-3">
-          <div className="flex items-end gap-2">
+      <div className="border-t border-slate-800/60 px-4 py-3">
+        <div className="flex items-end gap-2">
+          <div className="flex-1 rounded-[20px] border border-slate-800/70 bg-slate-950/60 px-3 py-2">
             <textarea
               rows={2}
               value={draft}
               onChange={(e) => onDraftChange(e.target.value)}
-              placeholder="Message…"
+              placeholder="iMessage…"
               disabled={disabled}
-              className="w-full resize-none rounded-xl border border-slate-800/70 bg-slate-950/70 px-3 py-2 text-[12px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-amber-200/50 disabled:opacity-60"
+              className="w-full resize-none bg-transparent text-[13px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] disabled:opacity-60"
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  onSend();
+                }
+              }}
             />
-            <button
-              type="button"
-              onClick={onSend}
-              disabled={disabled || !draft.trim()}
-              className="shrink-0 rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold text-amber-50 hover:bg-amber-50/20 disabled:opacity-60"
-            >
-              {sending ? "…" : "Send"}
-            </button>
           </div>
+
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={disabled || !draft.trim()}
+            className={cx(
+              "h-10 rounded-full px-4 text-[12px] font-semibold",
+              disabled || !draft.trim()
+                ? "border border-slate-800/70 bg-slate-950/40 text-[var(--avillo-cream-muted)] opacity-70"
+                : "border border-slate-200/60 bg-slate-50 text-slate-950 hover:bg-slate-100"
+            )}
+            title="Send (Ctrl/⌘ + Enter)"
+          >
+            {sending ? "…" : "Send"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function CallsSimple({
+function CallsApple({
   isLocal,
   loading,
   error,
@@ -1062,64 +1217,71 @@ function CallsSimple({
   onStartCall: () => void;
 }) {
   return (
-    <div className="space-y-3">
-      {error && (
-        <div className="rounded-xl border border-rose-400/60 bg-rose-950/40 px-3 py-2 text-[11px] text-rose-50">
-          {error}
+    <div className="rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)]">
+      {(error || isLocal) && (
+        <div className="border-b border-slate-800/60 px-4 py-3">
+          {error && (
+            <div className="rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[12px] text-rose-50">
+              {error}
+            </div>
+          )}
+          {isLocal && !error && (
+            <div className="rounded-2xl border border-amber-200/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-50">
+              Draft thread — place the first call to create it.
+            </div>
+          )}
         </div>
       )}
 
-      {isLocal && (
-        <div className="rounded-xl border border-amber-200/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-50">
-          Draft thread — place the first call to create it.
-        </div>
-      )}
-
-      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/45">
-        <div className="flex items-center justify-between border-b border-slate-800/70 px-3 py-3">
-          <p className="text-[12px] font-semibold text-slate-50">Calls</p>
-          <button
-            type="button"
-            onClick={onStartCall}
-            disabled={disabled}
-            className={cx(
-              "rounded-full border border-emerald-200/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100",
-              disabled ? "opacity-60 cursor-not-allowed" : "hover:bg-emerald-500/15"
-            )}
-          >
-            Call
-          </button>
-        </div>
-
-        <div className="max-h-[560px] overflow-y-auto p-3 pr-2 overscroll-contain">
-          {loading && (
-            <p className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-              Loading…
-            </p>
+      <div className="flex items-center justify-between border-b border-slate-800/60 px-4 py-3">
+        <p className="text-[13px] font-semibold text-slate-50">Calls</p>
+        <button
+          type="button"
+          onClick={onStartCall}
+          disabled={disabled}
+          className={cx(
+            "rounded-full px-4 py-2 text-[12px] font-semibold",
+            disabled
+              ? "border border-slate-800/70 bg-slate-950/40 text-[var(--avillo-cream-muted)] opacity-70"
+              : "border border-emerald-200/30 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
           )}
+        >
+          Call
+        </button>
+      </div>
 
-          {!loading && calls.length === 0 && (
-            <p className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
-              No calls yet.
-            </p>
-          )}
+      <div className="max-h-[620px] overflow-y-auto px-4 py-4 overscroll-contain">
+        {loading && (
+          <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
+            Loading…
+          </div>
+        )}
 
-          {!loading &&
-            calls.slice(0, 80).map((c) => (
+        {!loading && calls.length === 0 && (
+          <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
+            No calls yet.
+          </div>
+        )}
+
+        {!loading &&
+          calls.slice(0, 100).map((c) => {
+            const dir = c.direction === "INBOUND" ? "Inbound" : "Outbound";
+            const status = String(c.status || "logged").toLowerCase();
+            const when = formatWhen(c.startedAt || c.createdAt || null);
+
+            return (
               <div
                 key={c.id}
-                className="mb-2 rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-2"
+                className="mb-2 rounded-2xl border border-slate-800/60 bg-slate-950/55 px-4 py-3"
               >
-                <p className="text-[12px] font-semibold text-slate-50">
-                  {c.direction === "INBOUND" ? "Inbound" : "Outbound"} call
-                </p>
-                <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
-                  {formatWhen(c.startedAt || c.createdAt || null)} •{" "}
-                  {String(c.status || "logged").toLowerCase()}
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[13px] font-semibold text-slate-50">{dir} call</p>
+                  <span className="text-[11px] text-[var(--avillo-cream-muted)]">{when}</span>
+                </div>
+                <p className="mt-1 text-[12px] text-[var(--avillo-cream-muted)]">{status}</p>
               </div>
-            ))}
-        </div>
+            );
+          })}
       </div>
     </div>
   );

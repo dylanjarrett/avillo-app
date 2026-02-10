@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   const upper = upperTrim(msg);
 
   const twilioSid =
-    params.get("MessageSid") || params.get("SmsMessageSid") || params.get("SmsSid") || "";
+    (params.get("MessageSid") || params.get("SmsMessageSid") || params.get("SmsSid") || "").trim();
 
   if (!from || !to) return twimlResponse("Invalid message.");
 
@@ -49,24 +49,27 @@ export async function POST(req: NextRequest) {
   const workspaceId = phoneNumber.workspaceId;
   const assignedToUserId = phoneNumber.assignedToUserId;
 
-  // ✅ Entitlement gate (webhook-safe): if comms disabled, do not write anything
+  // Webhook-safe gate: if comms disabled, do not write anything
   const gate = await requireEntitlement(workspaceId, "COMMS_ACCESS");
   if (!gate.ok) return twimlResponse("This number is inactive. Please contact your agent.");
 
-  // Optional contact link (workspace-scoped)
+  const now = new Date();
+
+  // Optional contact link (best-effort; supports non-normalized stored phones)
   const contact = await prisma.contact.findFirst({
-    where: { workspaceId, phone: from },
+    where: {
+      workspaceId,
+      OR: [{ phone: from }, { phone: from.replace(/^\+1/, "") }],
+    },
     select: { id: true },
   });
 
   const threadKey = threadKeyForSms({
     phoneNumberId: phoneNumber.id,
-    contactId: contact?.id ?? null,
     otherPartyE164: from,
   });
 
-  // ✅ Upsert conversation and ALWAYS persist otherPartyE164 for UI/lookup consistency
-  const now = new Date();
+  // Upsert conversation and ALWAYS persist otherPartyE164
   const conversation = await prisma.conversation.upsert({
     where: { workspaceId_threadKey: { workspaceId, threadKey } },
     create: {
@@ -75,19 +78,15 @@ export async function POST(req: NextRequest) {
       phoneNumberId: phoneNumber.id,
       contactId: contact?.id ?? null,
       threadKey,
-
-      otherPartyE164: from, // ✅ NEW
-
-      lastMessageAt: new Date(),
-      lastInboundAt: new Date(),
+      otherPartyE164: from,
+      lastMessageAt: now,
+      lastInboundAt: now,
     },
     update: {
       contactId: contact?.id ?? undefined,
-
-      otherPartyE164: from, // ✅ NEW (backfill + keep correct)
-
-      lastMessageAt: new Date(),
-      lastInboundAt: new Date(),
+      otherPartyE164: from,
+      lastMessageAt: now,
+      lastInboundAt: now,
     },
     select: { id: true },
   });
@@ -101,19 +100,19 @@ export async function POST(req: NextRequest) {
     });
 
     await prisma.contact.updateMany({
-      where: { workspaceId, phone: from },
+      where: { workspaceId, OR: [{ phone: from }, { phone: from.replace(/^\+1/, "") }] },
       data: { smsOptedOutAt: now },
     });
   } else if (upper === "START" || upper === "YES") {
     await prisma.smsSuppression.deleteMany({ where: { workspaceId, phone: from } });
 
     await prisma.contact.updateMany({
-      where: { workspaceId, phone: from },
+      where: { workspaceId, OR: [{ phone: from }, { phone: from.replace(/^\+1/, "") }] },
       data: { smsOptedOutAt: null },
     });
   }
 
-  // ✅ Idempotency: find existing SmsMessage by twilioSid first
+  // Idempotency: find existing SmsMessage by twilioSid first
   let smsMessageId: string | null = null;
 
   if (twilioSid) {
@@ -124,7 +123,6 @@ export async function POST(req: NextRequest) {
     if (existing) smsMessageId = existing.id;
   }
 
-  // Create inbound message if it doesn't exist
   if (!smsMessageId) {
     try {
       const created = await prisma.smsMessage.create({
@@ -141,12 +139,12 @@ export async function POST(req: NextRequest) {
           body: msg,
           twilioSid: twilioSid || null,
           status: "received",
+          createdAt: now,
         },
         select: { id: true },
       });
       smsMessageId = created.id;
     } catch {
-      // If a race created it, re-fetch (only safe when twilioSid exists)
       if (twilioSid) {
         const existing = await prisma.smsMessage.findUnique({
           where: { twilioSid },
@@ -157,7 +155,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ✅ Avoid duplicate CommEvent on retries
+  // Avoid duplicate CommEvent on retries
   if (smsMessageId) {
     const existingEvent = await prisma.commEvent.findFirst({
       where: { workspaceId, type: "SMS_IN", smsMessageId },
@@ -177,6 +175,7 @@ export async function POST(req: NextRequest) {
           smsMessageId,
           occurredAt: now,
           payload: { from, to, twilioSid: twilioSid || null },
+          createdAt: now,
         },
       });
     }

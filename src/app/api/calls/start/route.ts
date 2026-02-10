@@ -6,6 +6,7 @@ import { requireEntitlement } from "@/lib/entitlements";
 import { twilioClient } from "@/lib/twilioClient";
 import { normalizeE164, safeStr } from "@/lib/phone/normalize";
 import { threadKeyForSms } from "@/lib/phone/threadKey";
+import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +19,6 @@ export async function POST(req: NextRequest) {
   const ws = await requireWorkspace();
   if (!ws.ok) return NextResponse.json(ws.error, { status: ws.status });
 
-  // ✅ Entitlement gate
   const gate = await requireEntitlement(ws.workspaceId, "COMMS_ACCESS");
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
 
   if (!to) return NextResponse.json({ error: "Invalid 'to' phone number." }, { status: 400 });
 
-  // ✅ enforce that provided conversation belongs to user
+  // If conversationId provided, ensure it belongs to user
   if (conversationId) {
     const conv = await prisma.conversation.findFirst({
       where: { id: conversationId, workspaceId: ws.workspaceId, assignedToUserId: ws.userId },
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     if (!conv) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
   }
 
-  // ✅ resolve user's Avillo number
+  // Resolve user's Avillo number
   const pn =
     (phoneNumberIdOverride
       ? await prisma.userPhoneNumber.findFirst({
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ✅ agent forwarding number (User.phone) must exist
+  // Agent forwarding number (User.phone)
   const user = await prisma.user.findFirst({
     where: { id: ws.userId },
     select: { phone: true },
@@ -81,12 +81,11 @@ export async function POST(req: NextRequest) {
 
   const now = new Date();
 
-  // ✅ ensure conversation (if not provided)
+  // Ensure conversation (if not provided)
   let convId = conversationId;
   if (!convId) {
     const threadKey = threadKeyForSms({
       phoneNumberId: pn.id,
-      contactId: contactId ?? null,
       otherPartyE164: to,
     });
 
@@ -99,27 +98,34 @@ export async function POST(req: NextRequest) {
         contactId: contactId ?? null,
         listingId: listingId ?? null,
         threadKey,
-
-        otherPartyE164: to, // ✅ NEW
-
-        lastMessageAt: new Date(),
+        otherPartyE164: to,
+        lastMessageAt: now,
       },
       update: {
         contactId: contactId ?? undefined,
         listingId: listingId ?? undefined,
-
-        otherPartyE164: to, // ✅ NEW
-
-        lastMessageAt: new Date(),
+        otherPartyE164: to,
+        lastMessageAt: now,
       },
       select: { id: true },
     });
+
     convId = conv.id;
   }
 
-  // Create call record first (we will fill twilioCallSid after we create Twilio call)
+  /**
+   * IMPORTANT:
+   * Call.twilioCallSid is @unique.
+   * Never use a static placeholder like "PENDING" or you'll crash on second call.
+   *
+   * We'll create the row with a guaranteed-unique placeholder, then update once Twilio returns the real SID.
+   */
+  const callId = crypto.randomUUID();
+  const placeholderSid = `pending-${callId}`;
+
   const callRow = await prisma.call.create({
     data: {
+      id: callId,
       workspaceId: ws.workspaceId,
       phoneNumberId: pn.id,
       assignedToUserId: ws.userId,
@@ -131,7 +137,8 @@ export async function POST(req: NextRequest) {
       status: "QUEUED",
       fromNumber: pn.e164,
       toNumber: to,
-      twilioCallSid: "PENDING", // temp; overwritten immediately
+      twilioCallSid: placeholderSid,
+      createdAt: now,
     },
     select: { id: true },
   });
@@ -154,6 +161,7 @@ export async function POST(req: NextRequest) {
     data: {
       twilioCallSid: twilioCall.sid,
       status: "QUEUED",
+      updatedAt: new Date(),
     },
   });
 
@@ -171,6 +179,7 @@ export async function POST(req: NextRequest) {
       callId: callRow.id,
       occurredAt: now,
       payload: { to, from: pn.e164, twilioCallSid: twilioCall.sid },
+      createdAt: now,
     },
   });
 
