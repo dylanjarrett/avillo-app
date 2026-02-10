@@ -79,6 +79,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const now = new Date();
+
   // ✅ ensure conversation (if not provided)
   let convId = conversationId;
   if (!convId) {
@@ -97,11 +99,17 @@ export async function POST(req: NextRequest) {
         contactId: contactId ?? null,
         listingId: listingId ?? null,
         threadKey,
+
+        otherPartyE164: to, // ✅ NEW
+
         lastMessageAt: new Date(),
       },
       update: {
         contactId: contactId ?? undefined,
         listingId: listingId ?? undefined,
+
+        otherPartyE164: to, // ✅ NEW
+
         lastMessageAt: new Date(),
       },
       select: { id: true },
@@ -161,7 +169,7 @@ export async function POST(req: NextRequest) {
       contactId: contactId ?? null,
       listingId: listingId ?? null,
       callId: callRow.id,
-      occurredAt: new Date(),
+      occurredAt: now,
       payload: { to, from: pn.e164, twilioCallSid: twilioCall.sid },
     },
   });

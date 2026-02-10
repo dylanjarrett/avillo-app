@@ -7,6 +7,13 @@ import { requireEntitlement } from "@/lib/entitlements";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function parseTake(url: URL, def: number, max: number) {
+  const raw = Number(url.searchParams.get("take"));
+  if (!Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  return Math.min(Math.max(n, 1), max);
+}
+
 /**
  * Lists calls in a conversation, but ONLY if the conversation belongs to the user.
  */
@@ -18,8 +25,10 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const gate = await requireEntitlement(ws.workspaceId, "COMMS_ACCESS");
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
-  const conversationId = ctx.params.id;
+  const conversationId = String(ctx.params.id || "").trim();
+  if (!conversationId) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
 
+  // ✅ enforce user-private boundary at the conversation level
   const conv = await prisma.conversation.findFirst({
     where: { id: conversationId, workspaceId: ws.workspaceId, assignedToUserId: ws.userId },
     select: { id: true },
@@ -27,7 +36,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   if (!conv) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
 
   const url = new URL(req.url);
-  const take = Math.min(Number(url.searchParams.get("take") || 50), 100);
+  const take = parseTake(url, 50, 100);
 
   const calls = await prisma.call.findMany({
     where: {
@@ -35,7 +44,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       conversationId,
       assignedToUserId: ws.userId, // ✅ hard boundary
     },
-    orderBy: [{ createdAt: "desc" }],
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }], // tie-breaker for stability
     take,
     select: {
       id: true,

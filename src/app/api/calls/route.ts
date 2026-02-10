@@ -7,6 +7,19 @@ import { requireEntitlement } from "@/lib/entitlements";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function parseTake(url: URL, def: number, max: number) {
+  const raw = Number(url.searchParams.get("take"));
+  if (!Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  return Math.min(Math.max(n, 1), max);
+}
+
+function parseIsoDateSafe(v: string | null) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * User-private: only returns calls assigned to the authed user.
  * Cursor paging: (createdAt desc, id desc)
@@ -25,17 +38,17 @@ export async function GET(req: NextRequest) {
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
   const url = new URL(req.url);
-  const take = Math.min(Number(url.searchParams.get("take") || 50), 100);
-  const cursorCreatedAtRaw = url.searchParams.get("cursorCreatedAt");
-  const cursorId = url.searchParams.get("cursorId");
+  const take = parseTake(url, 50, 100);
+
+  const cursorCreatedAt = parseIsoDateSafe(url.searchParams.get("cursorCreatedAt"));
+  const cursorId = String(url.searchParams.get("cursorId") || "").trim();
 
   const where: any = {
     workspaceId: ws.workspaceId,
     assignedToUserId: ws.userId, // ✅ hard boundary
   };
 
-  if (cursorCreatedAtRaw && cursorId) {
-    const cursorCreatedAt = new Date(cursorCreatedAtRaw);
+  if (cursorCreatedAt && cursorId) {
     where.OR = [
       { createdAt: { lt: cursorCreatedAt } },
       { createdAt: cursorCreatedAt, id: { lt: cursorId } },

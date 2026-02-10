@@ -7,6 +7,19 @@ import { requireEntitlement } from "@/lib/entitlements";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function parseTake(url: URL, def: number, max: number) {
+  const raw = Number(url.searchParams.get("take"));
+  if (!Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  return Math.min(Math.max(n, 1), max);
+}
+
+function parseIsoDateSafe(v: string | null) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * User-private inbox:
  * - only returns conversations assigned to the authed user
@@ -26,10 +39,10 @@ export async function GET(req: NextRequest) {
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
   const url = new URL(req.url);
-  const take = Math.min(Number(url.searchParams.get("take") || 50), 100);
+  const take = parseTake(url, 50, 100);
 
-  const cursorUpdatedAtRaw = url.searchParams.get("cursorUpdatedAt");
-  const cursorId = url.searchParams.get("cursorId");
+  const cursorUpdatedAt = parseIsoDateSafe(url.searchParams.get("cursorUpdatedAt"));
+  const cursorId = String(url.searchParams.get("cursorId") || "").trim();
 
   const where: any = {
     workspaceId: ws.workspaceId,
@@ -37,9 +50,7 @@ export async function GET(req: NextRequest) {
   };
 
   // Stable cursor: fetch items "older than" the cursor (updatedAt desc, id desc)
-  if (cursorUpdatedAtRaw && cursorId) {
-    const cursorUpdatedAt = new Date(cursorUpdatedAtRaw);
-
+  if (cursorUpdatedAt && cursorId) {
     where.OR = [
       { updatedAt: { lt: cursorUpdatedAt } },
       { updatedAt: cursorUpdatedAt, id: { lt: cursorId } },
@@ -57,6 +68,7 @@ export async function GET(req: NextRequest) {
       phoneNumberId: true,
       assignedToUserId: true,
       displayName: true,
+      otherPartyE164: true, // ✅ REQUIRED so UI can show the number
       lastMessageAt: true,
       lastInboundAt: true,
       lastOutboundAt: true,

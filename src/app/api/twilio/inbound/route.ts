@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
   const gate = await requireEntitlement(workspaceId, "COMMS_ACCESS");
   if (!gate.ok) return twimlResponse("This number is inactive. Please contact your agent.");
 
+  // Optional contact link (workspace-scoped)
   const contact = await prisma.contact.findFirst({
     where: { workspaceId, phone: from },
     select: { id: true },
@@ -64,6 +65,8 @@ export async function POST(req: NextRequest) {
     otherPartyE164: from,
   });
 
+  // ✅ Upsert conversation and ALWAYS persist otherPartyE164 for UI/lookup consistency
+  const now = new Date();
   const conversation = await prisma.conversation.upsert({
     where: { workspaceId_threadKey: { workspaceId, threadKey } },
     create: {
@@ -72,11 +75,17 @@ export async function POST(req: NextRequest) {
       phoneNumberId: phoneNumber.id,
       contactId: contact?.id ?? null,
       threadKey,
+
+      otherPartyE164: from, // ✅ NEW
+
       lastMessageAt: new Date(),
       lastInboundAt: new Date(),
     },
     update: {
       contactId: contact?.id ?? undefined,
+
+      otherPartyE164: from, // ✅ NEW (backfill + keep correct)
+
       lastMessageAt: new Date(),
       lastInboundAt: new Date(),
     },
@@ -93,7 +102,7 @@ export async function POST(req: NextRequest) {
 
     await prisma.contact.updateMany({
       where: { workspaceId, phone: from },
-      data: { smsOptedOutAt: new Date() },
+      data: { smsOptedOutAt: now },
     });
   } else if (upper === "START" || upper === "YES") {
     await prisma.smsSuppression.deleteMany({ where: { workspaceId, phone: from } });
@@ -137,7 +146,7 @@ export async function POST(req: NextRequest) {
       });
       smsMessageId = created.id;
     } catch {
-      // if a race created it, re-fetch
+      // If a race created it, re-fetch (only safe when twilioSid exists)
       if (twilioSid) {
         const existing = await prisma.smsMessage.findUnique({
           where: { twilioSid },
@@ -166,7 +175,7 @@ export async function POST(req: NextRequest) {
           conversationId: conversation.id,
           contactId: contact?.id ?? null,
           smsMessageId,
-          occurredAt: new Date(),
+          occurredAt: now,
           payload: { from, to, twilioSid: twilioSid || null },
         },
       });
@@ -174,7 +183,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (isStopWord(upper)) return twimlResponse("You’re unsubscribed. Reply START to re-subscribe.");
-  if (upper === "START" || upper === "YES") return twimlResponse("You’re back in. Reply STOP to opt out, HELP for help.");
+  if (upper === "START" || upper === "YES")
+    return twimlResponse("You’re back in. Reply STOP to opt out, HELP for help.");
   if (upper === "HELP") return twimlResponse("Avillo: Reply STOP to opt out. Help: support@avillo.io");
 
   return twimlResponse("Got it. Reply STOP to opt out, HELP for help.");

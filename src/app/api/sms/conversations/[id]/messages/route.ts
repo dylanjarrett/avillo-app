@@ -7,6 +7,19 @@ import { requireEntitlement } from "@/lib/entitlements";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function parseTake(url: URL, def: number, max: number) {
+  const raw = Number(url.searchParams.get("take"));
+  if (!Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  return Math.min(Math.max(n, 1), max);
+}
+
+function parseIsoDateSafe(v: string | null) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * User-private thread view:
  * - only the assigned user can read messages for a conversation
@@ -29,7 +42,8 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const gate = await requireEntitlement(ws.workspaceId, "COMMS_ACCESS");
   if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
 
-  const conversationId = ctx.params.id;
+  const conversationId = String(ctx.params.id || "").trim();
+  if (!conversationId) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
 
   // ✅ enforce user-private boundary at the conversation level
   const conv = await prisma.conversation.findFirst({
@@ -44,10 +58,10 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   if (!conv) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
 
   const url = new URL(req.url);
-  const take = Math.min(Number(url.searchParams.get("take") || 50), 200);
+  const take = parseTake(url, 50, 200);
 
-  const cursorCreatedAtRaw = url.searchParams.get("cursorCreatedAt");
-  const cursorId = url.searchParams.get("cursorId");
+  const cursorCreatedAt = parseIsoDateSafe(url.searchParams.get("cursorCreatedAt"));
+  const cursorId = String(url.searchParams.get("cursorId") || "").trim();
 
   const where: any = {
     workspaceId: ws.workspaceId,
@@ -56,8 +70,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   };
 
   // Stable cursor: older than (createdAt desc, id desc)
-  if (cursorCreatedAtRaw && cursorId) {
-    const cursorCreatedAt = new Date(cursorCreatedAtRaw);
+  if (cursorCreatedAt && cursorId) {
     where.OR = [
       { createdAt: { lt: cursorCreatedAt } },
       { createdAt: cursorCreatedAt, id: { lt: cursorId } },
@@ -94,6 +107,8 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   return NextResponse.json({
     items: pageAsc,
     nextCursor:
-      hasMore && oldest ? { cursorCreatedAt: oldest.createdAt.toISOString(), cursorId: oldest.id } : null,
+      hasMore && oldest
+        ? { cursorCreatedAt: oldest.createdAt.toISOString(), cursorId: oldest.id }
+        : null,
   });
 }

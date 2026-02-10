@@ -108,12 +108,35 @@ export async function sendSms(opts: {
   // Workspace suppression (STOP)
   const suppressed = await prisma.smsSuppression.findUnique({
     where: { workspaceId_phone: { workspaceId, phone: toE164 } },
-    select: { id: true, reason: true },
+    select: { id: true },
   });
   if (suppressed) throw new Error("Recipient has opted out of SMS.");
 
-  // Ensure Conversation (unless caller passed one)
+  const now = new Date();
+
+  // ✅ If caller supplies conversationId, enforce user-private boundary + patch otherPartyE164
   let convId = conversationId;
+  if (convId) {
+    const conv = await prisma.conversation.findFirst({
+      where: {
+        id: convId,
+        workspaceId,
+        assignedToUserId: userId, // hard boundary (prevents cross-user injection)
+      },
+      select: { id: true, phoneNumberId: true, otherPartyE164: true },
+    });
+    if (!conv) throw new Error("Conversation not found.");
+
+    // Best-effort backfill to enable fast UI/search + ensure consistent model
+    if (!conv.otherPartyE164) {
+      await prisma.conversation.update({
+        where: { id: convId },
+        data: { otherPartyE164: toE164 },
+      });
+    }
+  }
+
+  // ✅ Ensure Conversation (unless caller passed one)
   if (!convId) {
     const threadKey = threadKeyForSms({
       phoneNumberId: pn.id,
@@ -130,12 +153,18 @@ export async function sendSms(opts: {
         contactId: contactId ?? null,
         listingId: listingId ?? null,
         threadKey,
+
+        otherPartyE164: toE164, // ✅ NEW
+
         lastMessageAt: new Date(),
         lastOutboundAt: new Date(),
       },
       update: {
         contactId: contactId ?? undefined,
         listingId: listingId ?? undefined,
+
+        otherPartyE164: toE164, // ✅ NEW
+
         lastMessageAt: new Date(),
         lastOutboundAt: new Date(),
       },
@@ -186,7 +215,7 @@ export async function sendSms(opts: {
       listingId: listingId ?? null,
       smsMessageId: sms.id,
       automationRunId: opts.automationRunId ?? null,
-      occurredAt: new Date(),
+      occurredAt: now,
       payload: { twilioSid: message.sid, status: message.status },
     },
   });

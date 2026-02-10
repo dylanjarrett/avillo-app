@@ -13,7 +13,7 @@ function voiceTwimlDial(toNumberE164: string) {
   const vr = new twilio.twiml.VoiceResponse();
   vr.dial(
     {
-      callerId: undefined, // Twilio will present original caller to agent by default
+      callerId: undefined, // Twilio presents original caller to agent by default
       timeout: 25,
     },
     toNumberE164
@@ -77,13 +77,14 @@ export async function POST(req: NextRequest) {
     select: { id: true },
   });
 
-  // Ensure conversation (same deterministic key approach as SMS)
+  // Ensure conversation (deterministic threadKey)
   const threadKey = threadKeyForSms({
     phoneNumberId: pn.id,
     contactId: contact?.id ?? null,
     otherPartyE164: from,
   });
 
+  const now = new Date();
   const conversation = await prisma.conversation.upsert({
     where: { workspaceId_threadKey: { workspaceId, threadKey } },
     create: {
@@ -92,10 +93,16 @@ export async function POST(req: NextRequest) {
       phoneNumberId: pn.id,
       contactId: contact?.id ?? null,
       threadKey,
+
+      otherPartyE164: from, // ✅ NEW
+
       lastMessageAt: new Date(),
     },
     update: {
       contactId: contact?.id ?? undefined,
+
+      otherPartyE164: from, // ✅ NEW
+
       lastMessageAt: new Date(),
     },
     select: { id: true },
@@ -146,7 +153,7 @@ export async function POST(req: NextRequest) {
           conversationId: conversation.id,
           contactId: contact?.id ?? null,
           callId,
-          occurredAt: new Date(),
+          occurredAt: now,
           payload: { from, to, twilioCallSid: callSid },
         },
       });

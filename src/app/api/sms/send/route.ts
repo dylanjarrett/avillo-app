@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { sendSms } from "@/lib/twilioClient";
 import { requireWorkspace } from "@/lib/workspace";
 import { requireEntitlement } from "@/lib/entitlements";
+import { normalizeE164 } from "@/lib/phone/normalize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,8 +20,11 @@ export async function POST(req: NextRequest) {
 
     const { to, body, contactId, listingId, conversationId, phoneNumberId } = await req.json();
 
-    if (!to || !body) {
-      return NextResponse.json({ error: "Missing 'to' or 'body' in request." }, { status: 400 });
+    const toE164 = normalizeE164(String(to ?? ""));
+    const text = String(body ?? "");
+
+    if (!toE164 || !text.trim()) {
+      return NextResponse.json({ error: "Missing or invalid 'to' / 'body'." }, { status: 400 });
     }
 
     // ✅ If caller supplies conversationId, ensure it's theirs
@@ -57,8 +61,8 @@ export async function POST(req: NextRequest) {
     const message = await sendSms({
       userId: ws.userId,
       workspaceId: ws.workspaceId,
-      to,
-      body,
+      to: toE164,
+      body: text,
       contactId: contactId ?? null,
       listingId: listingId ?? null,
       conversationId: conversationId ?? null,
