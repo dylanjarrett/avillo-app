@@ -1,6 +1,9 @@
+// src/app/api/sms/send/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { sendSms } from "@/lib/twilioClient";
-import { requireWorkspace } from "@/lib/workspace"; // <- wherever this file lives
+import { requireWorkspace } from "@/lib/workspace";
+import { requireEntitlement } from "@/lib/entitlements";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,19 +13,57 @@ export async function POST(req: NextRequest) {
     const ws = await requireWorkspace();
     if (!ws.ok) return NextResponse.json(ws.error, { status: ws.status });
 
-    const { to, body, contactId } = await req.json();
+    // ✅ Entitlement gate
+    const gate = await requireEntitlement(ws.workspaceId, "COMMS_ACCESS");
+    if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
+
+    const { to, body, contactId, listingId, conversationId, phoneNumberId } = await req.json();
 
     if (!to || !body) {
       return NextResponse.json({ error: "Missing 'to' or 'body' in request." }, { status: 400 });
     }
 
+    // ✅ If caller supplies conversationId, ensure it's theirs
+    if (conversationId) {
+      const conv = await prisma.conversation.findFirst({
+        where: {
+          id: String(conversationId),
+          workspaceId: ws.workspaceId,
+          assignedToUserId: ws.userId,
+        },
+        select: { id: true },
+      });
+      if (!conv) {
+        return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+      }
+    }
+
+    // ✅ If caller supplies phoneNumberId, ensure it's theirs
+    if (phoneNumberId) {
+      const pn = await prisma.userPhoneNumber.findFirst({
+        where: {
+          id: String(phoneNumberId),
+          workspaceId: ws.workspaceId,
+          assignedToUserId: ws.userId,
+          status: "ACTIVE",
+        },
+        select: { id: true },
+      });
+      if (!pn) {
+        return NextResponse.json({ error: "Phone number not found." }, { status: 404 });
+      }
+    }
+
     const message = await sendSms({
       userId: ws.userId,
-      workspaceId: ws.workspaceId,     // ✅ REQUIRED
+      workspaceId: ws.workspaceId,
       to,
       body,
-      contactId: contactId ?? undefined,
-      source: "manual",
+      contactId: contactId ?? null,
+      listingId: listingId ?? null,
+      conversationId: conversationId ?? null,
+      phoneNumberId: phoneNumberId ?? null,
+      source: "MANUAL",
     });
 
     return NextResponse.json({ sid: message.sid, status: message.status });

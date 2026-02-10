@@ -15,6 +15,7 @@ const PROTECTED_PATHS = [
   "/workspace",
   "/tasks",
   "/hub",
+  "/comms",
 ];
 
 function isProtectedPath(pathname: string) {

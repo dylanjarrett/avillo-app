@@ -22,7 +22,9 @@ export type EntitlementKey =
   | "AUTOMATIONS_RUN"
   | "AUTOMATIONS_TRIGGER"
   | "AUTOMATIONS_PERSIST"
-  | "WORKSPACE_INVITE";
+  | "WORKSPACE_INVITE"
+  | "COMMS_ACCESS"
+  | "COMMS_PROVISION_NUMBER";
 
 export type Entitlements = {
   accessLevel: AccessLevel; // BETA | PAID | EXPIRED
@@ -46,7 +48,8 @@ function normalizeAccess(v: unknown): AccessLevel {
 function normalizePlan(v: unknown): SubscriptionPlan {
   const p = String(v ?? "").toUpperCase();
   if (p === "PRO") return SubscriptionPlan.PRO;
-  if (p === "FOUNDING_PRO" || p === "FOUNDINGPRO" || p === "FOUNDING-PRO") return SubscriptionPlan.FOUNDING_PRO;
+  if (p === "FOUNDING_PRO" || p === "FOUNDINGPRO" || p === "FOUNDING-PRO")
+    return SubscriptionPlan.FOUNDING_PRO;
   if (p === "ENTERPRISE") return SubscriptionPlan.ENTERPRISE;
   return SubscriptionPlan.STARTER;
 }
@@ -61,7 +64,11 @@ function normalizeStatus(v: unknown): SubscriptionStatus {
 }
 
 function isPaidPlan(plan: SubscriptionPlan) {
-  return plan === SubscriptionPlan.PRO || plan === SubscriptionPlan.FOUNDING_PRO || plan === SubscriptionPlan.ENTERPRISE;
+  return (
+    plan === SubscriptionPlan.PRO ||
+    plan === SubscriptionPlan.FOUNDING_PRO ||
+    plan === SubscriptionPlan.ENTERPRISE
+  );
 }
 
 /** Stripe-consistent: trial counts as paid access */
@@ -96,10 +103,19 @@ export async function getEntitlementsForWorkspaceId(workspaceId: string): Promis
     accessLevel === AccessLevel.BETA
       ? true
       : accessLevel === AccessLevel.EXPIRED
-      ? false
-      : paidPlan && stripeBillingOk;
+        ? false
+        : paidPlan && stripeBillingOk;
 
   const isEnterprise = plan === SubscriptionPlan.ENTERPRISE;
+
+  // ✅ Comms rules:
+  // - BETA: always allow (bypass for testing)
+  // - PAID: must be PRO/FOUNDING_PRO/ENTERPRISE AND Stripe billing ok
+  // - EXPIRED: never
+  const commsAllowed =
+    accessLevel === AccessLevel.BETA
+      ? true
+      : accessLevel === AccessLevel.PAID && paidPlan && stripeBillingOk;
 
   const can: Entitlements["can"] = {
     // Intelligence
@@ -118,6 +134,10 @@ export async function getEntitlementsForWorkspaceId(workspaceId: string): Promis
     // - NOT allowed in BETA (solo-only)
     // - Requires Enterprise + Stripe OK + accessLevel PAID (not expired)
     WORKSPACE_INVITE: accessLevel === AccessLevel.PAID && isEnterprise && stripeBillingOk,
+
+    // Comms
+    COMMS_ACCESS: commsAllowed,
+    COMMS_PROVISION_NUMBER: commsAllowed,
   };
 
   return { accessLevel, plan, subscriptionStatus, isPaidTier, can };
@@ -127,17 +147,22 @@ export async function requireEntitlement(workspaceId: string, key: EntitlementKe
   const ent = await getEntitlementsForWorkspaceId(workspaceId);
   if (ent.can[key]) return { ok: true as const, ent };
 
-  const requiredPlan = key === "WORKSPACE_INVITE" ? SubscriptionPlan.ENTERPRISE : SubscriptionPlan.PRO;
+  const requiredPlan =
+    key === "WORKSPACE_INVITE"
+      ? SubscriptionPlan.ENTERPRISE
+      : key === "COMMS_ACCESS" || key === "COMMS_PROVISION_NUMBER"
+        ? SubscriptionPlan.PRO
+        : SubscriptionPlan.PRO;
 
   // Slightly more helpful messaging for common billing states
   const billingMessage =
     ent.accessLevel === AccessLevel.EXPIRED
       ? "This workspace is inactive. Choose a plan to continue."
       : ent.subscriptionStatus === SubscriptionStatus.PAST_DUE
-      ? "Your subscription is past due. Update your payment method to regain access."
-      : ent.subscriptionStatus === SubscriptionStatus.CANCELED
-      ? "Your subscription is canceled. Reactivate to regain access."
-      : "Choose a plan to continue.";
+        ? "Your subscription is past due. Update your payment method to regain access."
+        : ent.subscriptionStatus === SubscriptionStatus.CANCELED
+          ? "Your subscription is canceled. Reactivate to regain access."
+          : "Choose a plan to continue.";
 
   return {
     ok: false as const,
@@ -154,11 +179,15 @@ export async function requireEntitlement(workspaceId: string, key: EntitlementKe
           ? ent.accessLevel === AccessLevel.BETA
             ? "Team invites are disabled during the private beta."
             : !billingOk(ent.subscriptionStatus)
-            ? billingMessage
-            : "Inviting team members requires Avillo Enterprise."
-          : ent.accessLevel === AccessLevel.BETA
-          ? "" // beta bypass allows Pro features; this path is unlikely, but keep safe
-          : billingMessage,
+              ? billingMessage
+              : "Inviting team members requires Avillo Enterprise."
+          : key === "COMMS_ACCESS" || key === "COMMS_PROVISION_NUMBER"
+            ? ent.accessLevel === AccessLevel.BETA
+              ? "" // beta bypass allows Comms
+              : billingMessage
+            : ent.accessLevel === AccessLevel.BETA
+              ? "" // beta bypass allows Pro features; this path is unlikely, but keep safe
+              : billingMessage,
     },
   };
 }

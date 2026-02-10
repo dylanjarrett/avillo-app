@@ -1,0 +1,174 @@
+// src/app/api/calls/start/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/workspace";
+import { requireEntitlement } from "@/lib/entitlements";
+import { twilioClient } from "@/lib/twilioClient";
+import { normalizeE164, safeStr } from "@/lib/phone/normalize";
+import { threadKeyForSms } from "@/lib/phone/threadKey";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function appBaseUrl() {
+  return process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "https://app.avillo.io";
+}
+
+export async function POST(req: NextRequest) {
+  const ws = await requireWorkspace();
+  if (!ws.ok) return NextResponse.json(ws.error, { status: ws.status });
+
+  // ✅ Entitlement gate
+  const gate = await requireEntitlement(ws.workspaceId, "COMMS_ACCESS");
+  if (!gate.ok) return NextResponse.json(gate.error, { status: 402 });
+
+  const body = await req.json();
+  const to = normalizeE164(String(body?.to ?? ""));
+  const contactId = safeStr(body?.contactId);
+  const listingId = safeStr(body?.listingId);
+  const conversationId = safeStr(body?.conversationId);
+  const phoneNumberIdOverride = safeStr(body?.phoneNumberId);
+
+  if (!to) return NextResponse.json({ error: "Invalid 'to' phone number." }, { status: 400 });
+
+  // ✅ enforce that provided conversation belongs to user
+  if (conversationId) {
+    const conv = await prisma.conversation.findFirst({
+      where: { id: conversationId, workspaceId: ws.workspaceId, assignedToUserId: ws.userId },
+      select: { id: true },
+    });
+    if (!conv) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+  }
+
+  // ✅ resolve user's Avillo number
+  const pn =
+    (phoneNumberIdOverride
+      ? await prisma.userPhoneNumber.findFirst({
+          where: {
+            id: phoneNumberIdOverride,
+            workspaceId: ws.workspaceId,
+            assignedToUserId: ws.userId,
+            status: "ACTIVE",
+          },
+          select: { id: true, e164: true, assignedToUserId: true },
+        })
+      : null) ??
+    (await prisma.userPhoneNumber.findFirst({
+      where: { workspaceId: ws.workspaceId, assignedToUserId: ws.userId, status: "ACTIVE" },
+      select: { id: true, e164: true, assignedToUserId: true },
+    }));
+
+  if (!pn) {
+    return NextResponse.json(
+      { error: "No active Avillo phone number assigned to you in this workspace." },
+      { status: 400 }
+    );
+  }
+
+  // ✅ agent forwarding number (User.phone) must exist
+  const user = await prisma.user.findFirst({
+    where: { id: ws.userId },
+    select: { phone: true },
+  });
+
+  const agentPhone = normalizeE164(String(user?.phone ?? ""));
+  if (!agentPhone) {
+    return NextResponse.json(
+      { error: "Your user profile is missing a valid phone number to route calls to." },
+      { status: 400 }
+    );
+  }
+
+  // ✅ ensure conversation (if not provided)
+  let convId = conversationId;
+  if (!convId) {
+    const threadKey = threadKeyForSms({
+      phoneNumberId: pn.id,
+      contactId: contactId ?? null,
+      otherPartyE164: to,
+    });
+
+    const conv = await prisma.conversation.upsert({
+      where: { workspaceId_threadKey: { workspaceId: ws.workspaceId, threadKey } },
+      create: {
+        workspaceId: ws.workspaceId,
+        assignedToUserId: ws.userId,
+        phoneNumberId: pn.id,
+        contactId: contactId ?? null,
+        listingId: listingId ?? null,
+        threadKey,
+        lastMessageAt: new Date(),
+      },
+      update: {
+        contactId: contactId ?? undefined,
+        listingId: listingId ?? undefined,
+        lastMessageAt: new Date(),
+      },
+      select: { id: true },
+    });
+    convId = conv.id;
+  }
+
+  // Create call record first (we will fill twilioCallSid after we create Twilio call)
+  const callRow = await prisma.call.create({
+    data: {
+      workspaceId: ws.workspaceId,
+      phoneNumberId: pn.id,
+      assignedToUserId: ws.userId,
+      source: "MANUAL",
+      conversationId: convId,
+      contactId: contactId ?? null,
+      listingId: listingId ?? null,
+      direction: "OUTBOUND",
+      status: "QUEUED",
+      fromNumber: pn.e164,
+      toNumber: to,
+      twilioCallSid: "PENDING", // temp; overwritten immediately
+    },
+    select: { id: true },
+  });
+
+  // Twilio calls the agent; when answered, bridge route dials the lead
+  const bridgeUrl = `${appBaseUrl()}/api/twilio/voice/bridge?callId=${encodeURIComponent(callRow.id)}`;
+
+  const twilioCall = await twilioClient.calls.create({
+    to: agentPhone,
+    from: pn.e164,
+    url: bridgeUrl,
+    statusCallback: `${appBaseUrl()}/api/twilio/voice-status`,
+    statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+    statusCallbackMethod: "POST",
+  });
+
+  // Update call with real Twilio SID
+  await prisma.call.update({
+    where: { id: callRow.id },
+    data: {
+      twilioCallSid: twilioCall.sid,
+      status: "QUEUED",
+    },
+  });
+
+  // Comm event
+  await prisma.commEvent.create({
+    data: {
+      workspaceId: ws.workspaceId,
+      type: "CALL_OUT",
+      source: "MANUAL",
+      assignedToUserId: ws.userId,
+      phoneNumberId: pn.id,
+      conversationId: convId,
+      contactId: contactId ?? null,
+      listingId: listingId ?? null,
+      callId: callRow.id,
+      occurredAt: new Date(),
+      payload: { to, from: pn.e164, twilioCallSid: twilioCall.sid },
+    },
+  });
+
+  return NextResponse.json({
+    callId: callRow.id,
+    callSid: twilioCall.sid,
+    status: twilioCall.status,
+  });
+}
