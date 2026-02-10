@@ -97,7 +97,7 @@ export async function sendAutomationSms(args: SendAutomationSmsArgs) {
     to,
     body,
     ...(contactId ? { contactId } : {}),
-    source: "AUTOPILOT",
+    source: "AUTOMATION",
   });
 }
 
