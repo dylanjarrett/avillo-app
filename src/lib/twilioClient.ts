@@ -38,6 +38,156 @@ export const twilioClient = {
   },
 } as unknown as Twilio;
 
+/**
+ * Normalizes an E.164 for “pair” matching:
+ * - Always normalize to E.164
+ * - Also produce a legacy alt without +1 for old stored contact phones
+ */
+function normalizeForLookup(input: string) {
+  const e164 = normalizeE164(String(input ?? ""));
+  const alt = e164 && e164.startsWith("+1") ? e164.replace(/^\+1/, "") : e164;
+  return { e164, alt };
+}
+
+/**
+ * Ensures we never allow cross-thread contamination:
+ * a conversation is uniquely defined by:
+ * - workspaceId
+ * - phoneNumberId (the Avillo number)
+ * - otherPartyE164 (the lead/client number)
+ *
+ * If a conversationId is supplied, it must belong to the user AND
+ * must match (phoneNumberId + otherPartyE164).
+ */
+async function assertConversationOwnershipAndConsistency(input: {
+  workspaceId: string;
+  userId: string;
+  conversationId: string;
+  phoneNumberId: string;
+  otherPartyE164: string;
+}) {
+  const { workspaceId, userId, conversationId, phoneNumberId, otherPartyE164 } = input;
+
+  const conv = await prisma.conversation.findFirst({
+    where: {
+      id: conversationId,
+      workspaceId,
+      assignedToUserId: userId,
+    },
+    select: {
+      id: true,
+      phoneNumberId: true,
+      otherPartyE164: true,
+      threadKey: true,
+    },
+  });
+
+  if (!conv) throw new Error("Conversation not found.");
+
+  if (conv.phoneNumberId !== phoneNumberId) {
+    throw new Error("Conversation does not belong to your active phone number.");
+  }
+
+  // If otherPartyE164 missing or wrong, fix it (self-heal) — but never allow mismatch to persist
+  if (!conv.otherPartyE164 || conv.otherPartyE164 !== otherPartyE164) {
+    await prisma.conversation.update({
+      where: { id: conv.id },
+      data: { otherPartyE164: otherPartyE164 },
+    });
+  }
+
+  return conv.id;
+}
+
+/**
+ * Hardens the “single canonical conversation” invariant by:
+ * - upserting by (workspaceId, threadKey)
+ * - ensuring otherPartyE164 is set
+ * - reattaching any orphan messages for the same phone-pair to the canonical convo
+ */
+async function ensureCanonicalConversationAndHeal(input: {
+  workspaceId: string;
+  assignedToUserId: string;
+  phoneNumberId: string;
+  otherPartyE164: string;
+  contactId?: string | null;
+  listingId?: string | null;
+  now: Date;
+  touch: "inbound" | "outbound";
+}) {
+  const {
+    workspaceId,
+    assignedToUserId,
+    phoneNumberId,
+    otherPartyE164,
+    contactId,
+    listingId,
+    now,
+    touch,
+  } = input;
+
+  const threadKey = threadKeyForSms({
+    phoneNumberId,
+    otherPartyE164, // MUST be normalized E.164
+  });
+
+  const conv = await prisma.conversation.upsert({
+    where: { workspaceId_threadKey: { workspaceId, threadKey } },
+    create: {
+      workspaceId,
+      assignedToUserId,
+      phoneNumberId,
+      contactId: contactId ?? null,
+      listingId: listingId ?? null,
+      threadKey,
+      otherPartyE164,
+      lastMessageAt: now,
+      ...(touch === "outbound" ? { lastOutboundAt: now } : { lastInboundAt: now }),
+    },
+    update: {
+      contactId: contactId ?? undefined,
+      listingId: listingId ?? undefined,
+      otherPartyE164,
+      lastMessageAt: now,
+      ...(touch === "outbound" ? { lastOutboundAt: now } : { lastInboundAt: now }),
+    },
+    select: { id: true },
+  });
+
+  const convId = conv.id;
+
+  // ✅ SELF-HEAL: reattach any messages for this (phoneNumberId + otherPartyE164 pair)
+  // that may have been written under a different conversationId due to earlier bugs.
+  // We match BOTH directions to catch inbound/outbound rows.
+  //
+  // outbound: from=pn.e164, to=otherPartyE164
+  // inbound:  from=otherPartyE164, to=pn.e164
+  const pn = await prisma.userPhoneNumber.findFirst({
+    where: { id: phoneNumberId, workspaceId },
+    select: { e164: true },
+  });
+
+  const pnE164 = pn?.e164 ? normalizeE164(pn.e164) : null;
+
+  if (pnE164) {
+    await prisma.smsMessage.updateMany({
+      where: {
+        workspaceId,
+        phoneNumberId,
+        assignedToUserId,
+        conversationId: { not: convId },
+        OR: [
+          { fromNumber: pnE164, toNumber: otherPartyE164 },
+          { fromNumber: otherPartyE164, toNumber: pnE164 },
+        ],
+      },
+      data: { conversationId: convId },
+    });
+  }
+
+  return convId;
+}
+
 export async function sendSms(opts: {
   userId: string; // actor + owner agent
   workspaceId: string;
@@ -62,7 +212,8 @@ export async function sendSms(opts: {
   const phoneNumberIdOverride = safeStr(opts.phoneNumberId);
 
   const body = String(opts.body ?? "");
-  const toE164 = normalizeE164(String(opts.to ?? ""));
+  const toNorm = normalizeForLookup(opts.to);
+  const toE164 = toNorm.e164;
 
   if (!userId) throw new Error("sendSms missing userId");
   if (!workspaceId) throw new Error("sendSms missing workspaceId");
@@ -91,9 +242,12 @@ export async function sendSms(opts: {
       select: { id: true, e164: true, assignedToUserId: true },
     }));
 
-  if (!pn) {
+  if (!pn?.id || !pn.e164) {
     throw new Error("No active Avillo phone number assigned to this user in this workspace.");
   }
+
+  const fromE164 = normalizeE164(pn.e164);
+  if (!fromE164) throw new Error("Your Avillo number is invalid. Please re-provision.");
 
   // Optional: validate contact belongs to workspace + respect contact opt-out
   if (contactId) {
@@ -114,76 +268,61 @@ export async function sendSms(opts: {
 
   const now = new Date();
 
-  // If caller supplies conversationId, enforce user-private boundary AND ensure it matches this phone number
-  let convId = conversationId;
+  // 1) Determine canonical conversation id
+  let convId: string;
 
-  if (convId) {
-    const conv = await prisma.conversation.findFirst({
-      where: {
-        id: convId,
-        workspaceId,
-        assignedToUserId: userId,
-      },
-      select: { id: true, phoneNumberId: true, otherPartyE164: true },
-    });
-
-    if (!conv) throw new Error("Conversation not found.");
-
-    // Prevent cross-number contamination
-    if (conv.phoneNumberId !== pn.id) {
-      throw new Error("Conversation does not belong to your active phone number.");
-    }
-
-    // Backfill otherPartyE164 if missing
-    if (!conv.otherPartyE164) {
-      await prisma.conversation.update({
-        where: { id: convId },
-        data: { otherPartyE164: toE164 },
-      });
-    }
-  }
-
-  // Ensure Conversation (deterministic threadKey by number + other party)
-  if (!convId) {
-    const threadKey = threadKeyForSms({
+  if (conversationId) {
+    // If provided, enforce it is owned + consistent with this number pair
+    convId = await assertConversationOwnershipAndConsistency({
+      workspaceId,
+      userId,
+      conversationId,
       phoneNumberId: pn.id,
       otherPartyE164: toE164,
     });
 
-    const conv = await prisma.conversation.upsert({
-      where: { workspaceId_threadKey: { workspaceId, threadKey } },
-      create: {
+    // Still heal any orphan messages to this conversation (pair match)
+    await prisma.smsMessage.updateMany({
+      where: {
         workspaceId,
-        assignedToUserId: pn.assignedToUserId,
         phoneNumberId: pn.id,
-        contactId: contactId ?? null,
-        listingId: listingId ?? null,
-        threadKey,
-        otherPartyE164: toE164,
-        lastMessageAt: now,
-        lastOutboundAt: now,
+        assignedToUserId: pn.assignedToUserId,
+        conversationId: { not: convId },
+        OR: [
+          { fromNumber: fromE164, toNumber: toE164 },
+          { fromNumber: toE164, toNumber: fromE164 },
+        ],
       },
-      update: {
-        contactId: contactId ?? undefined,
-        listingId: listingId ?? undefined,
-        otherPartyE164: toE164,
-        lastMessageAt: now,
-        lastOutboundAt: now,
-      },
-      select: { id: true },
+      data: { conversationId: convId },
     });
 
-    convId = conv.id;
+    // Touch conversation times to keep list ordering correct
+    await prisma.conversation.update({
+      where: { id: convId },
+      data: { lastMessageAt: now, lastOutboundAt: now, otherPartyE164: toE164 },
+    });
+  } else {
+    // No conversationId supplied — create or find canonical by threadKey
+    convId = await ensureCanonicalConversationAndHeal({
+      workspaceId,
+      assignedToUserId: pn.assignedToUserId,
+      phoneNumberId: pn.id,
+      otherPartyE164: toE164,
+      contactId: contactId ?? null,
+      listingId: listingId ?? null,
+      now,
+      touch: "outbound",
+    });
   }
 
-  // Send via Twilio
+  // 2) Send via Twilio
   const message = await getTwilioClient().messages.create({
-    from: pn.e164,
+    from: fromE164,
     to: toE164,
     body,
   });
 
-  // Log SmsMessage
+  // 3) Log SmsMessage (OUTBOUND)
   const sms = await prisma.smsMessage.create({
     data: {
       workspaceId,
@@ -195,7 +334,7 @@ export async function sendSms(opts: {
       contactId: contactId ?? null,
       listingId: listingId ?? null,
       direction: "OUTBOUND",
-      fromNumber: pn.e164,
+      fromNumber: fromE164,
       toNumber: toE164,
       body,
       twilioSid: message.sid,
@@ -206,7 +345,7 @@ export async function sendSms(opts: {
     select: { id: true },
   });
 
-  // CommEvent
+  // 4) CommEvent
   await prisma.commEvent.create({
     data: {
       workspaceId,

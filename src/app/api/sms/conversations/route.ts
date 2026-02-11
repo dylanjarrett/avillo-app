@@ -8,8 +8,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function parseTake(url: URL, def: number, max: number) {
-  const raw = Number(url.searchParams.get("take"));
+  const rawStr = url.searchParams.get("take");
+  if (rawStr == null || rawStr === "") return def;
+
+  const raw = Number(rawStr);
   if (!Number.isFinite(raw)) return def;
+
   const n = Math.floor(raw);
   return Math.min(Math.max(n, 1), max);
 }

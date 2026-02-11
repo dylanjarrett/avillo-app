@@ -312,7 +312,9 @@ export async function listMessages(conversationId: string, signal?: AbortSignal)
     const raw = data?.items ?? data?.messages ?? data?.data ?? [];
     const mapped = (Array.isArray(raw) ? raw : []).map((m) => toMessage(m, conversationId));
     const dropped = mapped.filter((x) => !x).length;
-    if (dropped) console.warn("[comms] dropped messages during mapping:", dropped, raw);
+      if (process.env.NODE_ENV !== "production" && dropped) {
+        console.warn("[comms] dropped messages during mapping:", dropped, raw);
+      }
     return mapped.filter(Boolean) as SmsMessage[];
   } catch (err) {
     if (isAbortError(err)) return [];

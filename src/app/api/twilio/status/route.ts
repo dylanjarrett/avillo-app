@@ -45,13 +45,26 @@ export async function POST(req: NextRequest) {
       ? `${errorCode ?? ""}${errorCode ? ": " : ""}${errorMessage ?? ""}`.trim()
       : null;
 
-  // Update message status/error
-  await prisma.smsMessage.update({
-    where: { id: sms.id },
-    data: {
-      status: messageStatus || undefined,
-      error: errorCombined || undefined,
-    },
+  const now = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    await tx.smsMessage.update({
+      where: { id: sms.id },
+      data: {
+        status: messageStatus || undefined,
+        error: errorCombined || undefined,
+      },
+    });
+
+    if (sms.conversationId) {
+      await tx.conversation.updateMany({
+        where: {
+          id: sms.conversationId,
+          workspaceId: sms.workspaceId,
+        },
+        data: { updatedAt: now },
+      });
+    }
   });
 
   // ✅ Dedupe: if last DELIVERY_UPDATE for this smsMessageId already had same status, skip

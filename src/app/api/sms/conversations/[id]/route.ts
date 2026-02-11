@@ -43,15 +43,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: { id: string } })
   }
 
   await prisma.$transaction(async (tx) => {
-    // Delete children first to satisfy FK constraints (if any)
-    await tx.smsMessage.deleteMany({
-      where: {
-        workspaceId: ws.workspaceId,
-        conversationId,
-        assignedToUserId: ws.userId,
-      },
-    });
-
+    // Delete children first (FK-safe)
     await tx.smsMessage.deleteMany({
       where: {
         workspaceId: ws.workspaceId,
@@ -63,11 +55,15 @@ export async function DELETE(_req: NextRequest, ctx: { params: { id: string } })
       where: {
         workspaceId: ws.workspaceId,
         conversationId,
-      } as any,
+      },
     });
 
-    await tx.conversation.delete({
-      where: { id: conversationId },
+    await tx.conversation.deleteMany({
+      where: {
+        id: conversationId,
+        workspaceId: ws.workspaceId,
+        assignedToUserId: ws.userId,
+      },
     });
   });
 
