@@ -53,6 +53,23 @@ function isNearBottom(el: HTMLElement, thresholdPx = 80) {
   return scrollHeight - (scrollTop + clientHeight) <= thresholdPx;
 }
 
+// Comms-like composer autosize (max 6 lines)
+function autosizeComposer(el: HTMLTextAreaElement | null) {
+  if (!el || typeof window === "undefined") return;
+
+  const cs = window.getComputedStyle(el);
+  const lineHeight = Number.parseFloat(cs.lineHeight || "20") || 20;
+
+  const maxLines = 6;
+  const maxHeight = Math.ceil(lineHeight * maxLines);
+
+  el.style.height = "auto";
+  const next = Math.min(el.scrollHeight, maxHeight);
+  el.style.height = `${next}px`;
+
+  el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
 export default function AIBubble() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([
@@ -63,6 +80,9 @@ export default function AIBubble() {
     },
   ]);
   const [isTyping, setIsTyping] = useState(false);
+
+  // NEW: Comms-style controlled draft (for textarea + autosize)
+  const [draft, setDraft] = useState("");
 
   // Mobile detection (used only for behavior; layout classes remain unchanged on desktop)
   const [isMobile, setIsMobile] = useState(false);
@@ -80,7 +100,8 @@ export default function AIBubble() {
     };
   }, []);
 
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  // CHANGED: input -> textarea
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   // Keep a live, reliable messages snapshot (prevents stale context)
@@ -118,6 +139,12 @@ export default function AIBubble() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // NEW: autosize whenever draft changes (Comms rule)
+  useEffect(() => {
+    if (!open) return;
+    autosizeComposer(textareaRef.current);
+  }, [draft, open]);
+
   // Focus input + snap to bottom on open (before paint to avoid visible jump)
   useLayoutEffect(() => {
     if (!open) return;
@@ -131,7 +158,8 @@ export default function AIBubble() {
 
     // Focus after layout so it doesn't fight scroll on iOS
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
+      textareaRef.current?.focus();
+      autosizeComposer(textareaRef.current);
       // Restore smooth behavior for subsequent message appends
       if (el) el.style.scrollBehavior = "";
     });
@@ -195,7 +223,10 @@ export default function AIBubble() {
     // Optimistic UI
     const userMsg: Msg = { id: uid(), role: "user", text: v };
     setMessages((prev) => [...prev, userMsg]);
-    if (inputRef.current) inputRef.current.value = "";
+
+    // CHANGED: clear controlled draft (instead of mutating DOM input value)
+    setDraft("");
+    requestAnimationFrame(() => autosizeComposer(textareaRef.current));
 
     setIsTyping(true);
 
@@ -380,14 +411,10 @@ export default function AIBubble() {
                       className={[
                         "max-w-[92%] rounded-2xl px-3.5 py-2.5",
                         "border border-white/10",
-                        m.role === "user"
-                          ? "bg-[#1A2747]/45 text-[#F4E8C8]"
-                          : "bg-white/5 text-white/80",
+                        m.role === "user" ? "bg-[#1A2747]/45 text-[#F4E8C8]" : "bg-white/5 text-white/80",
                       ].join(" ")}
                     >
-                      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">
-                        {m.text}
-                      </div>
+                      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{m.text}</div>
                     </div>
                   </div>
                 ))}
@@ -442,43 +469,60 @@ export default function AIBubble() {
                 "pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
               ].join(" ")}
             >
-              <div className="flex gap-2">
-                <input
-                  ref={inputRef}
+              <div className="flex items-start gap-2">
+            {/* Composer */}
+              <div className="flex-1">
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  value={draft}
                   placeholder="Ask Zora…"
+                  disabled={isTyping}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    requestAnimationFrame(() => autosizeComposer(textareaRef.current));
+                  }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
+                    if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      send(inputRef.current?.value ?? "");
+                      send(draft);
                     }
                   }}
                   className={[
-                    "flex-1 rounded-xl",
+                    "w-full rounded-xl",
+                    "min-h-10", // match the Send button height so baseline/centering feels right
                     "bg-[#1A2747]/35",
                     "border border-white/10",
-                    "px-3 py-2",
-                    "text-sm text-[#F4E8C8]",
+                    "px-3", // control vertical centering via line-height instead of big y-padding
+                    "py-[9px]", // slightly less than py-2 to lift text up a touch
+                    "text-sm leading-[20px] text-[#F4E8C8]", // explicit line-height matches autosize assumptions
                     "placeholder:text-white/35",
                     "outline-none",
                     "focus:border-white/20 focus:ring-2 focus:ring-[#F4E8C8]/10",
                     "shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03)]",
+                    "resize-none",
                   ].join(" ")}
+                  style={{ overflowY: "hidden" }}
                 />
-
-                <button
-                  type="button"
-                  onClick={() => (isTyping ? stop() : send(inputRef.current?.value ?? ""))}
-                  className={[
-                    "rounded-xl px-3 py-2 text-sm",
-                    "border border-white/10",
-                    "bg-white/5 text-[#F4E8C8]",
-                    "hover:bg-white/10",
-                    "transition",
-                  ].join(" ")}
-                >
-                  {sendButtonLabel}
-                </button>
               </div>
+
+              {/* Send */}
+              <button
+                type="button"
+                onClick={() => (isTyping ? stop() : send(draft))}
+                className={[
+                  "h-10 min-w-[80px] shrink-0",
+                  "inline-flex items-center justify-center",
+                  "rounded-xl px-4 text-sm",
+                  "border border-white/10",
+                  "bg-white/5 text-[#F4E8C8]",
+                  "hover:bg-white/10",
+                  "transition",
+                ].join(" ")}
+              >
+                {sendButtonLabel}
+              </button>
+            </div>
 
               <div className="mt-2 text-[11px] text-white/40">Zora stays available on every page.</div>
             </div>
