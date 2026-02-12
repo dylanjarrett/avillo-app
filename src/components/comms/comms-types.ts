@@ -1,25 +1,38 @@
-//components/comms/comms-types.ts
+// src/components/comms/comms-types.ts
+
 export type CommsTab = "thread" | "calls" | "info";
+
+/* ============================================================
+   Conversation
+   Canonical thread identity — always DB-backed
+============================================================ */
 
 export type Conversation = {
   id: string;
 
   // Display
-  title: string; // contact name OR phone OR "Unknown"
-  subtitle?: string | null; // phone or secondary label
-  lastMessagePreview?: string | null;
-  lastMessageAt?: string | null;
+  title: string;                  // contact name OR phone OR "Unknown"
+  subtitle: string | null;        // phone or secondary label
+  lastMessagePreview: string | null;
+  lastMessageAt: string | null;
 
   // Thread identity
-  phone?: string | null; // other party phone (E.164 preferred)
-  contactId?: string | null;
+  phone: string | null;           // other party phone (E.164)
+  contactId: string | null;
 
   // Badge
-  unreadCount?: number;
+  unreadCount: number;
 
-  // Optional metadata
-  updatedAt?: string | null;
+  // Draft detection (UI helper)
+  isDraft?: boolean;
+
+  // Metadata
+  updatedAt: string | null;
 };
+
+/* ============================================================
+   SMS
+============================================================ */
 
 export type SmsMessage = {
   id: string;
@@ -28,25 +41,29 @@ export type SmsMessage = {
   direction: "INBOUND" | "OUTBOUND" | "SYSTEM";
   body: string;
 
-  from?: string | null;
-  to?: string | null;
+  from: string | null;
+  to: string | null;
 
-  status?: string | null; // queued/sent/delivered/failed etc
+  status: string | null; // queued/sent/delivered/failed etc
   createdAt: string;
 };
+
+/* ============================================================
+   Calls
+============================================================ */
 
 export type CallItem = {
   id: string;
   conversationId: string;
 
   direction: "INBOUND" | "OUTBOUND";
-  status?: string | null;
+  status: string | null;
 
-  from?: string | null;
-  to?: string | null;
+  from: string | null;
+  to: string | null;
 
-  durationSec?: number | null;
-  startedAt?: string | null;
-  endedAt?: string | null;
-  createdAt?: string | null;
+  durationSec: number | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  createdAt: string | null;
 };

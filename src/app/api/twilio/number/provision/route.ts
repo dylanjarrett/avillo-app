@@ -29,14 +29,64 @@ function assertPublicBaseUrl(base: string) {
   }
 }
 
-export async function POST(req: NextRequest) {
+function parseAreaCode(input: any): string | null {
+  const raw = String(input ?? "").replace(/[^\d]/g, "").trim();
+  if (!raw) return null;
+  if (raw.length === 3) return raw;
+  // If user pasted "503-..." or "1503...", try to grab last 3 digits.
+  const last3 = raw.slice(-3);
+  return last3.length === 3 ? last3 : null;
+}
+
+function safeErrorMessage(err: any, fallback: string) {
+  const msg = String(err?.error?.message ?? err?.message ?? "").trim();
+  return msg || fallback;
+}
+
+function safeStatusCode(err: any, fallback = 500) {
+  const n = Number(err?.status ?? err?.statusCode ?? err?.code ?? NaN);
+  if (Number.isFinite(n) && n >= 400 && n <= 599) return n;
+  return fallback;
+}
+
+async function releaseTwilioNumberBestEffort(sid: string) {
   try {
-    const { workspaceId, userId } = await requireWorkspace();
+    const client = getTwilioClient();
+    await client.incomingPhoneNumbers(sid).remove();
+  } catch {
+    // best-effort cleanup only
+  }
+}
 
-    // ✅ throws if not entitled (BETA bypass handled inside helper)
-    await requireEntitlement(workspaceId, "COMMS_PROVISION_NUMBER");
+export async function POST(req: NextRequest) {
+  let purchasedSid: string | null = null;
 
-    // Idempotency: if user already has an ACTIVE number, return it
+  try {
+    // -------------------------
+    // Auth + workspace
+    // -------------------------
+    const ctx = await requireWorkspace();
+    if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
+
+    const { workspaceId, userId } = ctx;
+
+    // -------------------------
+    // Entitlement gate (costly)
+    // -------------------------
+    const gate = await requireEntitlement(workspaceId, "COMMS_PROVISION_NUMBER");
+    if (!gate.ok) {
+      return NextResponse.json({ ok: false, error: gate.error }, { status: 403 });
+    }
+
+    // -------------------------
+    // Base URL must be public
+    // -------------------------
+    const base = appBaseUrl();
+    assertPublicBaseUrl(base);
+
+    // -------------------------
+    // Idempotency: if user already has active number, return it
+    // -------------------------
     const existing = await prisma.userPhoneNumber.findFirst({
       where: {
         workspaceId,
@@ -51,24 +101,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, phoneNumber: existing });
     }
 
-    let body: any = {};
-    try {
-      body = await req.json().catch(() => ({}));
-    } catch {
-      body = {};
-    }
+    // -------------------------
+    // Parse request
+    // -------------------------
+    const body = (await req.json().catch(() => ({}))) as any;
+    const areaCode = parseAreaCode(body?.areaCode);
 
-    const areaCodeRaw = String(body?.areaCode ?? "").replace(/[^\d]/g, "").trim();
-    const areaCode = areaCodeRaw.length === 3 ? areaCodeRaw : null;
-
-    const base = appBaseUrl();
-    assertPublicBaseUrl(base);
-
+    // -------------------------
+    // Twilio: find available number
+    // -------------------------
     const client = getTwilioClient();
 
-    // 1) Find an available US local number (optionally by area code)
     const localNumbers = (client.availablePhoneNumbers("US") as any).local;
-
     const available = await localNumbers.list({
       ...(areaCode ? { areaCode } : {}),
       smsEnabled: true,
@@ -85,7 +129,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2) Purchase + configure webhooks (must be public URLs)
+    // -------------------------
+    // Concurrency guard: in case another request provisioned in the meantime
+    // -------------------------
+    const existingAfterLookup = await prisma.userPhoneNumber.findFirst({
+      where: {
+        workspaceId,
+        assignedToUserId: userId,
+        status: PhoneNumberStatus.ACTIVE,
+      },
+      select: { id: true, e164: true, status: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (existingAfterLookup) {
+      return NextResponse.json({ ok: true, phoneNumber: existingAfterLookup });
+    }
+
+    // -------------------------
+    // Twilio: purchase + set webhooks
+    // -------------------------
     const purchased = await client.incomingPhoneNumbers.create({
       phoneNumber: e164,
       smsUrl: `${base}/api/twilio/inbound`,
@@ -94,7 +157,11 @@ export async function POST(req: NextRequest) {
       voiceMethod: "POST",
     });
 
-    // 3) Persist to DB (aligns with your Prisma fields)
+    purchasedSid = purchased.sid;
+
+    // -------------------------
+    // Persist to DB
+    // -------------------------
     try {
       const created = await prisma.userPhoneNumber.create({
         data: {
@@ -115,23 +182,39 @@ export async function POST(req: NextRequest) {
         twilio: { sid: purchased.sid },
       });
     } catch (e: any) {
-      // If the number was inserted concurrently (unique e164), return the existing row
+      // If e164 unique collides (race or reused number), try to return that row.
       if (e?.code === "P2002") {
         const row = await prisma.userPhoneNumber.findUnique({
           where: { e164 },
           select: { id: true, e164: true, status: true },
         });
+
         if (row) {
-          return NextResponse.json({ ok: true, phoneNumber: row, twilio: { sid: purchased.sid } });
+          return NextResponse.json({
+            ok: true,
+            phoneNumber: row,
+            twilio: { sid: purchased.sid },
+          });
         }
       }
+
+      // Anything else: release the Twilio number to avoid billing leaks.
+      if (purchasedSid) {
+        await releaseTwilioNumberBestEffort(purchasedSid);
+        purchasedSid = null;
+      }
+
       throw e;
     }
   } catch (err: any) {
-    const message =
-      err?.message || err?.error?.message || "Failed to provision your phone number.";
+    // Best-effort cleanup if we purchased but failed later.
+    if (purchasedSid) {
+      await releaseTwilioNumberBestEffort(purchasedSid);
+      purchasedSid = null;
+    }
 
-    const status = Number(err?.statusCode || err?.status || 500);
+    const message = safeErrorMessage(err, "Failed to provision your phone number.");
+    const status = safeStatusCode(err, 500);
 
     return NextResponse.json({ ok: false, error: { message } }, { status });
   }

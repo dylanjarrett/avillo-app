@@ -16,7 +16,9 @@ import {
   provisionMyNumber,
   looksLikeEntitlementError,
   normalizeApiError,
-  refreshConversationsSortedAndFindByPhone,
+  createDraftConversation,
+  searchCommsContacts,
+  type CommsContactHit,
   type MyNumber,
 } from "@/components/comms/api";
 import { cx, formatListTimestamp, formatWhen, initials, normalizePhone } from "@/components/comms/comms-utils";
@@ -33,18 +35,18 @@ function isAbortError(err: any) {
   );
 }
 
-function isLocalConvoId(id?: string | null) {
-  return !!id && String(id).startsWith("local-");
-}
-
-function isMobileNow() {
-  return typeof window !== "undefined" && window.innerWidth < 1024;
-}
-
 function shortPhone(p?: string | null) {
   const s = String(p ?? "").trim();
   if (!s) return "";
   return s;
+}
+
+function looksLikePhoneInput(v: string) {
+  const s = String(v ?? "").trim();
+  if (!s) return false;
+  // if it contains lots of digits or starts with +, treat as phone-y
+  const digits = s.replace(/\D/g, "");
+  return s.startsWith("+") || digits.length >= 4;
 }
 
 function sortConvos(items: Conversation[]) {
@@ -111,12 +113,18 @@ export default function Page() {
   const hasMyNumber = !!myNumber?.e164;
 
   const activeDraft = activeConvo?.id ? drafts[activeConvo.id] ?? "" : "";
-  const activeIsLocal = isLocalConvoId(activeConvo?.id);
   const actionsDisabled = commsLocked || sending || !hasMyNumber;
 
-  // Quick start
+  // Quick start (new thread)
   const [newTo, setNewTo] = useState("");
   const [showComposer, setShowComposer] = useState(false);
+
+  // Contact search (for new thread)
+  const [contactHits, setContactHits] = useState<CommsContactHit[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsError, setContactsError] = useState<string | null>(null);
+  const [pickedContact, setPickedContact] = useState<CommsContactHit | null>(null);
+  const [contactQuery, setContactQuery] = useState(""); // debounced query
 
   function lockComms(msg?: string | null) {
     setCommsLocked(true);
@@ -290,7 +298,7 @@ export default function Page() {
 
   // ---------- Load messages ----------
   useEffect(() => {
-    if (commsLocked || mode !== "chat" || !activeConvo?.id || isLocalConvoId(activeConvo.id)) {
+    if (commsLocked || mode !== "chat" || !activeConvo?.id) {
       setMessages([]);
       setMsgsError(null);
       setLoadingMsgs(false);
@@ -349,7 +357,7 @@ export default function Page() {
 
   // ---------- Load calls ----------
   useEffect(() => {
-    if (commsLocked || mode !== "calls" || !activeConvo?.id || isLocalConvoId(activeConvo.id)) {
+    if (commsLocked || mode !== "calls" || !activeConvo?.id) {
       setCalls([]);
       setCallsError(null);
       setLoadingCalls(false);
@@ -395,26 +403,16 @@ export default function Page() {
     if (!normalized) return null;
 
     try {
-      const { items, match } = await refreshConversationsSortedAndFindByPhone({
-        targetPhone: normalized,
-      });
+      const items = await listConversations();
+      const sorted = sortConvos(items);
 
-      setConvos((prev) => {
-        if (!match) {
-          const draft = prev.find(
-            (c) => isLocalConvoId(c.id) && normalizePhone(c.phone || c.subtitle || "") === normalized
-          );
-          if (draft) return [draft, ...items];
-        }
-        return items;
-      });
+      setConvos(sorted);
 
-      if (match) {
-        setSelectedId(match.id);
-        return match;
-      }
+      const match =
+        sorted.find((c) => normalizePhone(c.phone || c.subtitle || "") === normalized) ?? null;
 
-      return null;
+      if (match) setSelectedId(match.id);
+      return match;
     } catch (e: any) {
       const msg = normalizeApiError(e, "We couldn’t refresh conversations.");
       setError(msg);
@@ -422,6 +420,58 @@ export default function Page() {
       return null;
     }
   }
+
+  useEffect(() => {
+    const v = String(newTo ?? "").trim();
+
+    // If user picked a contact, we don't keep searching unless they edit input again
+    if (pickedContact) {
+      const n = normalizePhone(v);
+      if (n && pickedContact.phone && normalizePhone(pickedContact.phone) === n) return;
+      if (v.toLowerCase() === pickedContact.name.toLowerCase()) return;
+      setPickedContact(null);
+    }
+
+    if (!v) {
+      setContactQuery("");
+      setContactHits([]);
+      setContactsError(null);
+      return;
+    }
+
+    // ✅ If it's phone-y, search by digits (helps backend match phone fields)
+    const q = looksLikePhoneInput(v) ? v.replace(/\D/g, "") : v;
+
+    const t = setTimeout(() => setContactQuery(q), 220);
+    return () => clearTimeout(t);
+  }, [newTo, pickedContact]);
+
+useEffect(() => {
+  if (commsLocked || !hasMyNumber) return;
+
+  const q = String(contactQuery ?? "").trim();
+  if (!q) return;
+
+  const controller = new AbortController();
+
+  async function run() {
+    try {
+      setContactsLoading(true);
+      setContactsError(null);
+
+      const hits = await searchCommsContacts({ q, take: 8, signal: controller.signal });
+      setContactHits(hits);
+    } catch (e: any) {
+      if (isAbortError(e)) return;
+      setContactsError(normalizeApiError(e, "Failed to search contacts."));
+    } finally {
+      setContactsLoading(false);
+    }
+  }
+
+  run();
+  return () => controller.abort();
+}, [contactQuery, commsLocked, hasMyNumber]);
 
   async function handleSend() {
     if (!activeConvo || commsLocked) return;
@@ -446,7 +496,7 @@ export default function Page() {
 
       const optimistic: SmsMessage = {
         id: `optimistic-${Date.now()}`,
-        conversationId: activeConvo.id,
+        conversationId: activeConvo.isDraft ? "draft" : activeConvo.id,
         direction: "OUTBOUND",
         body,
         from: null,
@@ -461,24 +511,12 @@ export default function Page() {
       await sendSms({
         to,
         body,
-        conversationId: activeIsLocal ? null : activeConvo.id,
+        conversationId: activeConvo.isDraft ? null : activeConvo.id,
       });
 
       const match = await refreshConversationsAndReselectByPhone(to);
 
-      if (activeIsLocal && match?.id && !isLocalConvoId(match.id)) {
-        const localId = activeConvo.id;
-
-        setConvos((prev) => prev.filter((c) => c.id !== localId));
-
-        setDrafts((prev) => {
-          const next = { ...prev };
-          delete next[localId];
-          return next;
-        });
-      }
-
-      if (match?.id && !isLocalConvoId(match.id)) {
+      if (match?.id) {
         const items = await listMessages(match.id);
         const sorted = items
           .slice()
@@ -513,7 +551,7 @@ export default function Page() {
 
       await startCall({
         to,
-        conversationId: isLocalConvoId(convo.id) ? null : convo.id,
+        conversationId: convo.isDraft ? null : convo.id,
       });
 
       await refreshConversationsAndReselectByPhone(to);
@@ -530,7 +568,13 @@ export default function Page() {
     return handleStartCallFor(activeConvo);
   }
 
-  function handleStartNewThread() {
+  function upsertConvo(list: Conversation[], convo: Conversation) {
+    const next = list.filter((c) => c.id !== convo.id);
+    next.unshift(convo);
+    return sortConvos(next);
+  }
+
+  async function handleStartNewThread() {
     if (commsLocked) return;
 
     if (!hasMyNumber) {
@@ -538,36 +582,61 @@ export default function Page() {
       return;
     }
 
-    const to = normalizePhone(newTo);
+    // If a contact is picked, prefer that phone + contactId
+    const pickedPhone = pickedContact?.phone ? normalizePhone(pickedContact.phone) : null;
+    const to = pickedPhone || normalizePhone(newTo);
     if (!to) return;
 
-    const found = convos.find((c) => normalizePhone(c.phone || c.subtitle || "") === to);
-    if (found) {
-      setSelectedId(found.id);
-      setNewTo("");
+    // ✅ If they typed a phone number, try to auto-match a contact hit by phone
+    const inferred =
+      pickedContact ??
+      contactHits.find((h) => normalizePhone(h.phone) === to) ??
+      null;
+
+    const contactIdToUse = inferred?.id ?? null;
+
+    // If thread already exists, just select it (use normalized compare)
+    const normalizedTo = normalizePhone(to);
+    const existing =
+      convos.find((c) => normalizePhone(c.phone || c.subtitle || "") === normalizedTo) ?? null;
+
+    if (existing) {
+      setSelectedId(existing.id);
       setMode("chat");
       setShowComposer(false);
+
+      setNewTo("");
+      setPickedContact(null);
+      setContactHits([]);
+      setContactQuery("");
       return;
     }
 
-    const localId = `local-${to}`;
-    const local: Conversation = {
-      id: localId,
-      title: to,
-      subtitle: "New conversation",
-      phone: to,
-      lastMessagePreview: null,
-      lastMessageAt: null,
-      unreadCount: 0,
-      contactId: null,
-      updatedAt: null,
-    };
+    try {
+      setError(null);
 
-    setConvos((prev) => [local, ...prev]);
-    setSelectedId(localId);
-    setNewTo("");
-    setMode("chat");
-    setShowComposer(false);
+      const convo = await createDraftConversation({
+        to,
+        contactId: contactIdToUse,
+      });
+
+      // ✅ Important: draft route may return an existing convo (or same threadKey) now.
+      // So we upsert by id instead of blindly prepending.
+      setConvos((prev) => upsertConvo(prev, convo));
+      setSelectedId(convo.id);
+
+      setNewTo("");
+      setPickedContact(null);
+      setContactHits([]);
+      setContactQuery("");
+
+      setMode("chat");
+      setShowComposer(false);
+    } catch (e: any) {
+      const msg = normalizeApiError(e, "Failed to start new conversation.");
+      setError(msg);
+      safeSetLockFromMessage(msg);
+    }
   }
 
   function onPickConvo(id: string) {
@@ -597,16 +666,6 @@ export default function Page() {
     if (commsLocked) return;
 
     const id = convo.id;
-
-    if (isLocalConvoId(id)) {
-      setConvos((prev) => prev.filter((c) => c.id !== id));
-      if (selectedId === id) {
-        setSelectedId(null);
-        setMessages([]);
-        setCalls([]);
-      }
-      return;
-    }
 
     const ok = window.confirm("Delete this conversation thread? This can’t be undone.");
     if (!ok) return;
@@ -653,6 +712,8 @@ export default function Page() {
       : hasMyNumber
         ? `From: ${myNumber?.e164}`
         : "No number";
+
+  const activeIsDraft = !!activeConvo?.isDraft;
 
   return (
     <>
@@ -778,39 +839,114 @@ export default function Page() {
 
                 {/* Compose drawer */}
                 {!commsLocked && hasMyNumber && showComposer && (
-                  <div className="mt-3 rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3">
-                    <p className="text-[11px] font-semibold text-slate-50">New message</p>
-                    <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
-                      Enter a phone number to start a thread.
-                    </p>
-                    <div className="mt-2 flex items-center gap-2">
+                <div className="mt-3 rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3">
+                  <p className="text-[11px] font-semibold text-slate-50">New message</p>
+                  <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
+                    Type a contact name or a phone number.
+                  </p>
+
+                  <div className="mt-2 relative">
+                    <div className="flex items-center gap-2">
                       <input
                         value={newTo}
-                        onChange={(e) => setNewTo(e.target.value)}
-                        placeholder="To: +1…"
+                        onChange={(e) => {
+                          setNewTo(e.target.value);
+                          setContactsError(null);
+                          // If they start typing again, allow switching away from a previously picked contact
+                          // (your debounce effect will also clear pickedContact if it no longer matches)
+                        }}
+                        placeholder="To: name or +1…"
                         className="w-full rounded-xl border border-slate-800/70 bg-slate-950/70 px-3 py-2 text-[12px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-slate-600/60 disabled:opacity-60"
                         disabled={!hasMyNumber}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") handleStartNewThread();
+                          if (e.key === "Escape") {
+                            setContactHits([]);
+                            setContactQuery("");
+                          }
                         }}
                       />
+
                       <button
                         type="button"
                         onClick={handleStartNewThread}
-                        disabled={!hasMyNumber || !normalizePhone(newTo)}
+                        disabled={!hasMyNumber || (!normalizePhone(newTo) && !pickedContact)}
                         className="shrink-0 rounded-xl border border-slate-700/70 bg-slate-900/50 px-3 py-2 text-[12px] font-semibold text-slate-50 hover:bg-slate-900/70 disabled:opacity-50"
                       >
                         Send
                       </button>
                     </div>
-                  </div>
-                )}
 
-                {error && !commsLocked && (
-                  <div className="mt-3 rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[11px] text-rose-50">
-                    {error}
+                    {/* Contact dropdown (only when input does NOT look like a phone number) */}
+                    {(contactsLoading || contactsError || contactHits.length > 0 || String(contactQuery ?? "").trim()) && (
+                        <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-2xl border border-slate-800/70 bg-slate-950/95 shadow-[0_20px_50px_rgba(0,0,0,0.45)]">
+                          {contactsLoading && (
+                            <div className="px-3 py-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Searching…
+                            </div>
+                          )}
+
+                          {contactsError && !contactsLoading && (
+                            <div className="px-3 py-2 text-[11px] text-rose-200/90">
+                              {contactsError}
+                            </div>
+                          )}
+
+                          {!contactsLoading &&
+                            !contactsError &&
+                            contactHits.slice(0, 8).map((h) => (
+                              <button
+                                key={h.id}
+                                type="button"
+                                onClick={() => {
+                                  setPickedContact(h);
+
+                                  // simplest UX: after pick, put their phone in the input so Send works instantly
+                                  setNewTo(h.phone);
+
+                                  // close dropdown
+                                  setContactHits([]);
+                                  setContactQuery("");
+                                  setContactsError(null);
+                                }}
+                                className="w-full px-3 py-2 text-left hover:bg-slate-900/60"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="truncate text-[12px] font-semibold text-slate-50">
+                                      {h.name}
+                                    </p>
+                                    <p className="truncate text-[11px] text-[var(--avillo-cream-muted)]">
+                                      {h.phone}
+                                    </p>
+                                  </div>
+
+                                  <span className="shrink-0 rounded-full border border-slate-800/70 bg-slate-950/60 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--avillo-cream-muted)]">
+                                    {String(h.relationshipType ?? "").toLowerCase() || "contact"}
+                                  </span>
+                                </div>
+                              </button>
+                            ))}
+
+                          {!contactsLoading &&
+                            !contactsError &&
+                            contactHits.length === 0 &&
+                            String(contactQuery ?? "").trim() && (
+                              <div className="px-3 py-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                                No matches.
+                              </div>
+                            )}
+                        </div>
+                      )}
                   </div>
-                )}
+                </div>
+              )}
+
+              {error && !commsLocked && (
+                <div className="mt-3 rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[11px] text-rose-50">
+                  {error}
+                </div>
+              )}
               </div>
 
               {/* Conversation list (flex-1 scroll) */}
@@ -830,7 +966,6 @@ export default function Page() {
                 {!loadingConvos &&
                   filteredConvos.map((c) => {
                     const isSelected = c.id === selectedId;
-                    const isLocal = isLocalConvoId(c.id);
                     const deleting = deletingId === c.id;
 
                     return (
@@ -871,11 +1006,6 @@ export default function Page() {
                             <div className="flex items-center justify-between gap-2">
                               <p className="truncate text-[12px] font-semibold text-slate-50">
                                 {c.title || "Unknown"}
-                                {isLocal ? (
-                                  <span className="ml-2 rounded-full border border-amber-200/25 bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-amber-100">
-                                    draft
-                                  </span>
-                                ) : null}
                               </p>
 
                               <p className="shrink-0 text-[10px] leading-none tabular-nums text-[var(--avillo-cream-muted)]">
@@ -885,12 +1015,11 @@ export default function Page() {
 
                             <p className="mt-0.5 truncate text-[11px] text-[var(--avillo-cream-muted)]">
                               {(() => {
-                                const isLocal = isLocalConvoId(c.id);
-
                                 const fromApi = String(c.lastMessagePreview ?? "").trim();
-                                const draftPreview = isLocal ? String(drafts[c.id] ?? "").trim() : "";
 
-                                const raw = fromApi || draftPreview || (isLocal ? "New conversation" : "");
+                                const draftPreview = String(drafts[c.id] ?? "").trim();
+                                
+                                const raw = fromApi || draftPreview || (c.isDraft ? "New conversation" : "");
                                 return clampPreview(raw, PREVIEW_MAX_CHARS);
                               })()}
                             </p>
@@ -988,7 +1117,7 @@ export default function Page() {
                 ) : mode === "chat" ? (
                   <ThreadApple
                     scrollRef={threadScrollRef}
-                    isLocal={activeIsLocal}
+                    isLocal={activeIsDraft}
                     loading={loadingMsgs}
                     error={msgsError}
                     messages={messages}
@@ -1000,7 +1129,7 @@ export default function Page() {
                   />
                 ) : (
                   <CallsApple
-                    isLocal={activeIsLocal}
+                    isLocal={activeIsDraft}
                     loading={loadingCalls}
                     error={callsError}
                     calls={calls}
