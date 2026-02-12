@@ -1480,9 +1480,7 @@ model Conversation {
   listingId String?
   listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
 
-  // ✅ Canonical "other party" identity for the thread (lead/client phone).
-  // Add as nullable first, backfill, then make required.
-  otherPartyE164 String? @db.VarChar(32)
+  otherPartyE164 String @db.VarChar(32)
 
   // Deterministic key so inbound webhooks can upsert the same thread reliably:
   // Example: "pn:<phoneNumberId>:contact:<contactId>" or "pn:<phoneNumberId>:lead:<fromE164>"
@@ -1507,13 +1505,12 @@ model Conversation {
   events      CommEvent[]
 
   @@unique([workspaceId, threadKey])
-
+  @@unique([workspaceId, phoneNumberId, otherPartyE164])
   // Fast inbox queries + filtering
   @@index([workspaceId, assignedToUserId, lastMessageAt])
   @@index([workspaceId, contactId, lastMessageAt])
   @@index([workspaceId, listingId, lastMessageAt])
   @@index([workspaceId, phoneNumberId, lastMessageAt])
-
   // ✅ Fast lookups by counterpart phone (useful for dedupe, search, analytics)
   @@index([workspaceId, assignedToUserId, otherPartyE164])
   @@index([workspaceId, phoneNumberId, otherPartyE164])
