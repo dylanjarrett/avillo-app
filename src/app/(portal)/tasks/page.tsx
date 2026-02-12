@@ -856,7 +856,7 @@ export default function TasksPage() {
     <div className="space-y-8">
       <PageHeader
         eyebrow="Tasks"
-        title="Stay ahead of follow-ups."
+        title="Stay ahead of follow-ups"
         subtitle="Keep your task workflow tight — prioritize urgent items, complete fast, and move on."
       />
 

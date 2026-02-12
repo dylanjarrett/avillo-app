@@ -24,6 +24,13 @@ function parseIsoDateSafe(v: string | null) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function cleanPreview(input: unknown) {
+  const s = String(input ?? "").replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  // keep it list-friendly
+  return s.length > 140 ? s.slice(0, 140) + "…" : s;
+}
+
 /**
  * User-private inbox:
  * - only returns conversations assigned to the authed user
@@ -86,10 +93,39 @@ export async function GET(req: NextRequest) {
   const hasMore = items.length > take;
   const page = hasMore ? items.slice(0, take) : items;
 
-  const last = page[page.length - 1];
+  // ---- Compute lastMessagePreview for each conversation (1 query, not N+1) ----
+  const ids = page.map((c) => c.id);
+
+  let previewByConvo: Record<string, string | null> = {};
+  if (ids.length) {
+    // If your delegate is `prisma.smsMessage`, keep this.
+    // If it is `prisma.smsmessage` or something else, rename accordingly.
+    const lastMsgs = await prisma.smsMessage.findMany({
+      where: {
+        workspaceId: ws.workspaceId,
+        conversationId: { in: ids },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true, conversationId: true, body: true },
+    });
+
+    // Take first seen per conversation (because we sorted desc)
+    for (const m of lastMsgs) {
+      const cid = String(m.conversationId);
+      if (previewByConvo[cid] !== undefined) continue;
+      previewByConvo[cid] = cleanPreview(m.body);
+    }
+  }
+
+  const enriched = page.map((c) => ({
+    ...c,
+    lastMessagePreview: previewByConvo[c.id] ?? null,
+  }));
+
+  const last = enriched[enriched.length - 1];
 
   return NextResponse.json({
-    items: page,
+    items: enriched,
     nextCursor:
       hasMore && last ? { cursorUpdatedAt: last.updatedAt.toISOString(), cursorId: last.id } : null,
   });

@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useCrmMobileWorkspaceScroll } from "@/hooks/useCrmMobileWorkspaceScroll";
+import { useCommsMobileWorkspaceScroll } from "@/hooks/useCommsMobileWorkspaceScroll";
 
 import type { CallItem, Conversation, SmsMessage } from "./comms-types";
 import {
@@ -18,7 +18,7 @@ import {
   refreshConversationsSortedAndFindByPhone,
   type MyNumber,
 } from "./api";
-import { cx, formatWhen, initials, normalizePhone } from "./comms-utils";
+import { cx, formatListTimestamp, formatWhen, initials, normalizePhone } from "./comms-utils";
 
 type DraftMap = Record<string, string>;
 type Mode = "chat" | "calls";
@@ -35,7 +35,7 @@ function isLocalConvoId(id?: string | null) {
   return !!id && String(id).startsWith("local-");
 }
 
-function isMobile() {
+function isMobileNow() {
   return typeof window !== "undefined" && window.innerWidth < 1024;
 }
 
@@ -57,7 +57,7 @@ function sortConvos(items: Conversation[]) {
 
 export default function CommsShell() {
   const { listHeaderRef, workspaceRef, scrollToWorkspace, scrollBackToListHeader } =
-    useCrmMobileWorkspaceScroll();
+    useCommsMobileWorkspaceScroll();
 
   const listScrollRef = useRef<HTMLDivElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
@@ -217,6 +217,22 @@ export default function CommsShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+
+  const PREVIEW_MAX_CHARS = 30; // tweak to taste
+
+  function clampPreview(text: string, maxChars: number) {
+    const s = String(text ?? "").replace(/\s+/g, " ").trim();
+    if (!s) return "—";
+    if (s.length <= maxChars) return s;
+
+    // nicer cut: try to cut on a word boundary
+    const cut = s.slice(0, maxChars);
+    const lastSpace = cut.lastIndexOf(" ");
+    const safe = lastSpace > Math.floor(maxChars * 0.65) ? cut.slice(0, lastSpace) : cut;
+
+    return safe.replace(/[.,;:!?]+$/, "").trimEnd() + "…";
+  }
+
   // ---------- Filter list ----------
   const filteredConvos = useMemo(() => {
     let list = convos.slice();
@@ -235,17 +251,21 @@ export default function CommsShell() {
 
   // Mobile: open detail when selecting
   useEffect(() => {
-    if (!isMobile()) {
+    if (typeof window === "undefined") return;
+    if (window.innerWidth >= 1024) {
       setWorkspaceOpenMobile(false);
       return;
     }
-    if (!activeConvo) {
+
+    // If nothing selected, ensure we’re on list
+    if (!selectedId) {
       setWorkspaceOpenMobile(false);
       return;
     }
+
+    // Fallback: if selection exists but UI didn’t open for some reason, open it.
     setWorkspaceOpenMobile(true);
-    scrollToWorkspace();
-  }, [activeConvo?.id, scrollToWorkspace]);
+  }, [selectedId]);
 
   // Desktop: keep selection visible
   useEffect(() => {
@@ -284,7 +304,6 @@ export default function CommsShell() {
 
         const items = await listMessages(activeConvo.id, controller.signal);
 
-        // Stable-ish sort: handle bad/empty dates without nuking ordering
         const toMs = (v: any) => {
           const t = Date.parse(String(v ?? ""));
           return Number.isNaN(t) ? 0 : t;
@@ -295,7 +314,6 @@ export default function CommsShell() {
           .sort((a, b) => {
             const at = toMs(a.createdAt);
             const bt = toMs(b.createdAt);
-            // tie-breaker to keep React list stable when timestamps match/are missing
             if (at === bt) return String(a.id).localeCompare(String(b.id));
             return at - bt;
           });
@@ -306,10 +324,6 @@ export default function CommsShell() {
 
         const msg = normalizeApiError(e, "Failed to load messages.");
         setMsgsError(msg);
-
-        // Don't wipe history on transient failures; keep last good state
-        // setMessages([]);  // ❌ remove this
-
         safeSetLockFromMessage(msg);
       } finally {
         setLoadingMsgs(false);
@@ -559,11 +573,21 @@ export default function CommsShell() {
     setMsgsError(null);
     setCallsError(null);
     setError(null);
+
+    // ✅ Mobile: open detail immediately on tap (don’t rely on useEffect timing)
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setWorkspaceOpenMobile(true);
+
+      // wait a tick so <main> becomes visible, then scroll + lock
+      requestAnimationFrame(() => {
+        scrollToWorkspace();
+      });
+    }
   }
 
   function backToList() {
-    setWorkspaceOpenMobile(false);
     scrollBackToListHeader(() => {});
+    setWorkspaceOpenMobile(false);
   }
 
   async function handleDeleteThread(convo: Conversation) {
@@ -572,7 +596,6 @@ export default function CommsShell() {
 
     const id = convo.id;
 
-    // Draft/local threads should just disappear
     if (isLocalConvoId(id)) {
       setConvos((prev) => prev.filter((c) => c.id !== id));
       if (selectedId === id) {
@@ -591,7 +614,6 @@ export default function CommsShell() {
     setDeletingId(id);
     setError(null);
 
-    // optimistic remove
     setConvos((p) => p.filter((c) => c.id !== id));
     if (selectedId === id) {
       setSelectedId(null);
@@ -602,12 +624,13 @@ export default function CommsShell() {
     }
 
     try {
-      // NOTE: this matches the rest of your API patterns (sms conversations).
-      // If your route path differs, change it here.
       const res = await fetch(`/api/sms/conversations/${id}`, { method: "DELETE" });
 
       if (!res.ok) {
-        const msg = normalizeApiError({ status: res.status }, "Failed to delete conversation.");
+        const text = await res.text().catch(() => "");
+        const msg = text?.trim()
+          ? text.trim().slice(0, 300)
+          : `Failed to delete conversation (${res.status}).`;
         setConvos(prev);
         setError(msg);
       }
@@ -620,7 +643,6 @@ export default function CommsShell() {
     }
   }
 
-  // Apple-ish: “Messages-style” top title
   const headerTitle = "Messages";
   const headerSubtitle = commsLocked
     ? "Locked"
@@ -632,10 +654,17 @@ export default function CommsShell() {
 
   return (
     <section className="mx-auto w-full max-w-6xl">
-      {/* Apple-like window */}
-      <div className="overflow-hidden rounded-[26px] border border-slate-800/70 bg-slate-950/65 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+      {/* Window: make it reliably height-managed + scroll-safe */}
+      <div
+        className={cx(
+          "overflow-hidden rounded-[26px] border border-slate-800/70 bg-slate-950/65 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-xl",
+          "flex flex-col min-h-[640px]",
+          // Uses dynamic viewport height on mobile to avoid Safari URL-bar jumpiness
+          "h-[min(820px,calc(100dvh-160px))] lg:h-[min(860px,calc(100dvh-140px))]"
+        )}
+      >
         {/* Top chrome */}
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/70 px-4 py-3">
+        <div className="shrink-0 flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/70 px-4 py-3">
           <div className="min-w-0">
             <p className="truncate text-[13px] font-semibold text-slate-50">{headerTitle}</p>
             <p className="truncate text-[11px] text-[var(--avillo-cream-muted)]">{headerSubtitle}</p>
@@ -664,7 +693,7 @@ export default function CommsShell() {
 
         {/* Lock banner */}
         {commsLocked && (
-          <div className="border-b border-amber-200/20 bg-amber-500/10 px-4 py-3">
+          <div className="shrink-0 border-b border-amber-200/20 bg-amber-500/10 px-4 py-3">
             <p className="text-[11px] font-semibold text-amber-100">Comms locked</p>
             <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
               {commsLockMsg || "Comms requires a Pro plan (or Beta access)."}
@@ -672,20 +701,20 @@ export default function CommsShell() {
           </div>
         )}
 
-        {/* Body */}
-        <div className="grid lg:grid-cols-[340px_1fr]">
+        {/* Body (must be min-h-0 so children can scroll) */}
+        <div className="min-h-0 flex-1 grid lg:grid-cols-[340px_1fr]">
           {/* Sidebar */}
           <aside
             ref={listHeaderRef}
             className={cx(
-              "border-r border-slate-800/60 bg-slate-950/55",
-              workspaceOpenMobile ? "hidden" : "block",
-              "lg:block"
+              "min-h-0 border-r border-slate-800/60 bg-slate-950/55",
+              "flex flex-col",
+              workspaceOpenMobile ? "hidden" : "flex",
+              "lg:flex"
             )}
           >
-            {/* Sidebar header */}
-            <div className="border-b border-slate-800/60 px-3 py-3">
-              {/* Number setup card */}
+            {/* Sidebar header (shrink-0) */}
+            <div className="shrink-0 border-b border-slate-800/60 px-3 py-3">
               {!commsLocked && (
                 <div className="mb-3">
                   {!hasMyNumber ? (
@@ -774,11 +803,8 @@ export default function CommsShell() {
               )}
             </div>
 
-            {/* Conversation list */}
-            <div
-              ref={listScrollRef}
-              className="max-h-[calc(100vh-240px)] overflow-y-auto px-2 py-2"
-            >
+            {/* Conversation list (flex-1 scroll) */}
+            <div ref={listScrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
               {loadingConvos && (
                 <div className="py-10 text-center text-[11px] text-[var(--avillo-cream-muted)]">
                   Loading…
@@ -842,17 +868,25 @@ export default function CommsShell() {
                               ) : null}
                             </p>
 
-                            <p className="shrink-0 text-[10px] text-[var(--avillo-cream-muted)]">
-                              {formatWhen(c.lastMessageAt)}
+                            <p className="shrink-0 text-[10px] leading-none tabular-nums text-[var(--avillo-cream-muted)]">
+                              {formatListTimestamp(c.lastMessageAt)}
                             </p>
                           </div>
 
                           <p className="mt-0.5 truncate text-[11px] text-[var(--avillo-cream-muted)]">
-                            {c.lastMessagePreview || c.phone || c.subtitle || "—"}
+                            {(() => {
+                              const isLocal = isLocalConvoId(c.id);
+
+                              const fromApi = String(c.lastMessagePreview ?? "").trim();
+                              const draftPreview = isLocal ? String(drafts[c.id] ?? "").trim() : "";
+
+                              const raw = fromApi || draftPreview || (isLocal ? "New conversation" : "");
+                              return clampPreview(raw, PREVIEW_MAX_CHARS);
+                            })()}
                           </p>
                         </div>
 
-                        {/* Hover actions (like Dashboard/Intelligence) */}
+                        {/* Hover actions */}
                         <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
                           <IconButton
                             label="Call"
@@ -889,10 +923,15 @@ export default function CommsShell() {
           {/* Main panel */}
           <main
             ref={workspaceRef as any}
-            className={cx(workspaceOpenMobile ? "block" : "hidden", "lg:block")}
+            className={cx(
+              "min-h-0 bg-slate-950/35",
+              "flex flex-col",
+              workspaceOpenMobile ? "flex" : "hidden",
+              "lg:flex"
+            )}
           >
             {/* Main header */}
-            <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/45 px-4 py-3">
+            <div className="shrink-0 flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/45 px-4 py-3">
               <div className="min-w-0">
                 {activeConvo ? (
                   <>
@@ -932,8 +971,8 @@ export default function CommsShell() {
               </div>
             </div>
 
-            {/* Content */}
-            <div className="p-4">
+            {/* Content (fills height; child components handle their own scroll) */}
+            <div className="min-h-0 flex-1 p-4">
               {!activeConvo ? (
                 <EmptyState />
               ) : mode === "chat" ? (
@@ -973,11 +1012,11 @@ export default function CommsShell() {
 
 function EmptyState() {
   return (
-    <div className="flex h-[560px] flex-col items-center justify-center text-center">
+    <div className="flex h-full min-h-[420px] flex-col items-center justify-center text-center">
       <div className="rounded-3xl border border-slate-800/60 bg-slate-950/45 px-6 py-5 shadow-[0_0_40px_rgba(0,0,0,0.25)]">
-        <p className="text-[13px] font-semibold text-slate-50">Simple Comms</p>
+        <p className="text-[13px] font-semibold text-slate-50">Ready when you are!</p>
         <p className="mt-1 max-w-sm text-[12px] text-[var(--avillo-cream-muted)]">
-          Pick a thread to chat. Switch to Calls to see call history.
+          Pick a thread — or switch to Calls for history.
         </p>
       </div>
     </div>
@@ -1106,10 +1145,35 @@ function ThreadApple({
   onDraftChange: (v: string) => void;
   onSend: () => void;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  function autosizeComposer() {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    const cs = window.getComputedStyle(el);
+    const lineHeight = Number.parseFloat(cs.lineHeight || "20") || 20;
+
+    const maxLines = 6;
+    const maxHeight = Math.ceil(lineHeight * maxLines);
+
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${next}px`;
+
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    autosizeComposer();
+  }, [draft]);
+
   return (
-    <div className="rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)]">
+    // ✅ Make the whole card height-aware and let ONLY the middle section scroll
+    <div className="h-full min-h-0 rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)] flex flex-col">
       {(error || isLocal) && (
-        <div className="border-b border-slate-800/60 px-4 py-3">
+        <div className="shrink-0 border-b border-slate-800/60 px-4 py-3">
           {error && (
             <div className="rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[12px] text-rose-50">
               {error}
@@ -1123,7 +1187,11 @@ function ThreadApple({
         </div>
       )}
 
-      <div ref={scrollRef} className="max-h-[560px] overflow-y-auto px-4 py-4 overscroll-contain">
+      {/* ✅ Scroll region: min-h-0 + flex-1 is the whole trick */}
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-4 overscroll-contain"
+      >
         {loading && (
           <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
             Loading…
@@ -1139,15 +1207,34 @@ function ThreadApple({
         {!loading &&
           messages.map((m) => {
             const outbound = m.direction === "OUTBOUND";
+
             return (
-              <div key={m.id} className={cx("mb-2 flex", outbound ? "justify-end" : "justify-start")}>
-                    <div className="max-w-[78%]">
-                      <div className={cx(
-                      "rounded-[22px] px-3 py-2 text-[13px] leading-none flex items-center justify-center text-center",
-                      outbound ? "bg-slate-50 text-slate-950" : "bg-slate-900/70 text-slate-50 border border-slate-800/60"
-                    )}>
-                      <p className="whitespace-pre-wrap w-full">{m.body}</p>
-                    </div>
+              <div
+                key={m.id}
+                className={cx(
+                  "mb-2 flex w-full",
+                  outbound ? "justify-end" : "justify-start"
+                )}
+              >
+                <div
+                  className={cx(
+                    "max-w-[78%] flex flex-col",
+                    outbound ? "items-end" : "items-start"
+                  )}
+                >
+                  <div
+                    className={cx(
+                      "inline-flex w-fit rounded-[22px] px-4 py-2 text-[13px] leading-snug text-left",
+                      outbound
+                        ? "bg-blue-500/90 text-white"
+                        : "bg-slate-900/70 text-slate-50 border border-slate-800/60"
+                    )}
+                  >
+                    <p className="whitespace-pre-wrap break-words">
+                      {m.body}
+                    </p>
+                  </div>
+
                   <div
                     className={cx(
                       "mt-1 text-[10px] text-[var(--avillo-cream-muted)]",
@@ -1162,18 +1249,24 @@ function ThreadApple({
           })}
       </div>
 
-      <div className="border-t border-slate-800/60 px-4 py-3">
-        <div className="flex items-end gap-2">
-          <div className="flex-1 rounded-[20px] border border-slate-800/70 bg-slate-950/60 px-3 py-2">
+      {/* ✅ Composer stays pinned; no scrolling here */}
+      <div className="shrink-0 border-t border-slate-800/60 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 rounded-[20px] border border-slate-800/70 bg-slate-950/60 px-3 py-2 min-h-[44px] flex">
             <textarea
-              rows={2}
+              ref={textareaRef}
+              rows={1}
               value={draft}
-              onChange={(e) => onDraftChange(e.target.value)}
-              placeholder="iMessage…"
+              onChange={(e) => {
+                onDraftChange(e.target.value);
+                requestAnimationFrame(() => autosizeComposer());
+              }}
+              placeholder="Message…"
               disabled={disabled}
-              className="w-full resize-none bg-transparent text-[13px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] disabled:opacity-60"
+              className="w-full resize-none bg-transparent text-[13px] leading-[20px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] disabled:opacity-60"
+              style={{ overflowY: "hidden" }}
               onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   onSend();
                 }
@@ -1217,9 +1310,10 @@ function CallsApple({
   onStartCall: () => void;
 }) {
   return (
-    <div className="rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)]">
+    // ✅ Same structure: header(s) pinned, list scrolls
+    <div className="h-full min-h-0 rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)] flex flex-col">
       {(error || isLocal) && (
-        <div className="border-b border-slate-800/60 px-4 py-3">
+        <div className="shrink-0 border-b border-slate-800/60 px-4 py-3">
           {error && (
             <div className="rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[12px] text-rose-50">
               {error}
@@ -1233,7 +1327,7 @@ function CallsApple({
         </div>
       )}
 
-      <div className="flex items-center justify-between border-b border-slate-800/60 px-4 py-3">
+      <div className="shrink-0 flex items-center justify-between border-b border-slate-800/60 px-4 py-3">
         <p className="text-[13px] font-semibold text-slate-50">Calls</p>
         <button
           type="button"
@@ -1250,7 +1344,8 @@ function CallsApple({
         </button>
       </div>
 
-      <div className="max-h-[620px] overflow-y-auto px-4 py-4 overscroll-contain">
+      {/* ✅ Scroll region */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 overscroll-contain">
         {loading && (
           <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
             Loading…

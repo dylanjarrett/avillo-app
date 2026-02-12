@@ -998,7 +998,7 @@ async function handleToggleActive() {
     <div className="space-y-12">
       <PageHeader
         eyebrow="Autopilot"
-        title="Automate your busy work."
+        title="Automate your busy work"
         subtitle="Let Avillo monitor your leads, clients, and listings — then deliver the right text, email, or task at the perfect moment. No missed opportunities. No manual busywork."
       />
 

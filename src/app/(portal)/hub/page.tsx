@@ -1621,7 +1621,7 @@ const LeftRail = (
 
 return (
   <>
-  <div className="space-y-10">
+  <div className="space-y-8">
     <PageHeader eyebrow="Hub" title="Stay connected" subtitle="Centralized conversations and workspace updates." />
 
     <div className="px-4 pb-8 md:px-6">
