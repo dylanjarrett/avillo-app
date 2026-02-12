@@ -31,10 +31,6 @@ export function looksLikeEntitlementError(msg?: string | null) {
   );
 }
 
-/**
- * UI-safe message normalization for thrown errors from API calls.
- * (CommsShell previously had this inline.)
- */
 export function normalizeApiError(e: any, fallback: string) {
   const raw =
     (typeof e?.message === "string" && e.message) ||
@@ -404,7 +400,6 @@ export async function provisionMyNumber(input?: { areaCode?: string | null }) {
 
 /* -----------------------------
  * Convenience: shared "refresh & reselect" behavior
- * (extracted from CommsShell)
  * ---------------------------- */
 
 /**
