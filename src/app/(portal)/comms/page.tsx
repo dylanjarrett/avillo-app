@@ -789,8 +789,9 @@ useEffect(() => {
                 {!commsLocked && (
                   <div className="mb-3">
                     {!hasMyNumber ? (
-                      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3">
-                        <p className="text-[12px] font-semibold text-slate-50">Texting & calling starts here.</p>
+                      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3
+                      shadow-[inset_0_0_45px_rgba(251,191,36,0.12)]">
+                        <p className="text-[12px] font-semibold text-slate-50">Activate your work number.</p>
                         <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
                           Choose your area code — we’ll take care of the rest.
                         </p>
