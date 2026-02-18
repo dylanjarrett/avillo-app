@@ -790,9 +790,9 @@ useEffect(() => {
                   <div className="mb-3">
                     {!hasMyNumber ? (
                       <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3">
-                        <p className="text-[12px] font-semibold text-slate-50">Get a number</p>
+                        <p className="text-[12px] font-semibold text-slate-50">Texting & calling starts here.</p>
                         <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
-                          You need a number to text and call.
+                          Choose your area code — we’ll take care of the rest.
                         </p>
 
                         {myNumberError && (
