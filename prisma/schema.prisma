@@ -260,6 +260,7 @@ model User {
   smsMessagesAssigned  SmsMessage[]      @relation("UserSmsMessagesAssigned")
   conversations        Conversation[]    @relation("UserConversations")
   commEvents           CommEvent[]       @relation("UserCommEvents")
+  CommReadState        CommReadState[]
 
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
@@ -327,6 +328,7 @@ model Workspace {
   automationRuns      AutomationRun[]
   conversations       Conversation[]
   commEvents          CommEvent[]
+  commReadStates      CommReadState[]
   phoneNumbers        UserPhoneNumber[]
   calls               Call[]
   smsMessages         SmsMessage[]
@@ -563,6 +565,33 @@ model ChatReadState {
   @@unique([channelId, userId])
   @@index([workspaceId, userId])
   @@index([channelId, lastReadAt])
+}
+
+// ---------------------------
+// PER-USER COMMS READ STATE (cursor-based)
+// ---------------------------
+model CommReadState {
+  id String @id @default(cuid())
+
+  // Tenant boundary
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Cursor-based: what comm event have they read up through?
+  lastReadEventId String?
+  lastReadEvent   CommEvent? @relation("CommReadStateLastReadEvent", fields: [lastReadEventId], references: [id], onDelete: SetNull)
+
+  lastReadAt DateTime @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([workspaceId, userId])
+  @@index([conversationId, lastReadAt])
 }
 
 // ---------------------------
@@ -1503,6 +1532,7 @@ model Conversation {
   smsMessages SmsMessage[]
   calls       Call[]
   events      CommEvent[]
+  readStates  CommReadState[]
 
   @@unique([workspaceId, threadKey])
   @@unique([workspaceId, phoneNumberId, otherPartyE164])
@@ -1552,6 +1582,8 @@ model CommEvent {
   // Optional: link to the automation run that generated the event
   automationRunId String?
   automationRun   AutomationRun? @relation(fields: [automationRunId], references: [id], onDelete: SetNull)
+
+  commReadStates CommReadState[] @relation("CommReadStateLastReadEvent")
 
   occurredAt DateTime @default(now())
   payload    Json?
