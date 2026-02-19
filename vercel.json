@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/hub-retention",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/comms-retention",
+      "schedule": "10 3 * * *"
     }
   ]
 }

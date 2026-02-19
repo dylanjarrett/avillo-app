@@ -1,6 +1,9 @@
-//app/api/cron/hub-retention/route.ts
+//api/cron/comms-retention/route.ts
 import { NextResponse } from "next/server";
-import { runHubRetentionOnce } from "@/lib/chat/retention";
+import { runCommsRetentionOnce } from "@/lib/comms/retention";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const secret = process.env.CRON_SECRET;
@@ -11,6 +14,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const res = await runHubRetentionOnce();
+  const res = await runCommsRetentionOnce();
   return NextResponse.json(res);
 }
