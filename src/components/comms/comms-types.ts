@@ -2,37 +2,28 @@
 
 export type CommsTab = "thread" | "calls" | "info";
 
-/* ============================================================
-   Conversation
-   Canonical thread identity — always DB-backed
-============================================================ */
-
 export type Conversation = {
   id: string;
 
-  // Display
-  title: string;                  // contact name OR phone OR "Unknown"
-  subtitle: string | null;        // phone or secondary label
+  title: string;
+  subtitle: string | null;
   lastMessagePreview: string | null;
   lastMessageAt: string | null;
 
-  // Thread identity
-  phone: string | null;           // other party phone (E.164)
+  phone: string | null;
   contactId: string | null;
 
-  // Badge
   unreadCount: number;
 
-  // Draft detection (UI helper)
+  readState?: {
+    lastReadAt: string;
+    lastReadEventId: string | null;
+  } | null;
+
   isDraft?: boolean;
 
-  // Metadata
   updatedAt: string | null;
 };
-
-/* ============================================================
-   SMS
-============================================================ */
 
 export type SmsMessage = {
   id: string;
@@ -44,13 +35,9 @@ export type SmsMessage = {
   from: string | null;
   to: string | null;
 
-  status: string | null; // queued/sent/delivered/failed etc
+  status: string | null;
   createdAt: string;
 };
-
-/* ============================================================
-   Calls
-============================================================ */
 
 export type CallItem = {
   id: string;

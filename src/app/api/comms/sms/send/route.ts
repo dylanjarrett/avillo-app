@@ -1,4 +1,4 @@
-// src/app/api/sms/send/route.ts
+// src/app/api/comms/sms/send/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendSms } from "@/lib/twilioClient";

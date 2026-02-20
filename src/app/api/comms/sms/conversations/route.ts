@@ -1,4 +1,4 @@
-// src/app/api/sms/conversations/route.ts
+// src/app/api/comms/sms/conversations/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";
@@ -48,6 +48,7 @@ function resolveOtherPartyE164(convo: {
  * - only returns conversations assigned to the authed user
  * - stable pagination using (updatedAt, id) cursor
  * - dedupes legacy rows that resolve to the same destination (phoneNumberId + otherPartyE164)
+ * - overlays per-user comm readState for unread dot calculation in UI
  *
  * Query:
  *  - take: number (default 50, max 100)
@@ -82,7 +83,7 @@ export async function GET(req: NextRequest) {
       ];
     }
 
-    // NOTE: we fetch take+1 like before for cursoring, then dedupe within the page
+    // NOTE: we fetch take+1 for cursoring, then dedupe within the page
     const items = await prisma.conversation.findMany({
       where,
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -119,10 +120,10 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    // ---- Compute lastMessagePreview for each conversation (1 query, not N+1) ----
     const ids = page.map((c) => c.id);
 
-    let previewByConvo: Record<string, string | null> = {};
+    // ---- Compute lastMessagePreview for each conversation (1 query, not N+1) ----
+    const previewByConvo: Record<string, string | null> = {};
     if (ids.length) {
       const lastMsgs = await prisma.smsMessage.findMany({
         where: {
@@ -135,8 +136,36 @@ export async function GET(req: NextRequest) {
 
       for (const m of lastMsgs) {
         const cid = String(m.conversationId);
-        if (previewByConvo[cid] !== undefined) continue; // first seen is newest due to ordering
+        if (previewByConvo[cid] !== undefined) continue; // newest wins due to ordering
         previewByConvo[cid] = cleanPreview(m.body);
+      }
+    }
+
+    // ---- ReadState overlay (1 query) ----
+    const readStateByConvo: Record<
+      string,
+      { lastReadAt: string; lastReadEventId: string | null } | null
+    > = {};
+
+    if (ids.length) {
+      const rs = await prisma.commReadState.findMany({
+        where: {
+          workspaceId: ws.workspaceId,
+          userId: ws.userId,
+          conversationId: { in: ids },
+        },
+        select: {
+          conversationId: true,
+          lastReadAt: true,
+          lastReadEventId: true,
+        },
+      });
+
+      for (const r of rs) {
+        readStateByConvo[String(r.conversationId)] = {
+          lastReadAt: r.lastReadAt.toISOString(),
+          lastReadEventId: r.lastReadEventId ?? null,
+        };
       }
     }
 
@@ -145,19 +174,28 @@ export async function GET(req: NextRequest) {
       // ensure UI always has a usable number even for legacy rows
       otherPartyE164: c.otherPartyE164 ?? resolveOtherPartyE164(c),
       lastMessagePreview: previewByConvo[c.id] ?? null,
+
+      // ✅ overlay readState so UI can compute unread dot reliably
+      readState: readStateByConvo[c.id] ?? null,
     }));
 
     const last = enriched[enriched.length - 1];
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       items: enriched,
       nextCursor:
         hasMore && last
           ? { cursorUpdatedAt: new Date(last.updatedAt).toISOString(), cursorId: last.id }
           : null,
     });
+
+    // ✅ prevent any intermediate caching layers from serving stale readState/unread
+    res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.headers.set("Pragma", "no-cache");
+
+    return res;
   } catch (err: any) {
-    console.error("sms/conversations GET error:", err);
+    console.error("comms/sms/conversations GET error:", err);
     return NextResponse.json(
       { error: String(err?.message ?? "Failed to load conversations.") },
       { status: 500 }

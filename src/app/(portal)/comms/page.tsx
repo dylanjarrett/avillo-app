@@ -18,6 +18,7 @@ import {
   normalizeApiError,
   createDraftConversation,
   searchCommsContacts,
+  markConversationRead,
   type CommsContactHit,
   type MyNumber,
 } from "@/components/comms/api";
@@ -66,8 +67,30 @@ export default function Page() {
   const listScrollRef = useRef<HTMLDivElement | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
 
+    // read-state
+  const lastMarkedReadRef = useRef<Record<string, string>>({});
+  const latestLoadedEventIdRef = useRef<Record<string, string>>({});
+  const markInFlightRef = useRef<Record<string, boolean>>({});
+
+    // scroll state
+  const isThreadAtBottomRef = useRef(true);
+
+  // ✅ force initial scroll-to-bottom on thread select (one-shot)
+  const forceScrollToBottomRef = useRef<string | null>(null);
+
   // Layout
   const [workspaceOpenMobile, setWorkspaceOpenMobile] = useState(false);
+
+  const POLL_MS = 1500;
+
+  const [isPageVisible, setIsPageVisible] = useState(true);
+
+  useEffect(() => {
+    const onVis = () => setIsPageVisible(!document.hidden);
+    onVis();
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
 
   // Mode
   const [mode, setMode] = useState<Mode>("chat");
@@ -227,6 +250,53 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (commsLocked) return;
+    if (!hasMyNumber) return;
+    if (!isPageVisible) return;
+
+    let alive = true;
+    let inFlight = false;
+
+    async function tick() {
+      if (inFlight) return;
+      inFlight = true;
+
+      try {
+        const items = await listConversations();
+        if (!alive) return;
+
+        const sorted = sortConvos(items);
+
+        setConvos((prev) => {
+          const prevById = new Map(prev.map((c) => [c.id, c]));
+
+          return sorted.map((c) => {
+            const old = prevById.get(c.id);
+            if (!old) return c;
+
+            return {
+              ...c,
+              unreadCount: c.unreadCount,
+            };
+          });
+        });
+      } catch (e: any) {
+        if (isAbortError(e)) return;
+        // silent on polling
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    tick();
+    const id = window.setInterval(tick, POLL_MS);
+
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [commsLocked, hasMyNumber, isPageVisible, POLL_MS]);
 
   const PREVIEW_MAX_CHARS = 30; // tweak to taste
 
@@ -241,6 +311,49 @@ export default function Page() {
     const safe = lastSpace > Math.floor(maxChars * 0.65) ? cut.slice(0, lastSpace) : cut;
 
     return safe.replace(/[.,;:!?]+$/, "").trimEnd() + "…";
+  }
+
+  function newestEventIdFromMessages(items: SmsMessage[]) {
+    // messages are already sorted ascending in your load effect,
+    // but we’ll be defensive and just use the last element.
+    const last = items[items.length - 1];
+    return last?.id ? String(last.id) : null;
+  }
+
+  async function markReadNow(conversationId: string, newestId: string) {
+    if (commsLocked) return;
+    if (!hasMyNumber) return;
+    if (!isPageVisible) return;
+
+    // only mark if we're still on that thread (use a stable snapshot)
+    const current = selectedId;
+    if (!current || current !== conversationId) return;
+
+    if (!newestId) return;
+
+    // dedupe
+    const prevMarked = lastMarkedReadRef.current[conversationId];
+    if (prevMarked === newestId) return;
+
+    // prevent parallel mark calls for the same convo
+    if (markInFlightRef.current[conversationId]) return;
+    markInFlightRef.current[conversationId] = true;
+
+    try {
+      await markConversationRead({ conversationId, lastReadEventId: newestId });
+
+      // commit locally
+      lastMarkedReadRef.current[conversationId] = newestId;
+
+      // clear dot in list (ONLY after success => no flicker)
+      setConvos((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, unreadCount: 0 } : c))
+      );
+    } catch {
+      // non-fatal; will retry next time we hit bottom
+    } finally {
+      markInFlightRef.current[conversationId] = false;
+    }
   }
 
   // ---------- Filter list ----------
@@ -296,107 +409,192 @@ export default function Page() {
     }
   }, [selectedId, filteredConvos.length]);
 
-  // ---------- Load messages ----------
   useEffect(() => {
-    if (commsLocked || mode !== "chat" || !activeConvo?.id) {
-      setMessages([]);
-      setMsgsError(null);
-      setLoadingMsgs(false);
-      return;
-    }
+    if (mode !== "chat") return;
+    if (!selectedId) return;
 
-    const controller = new AbortController();
+    const node = threadScrollRef.current;
+    if (!node) return;
 
-    async function load() {
-      try {
-        setLoadingMsgs(true);
-        setMsgsError(null);
+    const shouldForceOpen = forceScrollToBottomRef.current === selectedId;
 
-        const items = await listMessages(activeConvo.id, controller.signal);
+    // If we are force-opening but messages haven't rendered yet, DON'T consume the force flag.
+    const canConsumeForce = !loadingMsgs && messages.length > 0;
 
-        const toMs = (v: any) => {
-          const t = Date.parse(String(v ?? ""));
-          return Number.isNaN(t) ? 0 : t;
-        };
+    // If user isn't at bottom, only scroll on force-open
+    if (!isThreadAtBottomRef.current && !shouldForceOpen) return;
 
-        const sorted = items
-          .slice()
-          .sort((a, b) => {
-            const at = toMs(a.createdAt);
-            const bt = toMs(b.createdAt);
-            if (at === bt) return String(a.id).localeCompare(String(b.id));
-            return at - bt;
-          });
+    let cancelled = false;
 
-        setMessages(sorted);
-      } catch (e: any) {
-        if (isAbortError(e)) return;
+    const scrollToBottom = () => {
+      if (cancelled) return;
+      const el = threadScrollRef.current;
+      if (!el) return;
 
-        const msg = normalizeApiError(e, "Failed to load messages.");
-        setMsgsError(msg);
-        safeSetLockFromMessage(msg);
-      } finally {
-        setLoadingMsgs(false);
-      }
-    }
+      el.scrollTop = el.scrollHeight;
+      isThreadAtBottomRef.current = true;
+    };
 
-    load();
-    return () => controller.abort();
-  }, [activeConvo?.id, mode, commsLocked]);
+    // Wait a frame for DOM paint
+    requestAnimationFrame(() => {
+      scrollToBottom();
 
-  // Auto-scroll thread to bottom when messages change (Apple-y feel)
+      // One more frame for bubble/layout settling
+      requestAnimationFrame(() => {
+        scrollToBottom();
+
+        // ✅ Only clear force flag once we actually had messages rendered
+        if (shouldForceOpen && canConsumeForce) {
+          forceScrollToBottomRef.current = null;
+        }
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messages.length, selectedId, mode, loadingMsgs]);
+
+  // ✅ Track whether user is at bottom (NO "init" call that flips the flag to false)
   useEffect(() => {
     if (mode !== "chat") return;
     const el = threadScrollRef.current;
     if (!el) return;
-    const t = setTimeout(() => {
-      el.scrollTop = el.scrollHeight;
-    }, 0);
-    return () => clearTimeout(t);
-  }, [messages.length, activeConvo?.id, mode]);
 
-  // ---------- Load calls ----------
+    let lastAtBottom = true;
+
+    const onScroll = () => {
+      const threshold = 48;
+      const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const atBottom = remaining <= threshold;
+
+      isThreadAtBottomRef.current = atBottom;
+
+      // If we just crossed into bottom, mark read immediately
+      if (!lastAtBottom && atBottom && selectedId) {
+        const newestId = latestLoadedEventIdRef.current[selectedId];
+        if (newestId) void markReadNow(selectedId, newestId);
+      }
+
+      lastAtBottom = atBottom;
+    };
+
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [selectedId, mode]);
+
   useEffect(() => {
-    if (commsLocked || mode !== "calls" || !activeConvo?.id) {
-      setCalls([]);
-      setCallsError(null);
-      setLoadingCalls(false);
-      return;
-    }
+    if (commsLocked) return;
+    if (!hasMyNumber) return;
+    if (!isPageVisible) return;
+    if (!activeConvo?.id) return;
 
-    const controller = new AbortController();
+    let alive = true;
+    let inFlight = false;
+    let didFirst = false;
 
-    async function load() {
+    const toMs = (v: any) => {
+      const t = Date.parse(String(v ?? ""));
+      return Number.isNaN(t) ? 0 : t;
+    };
+
+    async function pollActive() {
+      if (inFlight) return;
+      inFlight = true;
+
+      const convoId = selectedId; // ✅ source of truth
+      if (!convoId) {
+        inFlight = false;
+        return;
+      }
+
+      // ✅ only the first run should toggle the loading spinner
+      const startedLoading = !didFirst;
+      if (startedLoading) {
+        didFirst = true;
+        if (mode === "chat") setLoadingMsgs(true);
+        else setLoadingCalls(true);
+      }
+
       try {
-        setLoadingCalls(true);
-        setCallsError(null);
+        if (mode === "chat") {
+          const items = await listMessages(convoId);
+          if (!alive) return;
+          if (selectedId !== convoId) return;
 
-        const items = await listCalls(activeConvo.id, controller.signal);
-        const sorted = items
-          .slice()
-          .sort((a, b) => {
-            const at = a.startedAt ? new Date(a.startedAt).getTime() : 0;
-            const bt = b.startedAt ? new Date(b.startedAt).getTime() : 0;
-            return bt - at;
+          const sorted = items
+            .slice()
+            .sort((a, b) => {
+              const at = toMs(a.createdAt);
+              const bt = toMs(b.createdAt);
+              if (at === bt) return String(a.id).localeCompare(String(b.id));
+              return at - bt;
+            });
+
+          setMessages((prev) => {
+            const prevLast = prev[prev.length - 1]?.id ?? null;
+            const nextLast = sorted[sorted.length - 1]?.id ?? null;
+            if (prev.length === sorted.length && prevLast === nextLast) return prev;
+            return sorted;
           });
 
-        setCalls(sorted);
+          const newestId = newestEventIdFromMessages(sorted);
+          if (newestId) {
+            // ✅ always record the newest loaded id, even if not at bottom
+            latestLoadedEventIdRef.current[convoId] = newestId;
+
+            // ✅ only mark read when actually at bottom
+            if (isThreadAtBottomRef.current) {
+              await markReadNow(convoId, newestId);
+            }
+          }
+
+          setMsgsError(null);
+        } else {
+          const items = await listCalls(convoId);
+          if (!alive) return;
+          if (selectedId !== convoId) return;
+
+          const sorted = items
+            .slice()
+            .sort((a, b) => {
+              const at = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+              const bt = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+              return bt - at;
+            });
+
+          setCalls((prev) => {
+            const prevFirst = prev[0]?.id ?? null;
+            const nextFirst = sorted[0]?.id ?? null;
+            if (prev.length === sorted.length && prevFirst === nextFirst) return prev;
+            return sorted;
+          });
+
+          setCallsError(null);
+        }
       } catch (e: any) {
         if (isAbortError(e)) return;
-
-        const msg = normalizeApiError(e, "Failed to load calls.");
-        setCallsError(msg);
-        setCalls([]);
-
-        safeSetLockFromMessage(msg);
+        // silent on polling
       } finally {
-        setLoadingCalls(false);
+        if (!alive) return;
+
+        if (startedLoading) {
+          if (mode === "chat") setLoadingMsgs(false);
+          else setLoadingCalls(false);
+        }
+
+        inFlight = false;
       }
     }
 
-    load();
-    return () => controller.abort();
-  }, [activeConvo?.id, mode, commsLocked]);
+    pollActive();
+    const id = window.setInterval(pollActive, POLL_MS);
+
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [selectedId, mode, commsLocked, hasMyNumber, isPageVisible, POLL_MS]);
 
   async function refreshConversationsAndReselectByPhone(targetPhone: string) {
     const normalized = normalizePhone(targetPhone || "");
@@ -640,16 +838,21 @@ useEffect(() => {
   }
 
   function onPickConvo(id: string) {
+    forceScrollToBottomRef.current = id;
+    isThreadAtBottomRef.current = true;
+
     setSelectedId(id);
+
+    setMessages([]);
     setMsgsError(null);
     setCallsError(null);
     setError(null);
 
-    // ✅ Mobile: open detail immediately on tap (don’t rely on useEffect timing)
+    if (mode === "chat") setLoadingMsgs(true);
+    else setLoadingCalls(true);
+
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       setWorkspaceOpenMobile(true);
-
-      // wait a tick so <main> becomes visible, then scroll + lock
       requestAnimationFrame(() => {
         scrollToWorkspace();
       });
@@ -685,7 +888,7 @@ useEffect(() => {
     }
 
     try {
-      const res = await fetch(`/api/sms/conversations/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/comms/sms/conversations/${id}`, { method: "DELETE" });
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -996,11 +1199,6 @@ useEffect(() => {
                             >
                               {initials(c.title || "U")}
                             </div>
-                            {typeof c.unreadCount === "number" && c.unreadCount > 0 ? (
-                              <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500/90 px-1.5 text-[10px] font-semibold text-slate-950">
-                                {c.unreadCount > 99 ? "99+" : c.unreadCount}
-                              </span>
-                            ) : null}
                           </div>
 
                           <div className="min-w-0 flex-1">
@@ -1009,9 +1207,14 @@ useEffect(() => {
                                 {c.title || "Unknown"}
                               </p>
 
-                              <p className="shrink-0 text-[10px] leading-none tabular-nums text-[var(--avillo-cream-muted)]">
-                                {formatListTimestamp(c.lastMessageAt)}
-                              </p>
+                              <div className="shrink-0 flex items-center gap-2">
+                                {typeof c.unreadCount === "number" && c.unreadCount > 0 ? (
+                                  <span className="h-2.5 w-2.5 rounded-full bg-yellow-200 shadow-[0_0_10px_rgba(253,224,71,0.95),0_0_26px_rgba(251,146,60,0.65)]" />
+                                ) : null}
+                                <p className="text-[10px] leading-none tabular-nums text-[var(--avillo-cream-muted)]">
+                                  {formatListTimestamp(c.lastMessageAt)}
+                                </p>
+                              </div>
                             </div>
 
                             <p className="mt-0.5 truncate text-[11px] text-[var(--avillo-cream-muted)]">
@@ -1331,7 +1534,7 @@ function ThreadApple({
       {/* ✅ Scroll region: min-h-0 + flex-1 is the whole trick */}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-4 overscroll-contain"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-0 border-y-[15px] border-transparent"
       >
         {loading && (
           <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">

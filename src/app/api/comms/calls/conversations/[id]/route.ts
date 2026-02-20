@@ -1,4 +1,4 @@
-// src/app/api/calls/conversations/[id]/route.ts
+// src/app/api/comms/calls/conversations/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace } from "@/lib/workspace";

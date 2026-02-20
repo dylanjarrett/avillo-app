@@ -70,10 +70,7 @@ async function safeParseResponse(res: Response): Promise<{ data: any; text: stri
   }
 }
 
-function extractErrorMessage(
-  payload: { data: any; text: string | null },
-  res: Response
-) {
+function extractErrorMessage(payload: { data: any; text: string | null }, res: Response) {
   const data = payload.data ?? {};
   const text = payload.text;
 
@@ -108,38 +105,48 @@ async function requestJson<T>(
    Shapers
 ============================================================ */
 
+function parseDateSafe(v: any): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function computeUnreadCount(raw: any): number {
+  // unread dot goal: show unread when there's inbound activity after user's lastReadAt
+  const lastInboundAt = parseDateSafe(raw?.lastInboundAt ?? null);
+  if (!lastInboundAt) return 0;
+
+  const lastReadAt = parseDateSafe(raw?.readState?.lastReadAt ?? null);
+  if (!lastReadAt) return 1; // never read => unread
+
+  return lastInboundAt.getTime() > lastReadAt.getTime() ? 1 : 0;
+}
+
 function toConversation(raw: any): Conversation | null {
   const id = String(raw?.id ?? "").trim();
   if (!id) return null;
 
   const contact = raw?.contact ?? null;
-  const contactName = [contact?.firstName, contact?.lastName]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+  const contactName = [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim();
 
-  const phone =
-    raw?.otherPartyE164 ??
-    contact?.phone ??
-    null;
+  const phone = raw?.otherPartyE164 ?? contact?.phone ?? null;
 
-  const title =
-    raw?.displayName ||
-    contactName ||
-    phone ||
-    "Unknown";
+  const title = raw?.displayName || contactName || phone || "Unknown";
 
   const lastMessageAt = raw?.lastMessageAt ?? null;
 
-  const lastMessagePreview =
-    raw?.lastMessagePreview ??
-    raw?.preview ??
-    raw?.lastMessageBody ??
-    null;
+  const lastMessagePreview = raw?.lastMessagePreview ?? raw?.preview ?? raw?.lastMessageBody ?? null;
 
-  const isDraft =
-    !lastMessageAt &&
-    !lastMessagePreview;
+  const isDraft = !lastMessageAt && !lastMessagePreview;
+
+  const readState =
+    raw?.readState && typeof raw.readState === "object"
+      ? {
+          lastReadAt: String(raw.readState.lastReadAt ?? ""),
+          lastReadEventId:
+            raw.readState.lastReadEventId == null ? null : String(raw.readState.lastReadEventId),
+        }
+      : null;
 
   return {
     id,
@@ -150,7 +157,13 @@ function toConversation(raw: any): Conversation | null {
     lastMessagePreview,
     lastMessageAt,
     updatedAt: raw?.updatedAt ?? null,
-    unreadCount: typeof raw?.unreadCount === "number" ? raw.unreadCount : 0,
+
+    // ✅ unread dot driver (computed from API overlay: lastInboundAt + readState.lastReadAt)
+    unreadCount: computeUnreadCount(raw),
+
+    // ✅ passthrough (optional, but matches your type and helps debugging/UI)
+    readState,
+
     isDraft,
   };
 }
@@ -158,32 +171,17 @@ function toConversation(raw: any): Conversation | null {
 function toMessage(raw: any, conversationId: string): SmsMessage | null {
   if (!raw) return null;
 
-  const id = String(
-    raw.id ??
-    raw.twilioSid ??
-    raw.sid ??
-    ""
-  ).trim();
-
+  const id = String(raw.id ?? raw.twilioSid ?? raw.sid ?? "").trim();
   if (!id) return null;
 
-  const createdAt =
-    raw.createdAt ??
-    raw.sentAt ??
-    raw.receivedAt ??
-    new Date().toISOString();
+  const createdAt = raw.createdAt ?? raw.sentAt ?? raw.receivedAt ?? new Date().toISOString();
 
   const dir = String(raw.direction ?? "").toUpperCase();
 
   return {
     id,
     conversationId,
-    direction:
-      dir === "INBOUND"
-        ? "INBOUND"
-        : dir === "OUTBOUND"
-          ? "OUTBOUND"
-          : "SYSTEM",
+    direction: dir === "INBOUND" ? "INBOUND" : dir === "OUTBOUND" ? "OUTBOUND" : "SYSTEM",
     body: String(raw.body ?? ""),
     from: raw.fromNumber ?? null,
     to: raw.toNumber ?? null,
@@ -215,20 +213,16 @@ function toCall(raw: any, conversationId: string): CallItem | null {
    Public API
 ============================================================ */
 
-export async function listConversations(
-  signal?: AbortSignal
-): Promise<Conversation[]> {
+export async function listConversations(signal?: AbortSignal): Promise<Conversation[]> {
   try {
-    const data = await requestJson<any>("/api/sms/conversations", {
+    const data = await requestJson<any>("/api/comms/sms/conversations", {
       method: "GET",
       cache: "no-store",
       signal,
     });
 
     const raw = data?.items ?? data?.conversations ?? [];
-    return (Array.isArray(raw) ? raw : [])
-      .map(toConversation)
-      .filter(Boolean) as Conversation[];
+    return (Array.isArray(raw) ? raw : []).map(toConversation).filter(Boolean) as Conversation[];
   } catch (err) {
     if (isAbortError(err)) return [];
     throw err;
@@ -256,7 +250,7 @@ export async function searchCommsContacts(input: {
 
   try {
     const data = await requestJson<any>(
-      `/api/sms/conversations/contacts?q=${encodeURIComponent(q)}&take=${take}`,
+      `/api/comms/sms/conversations/contacts?q=${encodeURIComponent(q)}&take=${take}`,
       {
         method: "GET",
         cache: "no-store",
@@ -287,7 +281,7 @@ export async function createDraftConversation(input: {
   listingId?: string | null;
 }): Promise<Conversation> {
   try {
-    const data = await requestJson<any>("/api/sms/conversations/draft", {
+    const data = await requestJson<any>("/api/comms/sms/conversations/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input ?? {}),
@@ -308,19 +302,13 @@ export async function createDraftConversation(input: {
   }
 }
 
-export async function listMessages(
-  conversationId: string,
-  signal?: AbortSignal
-): Promise<SmsMessage[]> {
+export async function listMessages(conversationId: string, signal?: AbortSignal): Promise<SmsMessage[]> {
   try {
-    const data = await requestJson<any>(
-      `/api/sms/conversations/${conversationId}/messages`,
-      {
-        method: "GET",
-        cache: "no-store",
-        signal,
-      }
-    );
+    const data = await requestJson<any>(`/api/comms/sms/conversations/${conversationId}/messages`, {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    });
 
     const raw = data?.items ?? data?.messages ?? [];
     return (Array.isArray(raw) ? raw : [])
@@ -340,7 +328,7 @@ export async function sendSms(input: {
   listingId?: string | null;
   phoneNumberId?: string | null;
 }) {
-  return requestJson<any>("/api/sms/send", {
+  return requestJson<any>("/api/comms/sms/send", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -354,26 +342,20 @@ export async function startCall(input: {
   listingId?: string | null;
   phoneNumberId?: string | null;
 }) {
-  return requestJson<any>("/api/calls/start", {
+  return requestJson<any>("/api/comms/calls/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
 
-export async function listCalls(
-  conversationId: string,
-  signal?: AbortSignal
-): Promise<CallItem[]> {
+export async function listCalls(conversationId: string, signal?: AbortSignal): Promise<CallItem[]> {
   try {
-    const data = await requestJson<any>(
-      `/api/calls/conversations/${conversationId}`,
-      {
-        method: "GET",
-        cache: "no-store",
-        signal,
-      }
-    );
+    const data = await requestJson<any>(`/api/comms/calls/conversations/${conversationId}`, {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    });
 
     const raw = data?.items ?? data?.calls ?? [];
     return (Array.isArray(raw) ? raw : [])
@@ -386,6 +368,38 @@ export async function listCalls(
 }
 
 /* ============================================================
+   Read state
+============================================================ */
+
+export type CommsReadState = {
+  id: string;
+  conversationId: string;
+  userId: string;
+  lastReadEventId: string | null;
+  lastReadAt: string;
+};
+
+export async function markConversationRead(input: {
+  conversationId: string;
+  lastReadEventId?: string | null;
+}) {
+  const conversationId = String(input.conversationId ?? "").trim();
+  if (!conversationId) throw new Error("Missing conversationId");
+
+  return requestJson<{ ok: true; readState: CommsReadState }>(
+    `/api/comms/conversations/${conversationId}/read`,
+    {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lastReadEventId: input.lastReadEventId ?? null,
+      }),
+    }
+  );
+}
+
+/* ============================================================
    Phone helpers
 ============================================================ */
 
@@ -395,17 +409,12 @@ export type MyNumber = {
   status: string;
 };
 
-export async function getMyNumber(
-  signal?: AbortSignal
-): Promise<MyNumber | null> {
-  const data = await requestJson<any>(
-    "/api/twilio/number/me",
-    {
-      method: "GET",
-      cache: "no-store",
-      signal,
-    }
-  );
+export async function getMyNumber(signal?: AbortSignal): Promise<MyNumber | null> {
+  const data = await requestJson<any>("/api/twilio/number/me", {
+    method: "GET",
+    cache: "no-store",
+    signal,
+  });
 
   if (!data?.id || !data?.e164) return null;
 
@@ -416,17 +425,12 @@ export async function getMyNumber(
   };
 }
 
-export async function provisionMyNumber(input?: {
-  areaCode?: string | null;
-}) {
-  return requestJson<any>(
-    "/api/twilio/number/provision",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        areaCode: input?.areaCode ?? null,
-      }),
-    }
-  );
+export async function provisionMyNumber(input?: { areaCode?: string | null }) {
+  return requestJson<any>("/api/twilio/number/provision", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      areaCode: input?.areaCode ?? null,
+    }),
+  });
 }
