@@ -841,7 +841,12 @@ useEffect(() => {
     forceScrollToBottomRef.current = id;
     isThreadAtBottomRef.current = true;
 
-    setSelectedId(id);
+    if (selectedId === id) {
+      setSelectedId(null);
+      setTimeout(() => setSelectedId(id), 0);
+    } else {
+      setSelectedId(id);
+    }
 
     setMessages([]);
     setMsgsError(null);
@@ -860,6 +865,22 @@ useEffect(() => {
   }
 
   function backToList() {
+    // ✅ Treat mobile back as "close thread" so next tap always triggers a fresh load
+    setSelectedId(null);
+
+    // Reset thread UI so we never strand "Loading…"
+    setMessages([]);
+    setCalls([]);
+    setMsgsError(null);
+    setCallsError(null);
+    setLoadingMsgs(false);
+    setLoadingCalls(false);
+
+    // Reset scroll flags
+    forceScrollToBottomRef.current = null;
+    isThreadAtBottomRef.current = true;
+
+    // Visual transition back to list
     scrollBackToListHeader(() => {});
     setWorkspaceOpenMobile(false);
   }
