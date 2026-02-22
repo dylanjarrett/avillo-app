@@ -4,14 +4,13 @@
 import PageHeader from "@/components/layout/page-header";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useCommsMobileWorkspaceScroll } from "@/hooks/useCommsMobileWorkspaceScroll";
-
+import { CallsPanel } from "@/components/comms/calls";
 import type { CallItem, Conversation, SmsMessage } from "@/components/comms/comms-types";
 import {
   listCalls,
   listConversations,
   listMessages,
   sendSms,
-  startCall,
   getMyNumber,
   provisionMyNumber,
   looksLikeEntitlementError,
@@ -695,7 +694,7 @@ useEffect(() => {
 
       const optimistic: SmsMessage = {
         id: `optimistic-${Date.now()}`,
-        conversationId: activeConvo.isDraft ? "draft" : activeConvo.id,
+        conversationId: activeConvo.id,
         direction: "OUTBOUND",
         body,
         from: null,
@@ -731,41 +730,6 @@ useEffect(() => {
     }
   }
 
-  async function handleStartCallFor(convo: Conversation) {
-    if (!convo || commsLocked) return;
-
-    if (!hasMyNumber) {
-      setCallsError("You need a phone number before you can place calls.");
-      return;
-    }
-
-    const to = normalizePhone(convo.phone || convo.subtitle || "");
-    if (!to) {
-      setCallsError("This thread doesn’t have a destination phone number yet.");
-      return;
-    }
-
-    try {
-      setCallsError(null);
-
-      await startCall({
-        to,
-        conversationId: convo.isDraft ? null : convo.id,
-      });
-
-      await refreshConversationsAndReselectByPhone(to);
-      setMode("calls");
-    } catch (e: any) {
-      const msg = normalizeApiError(e, "Failed to start call.");
-      setCallsError(msg);
-      safeSetLockFromMessage(msg);
-    }
-  }
-
-  async function handleStartCall() {
-    if (!activeConvo) return;
-    return handleStartCallFor(activeConvo);
-  }
 
   function upsertConvo(list: Conversation[], convo: Conversation) {
     const next = list.filter((c) => c.id !== convo.id);
@@ -1259,7 +1223,7 @@ useEffect(() => {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 onPickConvo(c.id);
-                                setTimeout(() => void handleStartCallFor(c), 0);
+                                setTimeout(() => setMode("calls"), 0);
                               }}
                               disabled={actionsDisabled || deleting}
                             >
@@ -1328,7 +1292,7 @@ useEffect(() => {
 
                   <IconButton
                     label="Call"
-                    onClick={handleStartCall}
+                    onClick={() => setMode("calls")}
                     disabled={!activeConvo || actionsDisabled}
                   >
                     ☎︎
@@ -1354,13 +1318,21 @@ useEffect(() => {
                     onSend={handleSend}
                   />
                 ) : (
-                  <CallsApple
+                  <CallsPanel
                     isLocal={activeIsDraft}
                     loading={loadingCalls}
                     error={callsError}
                     calls={calls}
                     disabled={actionsDisabled}
-                    onStartCall={handleStartCall}
+                    activeConvo={activeConvo}
+                    hasMyNumber={hasMyNumber}
+                    commsLocked={commsLocked}
+                    onStartCallFallback={() => {
+                      if (commsLocked) setCallsError("Comms is locked.");
+                      else if (!hasMyNumber) setCallsError("You need a phone number before you can place calls.");
+                      else if (!activeConvo) setCallsError("Select a conversation first.");
+                      else setCallsError("Failed to start call.");
+                    }}
                   />
                 )}
               </div>
@@ -1655,94 +1627,6 @@ function ThreadApple({
             {sending ? "…" : "Send"}
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function CallsApple({
-  isLocal,
-  loading,
-  error,
-  calls,
-  disabled,
-  onStartCall,
-}: {
-  isLocal: boolean;
-  loading: boolean;
-  error: string | null;
-  calls: CallItem[];
-  disabled: boolean;
-  onStartCall: () => void;
-}) {
-  return (
-    // ✅ Same structure: header(s) pinned, list scrolls
-    <div className="h-full min-h-0 rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)] flex flex-col">
-      {(error || isLocal) && (
-        <div className="shrink-0 border-b border-slate-800/60 px-4 py-3">
-          {error && (
-            <div className="rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[12px] text-rose-50">
-              {error}
-            </div>
-          )}
-          {isLocal && !error && (
-            <div className="rounded-2xl border border-amber-200/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-50">
-              Draft thread — place the first call to create it.
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="shrink-0 flex items-center justify-between border-b border-slate-800/60 px-4 py-3">
-        <p className="text-[13px] font-semibold text-slate-50">Calls</p>
-        <button
-          type="button"
-          onClick={onStartCall}
-          disabled={disabled}
-          className={cx(
-            "rounded-full px-4 py-2 text-[12px] font-semibold",
-            disabled
-              ? "border border-slate-800/70 bg-slate-950/40 text-[var(--avillo-cream-muted)] opacity-70"
-              : "border border-emerald-200/30 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
-          )}
-        >
-          Call
-        </button>
-      </div>
-
-      {/* ✅ Scroll region */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 overscroll-contain">
-        {loading && (
-          <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
-            Loading…
-          </div>
-        )}
-
-        {!loading && calls.length === 0 && (
-          <div className="py-16 text-center text-[12px] text-[var(--avillo-cream-muted)]">
-            No calls yet.
-          </div>
-        )}
-
-        {!loading &&
-          calls.slice(0, 100).map((c) => {
-            const dir = c.direction === "INBOUND" ? "Inbound" : "Outbound";
-            const status = String(c.status || "logged").toLowerCase();
-            const when = formatWhen(c.startedAt || c.createdAt || null);
-
-            return (
-              <div
-                key={c.id}
-                className="mb-2 rounded-2xl border border-slate-800/60 bg-slate-950/55 px-4 py-3"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[13px] font-semibold text-slate-50">{dir} call</p>
-                  <span className="text-[11px] text-[var(--avillo-cream-muted)]">{when}</span>
-                </div>
-                <p className="mt-1 text-[12px] text-[var(--avillo-cream-muted)]">{status}</p>
-              </div>
-            );
-          })}
       </div>
     </div>
   );
