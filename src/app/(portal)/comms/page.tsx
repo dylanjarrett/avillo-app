@@ -254,6 +254,7 @@ export default function Page() {
     if (commsLocked) return;
     if (!hasMyNumber) return;
     if (!isPageVisible) return;
+    if (deletingId) return; // ✅ pause polling during delete to prevent flash
 
     let alive = true;
     let inFlight = false;
@@ -296,7 +297,7 @@ export default function Page() {
       alive = false;
       window.clearInterval(id);
     };
-  }, [commsLocked, hasMyNumber, isPageVisible, POLL_MS]);
+  }, [commsLocked, hasMyNumber, isPageVisible, deletingId, POLL_MS]);
 
   const PREVIEW_MAX_CHARS = 30; // tweak to taste
 
