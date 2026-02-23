@@ -39,6 +39,7 @@ type AccountMeResponse =
         role: "USER" | "ADMIN";
         brokerage: string;
         phone: string;
+        avilloPhone: string | null; 
         defaultWorkspaceId: string | null;
         createdAt: string;
       };
@@ -102,6 +103,8 @@ export default function AccountPage() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [savedProfile, setSavedProfile] = useState<Profile | null>(null);
+
+  const [avilloPhone, setAvilloPhone] = useState<string | null>(null); 
 
   const [workspaceName, setWorkspaceName] = useState<string>("");
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType | null>(null);
@@ -186,6 +189,7 @@ export default function AccountPage() {
           setNameInput(nextProfile.name ?? "");
           setBrokerageInput(nextProfile.brokerage ?? "");
           setPhoneInput(nextProfile.phone ?? "");
+          setAvilloPhone(d.user.avilloPhone ?? null);
 
           setWorkspaceName(d.workspace?.name ?? "");
           setWorkspaceType(d.workspace?.type ?? null);
@@ -560,8 +564,22 @@ export default function AccountPage() {
                 </div>
 
                 <div>
+                  <label className="block text-[11px] font-semibold text-slate-200/90">Avillo business phone</label>
+                  <input
+                    type="tel"
+                    value={avilloPhone ?? ""}
+                    readOnly
+                    className="mt-1 w-full cursor-not-allowed rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs text-slate-400 outline-none ring-0"
+                    placeholder="Not provisioned yet"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-400/90">
+                    This is the number clients will see for SMS and calls.
+                  </p>
+                </div>
+
+                <div>
                   <label className="block text-[11px] font-semibold text-slate-200/90">
-                    Phone (for “Run now” SMS tests)
+                    Personal phone (call bridging only)
                   </label>
                   <input
                     type="tel"
@@ -596,7 +614,9 @@ export default function AccountPage() {
                       {phoneSuccess && <p className="text-emerald-300">{phoneSuccess}</p>}
                       {phoneError && <p className="text-rose-300">{phoneError}</p>}
                       {!phoneSuccess && !phoneError && (
-                        <p className="text-slate-400/90">This updates immediately and is used only for test sends.</p>
+                        <p className="text-slate-400/90">
+                          Used <span className="font-semibold">only</span> to bridge inbound/outbound calls. Clients never see this number.
+                        </p>
                       )}
                     </div>
 

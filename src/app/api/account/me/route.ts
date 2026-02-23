@@ -22,7 +22,7 @@ export async function GET() {
 
     const { prisma } = await import("@/lib/prisma");
 
-    const [user, workspace, usedSeats, pendingInvites] = await Promise.all([
+    const [user, workspace, usedSeats, pendingInvites, avilloNumber] = await Promise.all([
       prisma.user.findUnique({
         where: { id: userId },
         select: {
@@ -43,7 +43,6 @@ export async function GET() {
           name: true,
           type: true,
 
-          // Billing source-of-truth
           accessLevel: true,
           plan: true,
           subscriptionStatus: true,
@@ -72,6 +71,16 @@ export async function GET() {
           expiresAt: { gt: new Date() },
         },
       }),
+
+      prisma.userPhoneNumber.findFirst({
+        where: {
+          workspaceId,
+          assignedToUserId: userId,
+          status: "ACTIVE",
+        },
+        select: { e164: true },
+        orderBy: { createdAt: "desc" },
+      }),
     ]);
 
     if (!user) return noStore({ error: "Account not found" }, 404);
@@ -93,9 +102,10 @@ export async function GET() {
         id: user.id,
         name: user.name ?? "",
         email: user.email,
-        role: user.role, // platform role (USER/ADMIN)
+        role: user.role,
         brokerage: user.brokerage ?? "",
         phone: user.phone ?? "",
+        avilloPhone: avilloNumber?.e164 ?? null, 
         defaultWorkspaceId: user.defaultWorkspaceId ?? null,
         createdAt: user.createdAt,
       },

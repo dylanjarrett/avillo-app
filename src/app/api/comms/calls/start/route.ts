@@ -79,6 +79,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // ✅ HARD GUARD: prevent calling your own forwarding phone (double-call bug)
+  if (agentPhone === to) {
+    return NextResponse.json(
+      {
+        error:
+          "That number is your personal forwarding phone. Use a different destination number.",
+      },
+      { status: 400 }
+    );
+  }
+
   const now = new Date();
 
   // Ensure conversation (if not provided)

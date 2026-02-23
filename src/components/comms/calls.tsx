@@ -1,7 +1,7 @@
 // src/components/comms/calls.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { create } from "zustand";
 
 import type { CallItem, Conversation } from "@/components/comms/comms-types";
@@ -42,10 +42,6 @@ export type ActiveCall = {
   connectedAt?: string;
   endedAt?: string;
 
-  muted: boolean;
-  keypadOpen: boolean;
-  notesOpen: boolean;
-
   minimized: boolean;
   lastError?: string | null;
 
@@ -71,10 +67,6 @@ type ActiveCallStore = {
   minimize: () => void;
   restore: () => void;
 
-  toggleMute: () => void;
-  toggleKeypad: () => void;
-  toggleNotes: () => void;
-
   setPhase: (phase: CallPhase, patch?: Partial<ActiveCall>) => void;
   setError: (msg: string) => void;
 
@@ -92,23 +84,6 @@ export const useActiveCallStore = create<ActiveCallStore>((set, get) => ({
     set((s) => (s.active ? { active: { ...s.active, minimized: true } } : s)),
   restore: () =>
     set((s) => (s.active ? { active: { ...s.active, minimized: false } } : s)),
-
-  toggleMute: () =>
-    set((s) =>
-      s.active ? { active: { ...s.active, muted: !s.active.muted } } : s
-    ),
-  toggleKeypad: () =>
-    set((s) =>
-      s.active
-        ? { active: { ...s.active, keypadOpen: !s.active.keypadOpen } }
-        : s
-    ),
-  toggleNotes: () =>
-    set((s) =>
-      s.active
-        ? { active: { ...s.active, notesOpen: !s.active.notesOpen } }
-        : s
-    ),
 
   setPhase: (phase, patch) =>
     set((s) => {
@@ -132,14 +107,7 @@ export const useActiveCallStore = create<ActiveCallStore>((set, get) => ({
   endLocal: () =>
     set((s) => {
       if (!s.active) return s;
-      return {
-        active: {
-          ...s.active,
-          phase: "ended",
-          endedAt: new Date().toISOString(),
-          minimized: false,
-        },
-      };
+      return { active: null };
     }),
 
   beginOutgoingCall: async ({ convo, hasMyNumber, commsLocked }) => {
@@ -166,16 +134,13 @@ export const useActiveCallStore = create<ActiveCallStore>((set, get) => ({
           displayName: convo.title || "Unknown",
           phase: "starting",
           startedAt: now,
-          muted: false,
-          keypadOpen: false,
-          notesOpen: false,
           minimized: false,
           lastError: null,
           durationSec: 0,
         },
       });
 
-      // IMPORTANT: update your startCall() to return { callId } (or { id })
+      // startCall() should return { callId } (or { id })
       const res: any = await startCall({
         to,
         conversationId: convo.isDraft ? null : convo.id,
@@ -222,9 +187,9 @@ function mapBackendStatusToPhase(statusRaw: string | null | undefined): CallPhas
 }
 
 function phaseLine(active: ActiveCall) {
-  if (active.phase === "starting") return "Calling…";
+  if (active.phase === "starting") return "Calling your phone…";
   if (active.phase === "ringing") return "Ringing…";
-  if (active.phase === "connecting") return "Connecting…";
+  if (active.phase === "connecting") return "Dialing the recipient…";
   if (active.phase === "connected") return "Connected";
   if (active.phase === "ended") return "Call ended";
   if (active.phase === "failed") return "Call failed";
@@ -345,76 +310,20 @@ function useCallTimer() {
 }
 
 /* ---------------------------------------
- * UI building blocks
- * ------------------------------------- */
-
-type CallControlButtonProps = {
-  label: string;
-  active?: boolean;
-  disabled?: boolean;
-  danger?: boolean;
-  onClick?: React.MouseEventHandler<HTMLButtonElement>;
-};
-
-function CallControlButton({
-  label,
-  active = false,
-  disabled = false,
-  danger = false,
-  onClick,
-}: CallControlButtonProps) {
-  const base =
-    "h-11 w-11 rounded-full border text-[12px] font-semibold transition-colors";
-
-  const dangerCls =
-    "border-rose-300/30 bg-rose-500/10 text-rose-100 hover:bg-rose-500/15";
-
-  const activeCls = "border-slate-200/60 bg-slate-50 text-slate-950";
-
-  const idleCls =
-    "border-slate-800/70 bg-slate-950/55 text-[var(--avillo-cream-soft)] hover:bg-slate-900/55 hover:border-slate-700/70";
-
-  const disabledCls =
-    "opacity-50 cursor-not-allowed hover:bg-transparent hover:border-slate-800/70";
-
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-      disabled={disabled}
-      className={cx(
-        base,
-        danger ? dangerCls : active ? activeCls : idleCls,
-        disabled ? disabledCls : ""
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
-/* ---------------------------------------
  * Active call surfaces
  * ------------------------------------- */
 
-function ActiveCallOverlay() {
+export function ActiveCallOverlay() {
   useCallStatusPolling();
   useCallTimer();
 
   const active = useActiveCallStore((s) => s.active);
   const minimize = useActiveCallStore((s) => s.minimize);
-  const toggleMute = useActiveCallStore((s) => s.toggleMute);
-  const toggleKeypad = useActiveCallStore((s) => s.toggleKeypad);
-  const toggleNotes = useActiveCallStore((s) => s.toggleNotes);
   const endLocal = useActiveCallStore((s) => s.endLocal);
 
   if (!active || active.minimized) return null;
 
   const showTimer = active.phase === "connected";
-  const controlsDisabled = active.phase === "ended" || active.phase === "failed";
-  const canToggleControls = active.phase === "connected" && !controlsDisabled;
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/55 backdrop-blur-sm">
@@ -430,13 +339,23 @@ function ActiveCallOverlay() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={minimize}
-            className="rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-1.5 text-[12px] font-semibold text-[var(--avillo-cream-soft)] hover:bg-slate-900/55"
-          >
-            Minimize
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={minimize}
+              className="rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-1.5 text-[12px] font-semibold text-[var(--avillo-cream-soft)] hover:bg-slate-900/55"
+            >
+              Minimize
+            </button>
+
+            <button
+              type="button"
+              onClick={() => endLocal()}
+              className="rounded-xl border border-rose-300/30 bg-rose-500/10 px-3 py-1.5 text-[12px] font-semibold text-rose-100 hover:bg-rose-500/15"
+            >
+              End
+            </button>
+          </div>
         </div>
 
         {/* Status */}
@@ -452,58 +371,12 @@ function ActiveCallOverlay() {
             </div>
           )}
         </div>
-
-        {/* Controls */}
-        <div className="px-5 pb-5">
-          <div className="grid grid-cols-4 gap-3">
-            <CallControlButton
-              label="Mute"
-              active={active.muted}
-              onClick={toggleMute}
-              disabled={!canToggleControls}
-            />
-            <CallControlButton
-              label="Keypad"
-              active={active.keypadOpen}
-              onClick={toggleKeypad}
-              disabled={!canToggleControls}
-            />
-            <CallControlButton
-              label="Notes"
-              active={active.notesOpen}
-              onClick={toggleNotes}
-              disabled={!canToggleControls}
-            />
-            <CallControlButton
-              label="End"
-              danger
-              onClick={() => endLocal()}
-              disabled={controlsDisabled}
-            />
-          </div>
-
-          {(active.keypadOpen || active.notesOpen) && (
-            <div className="mt-4 rounded-2xl border border-slate-800/60 bg-slate-950/55 p-4">
-              {active.keypadOpen ? (
-                <p className="text-[12px] text-[var(--avillo-cream-muted)]">
-                  Keypad (next): DTMF + digit entry.
-                </p>
-              ) : null}
-
-              {active.notesOpen ? (
-                <p className="mt-2 text-[12px] text-[var(--avillo-cream-muted)]">
-                  Notes (next): quick note → Task / Pin / CRMActivity.
-                </p>
-              ) : null}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
 }
 
-function MiniCallPill() {
+export function MiniCallPill() {
   const active = useActiveCallStore((s) => s.active);
   const restore = useActiveCallStore((s) => s.restore);
   const endLocal = useActiveCallStore((s) => s.endLocal);
@@ -583,6 +456,9 @@ export function CallsPanel({
   const active = useActiveCallStore((s) => s.active);
   const beginOutgoingCall = useActiveCallStore((s) => s.beginOutgoingCall);
 
+  const isCalling =
+    !!active && active.phase !== "ended" && active.phase !== "failed";
+
   const canStart =
     !!activeConvo &&
     !disabled &&
@@ -607,10 +483,6 @@ export function CallsPanel({
 
   return (
     <div className="relative h-full min-h-0 rounded-[26px] border border-slate-800/60 bg-slate-950/45 shadow-[0_0_40px_rgba(0,0,0,0.25)] flex flex-col overflow-hidden">
-      {/* In-call surfaces */}
-      <ActiveCallOverlay />
-      <MiniCallPill />
-
       {(error || isLocal) && (
         <div className="shrink-0 border-b border-slate-800/60 px-4 py-3">
           {!!error && (
@@ -641,7 +513,7 @@ export function CallsPanel({
               : "border border-emerald-200/30 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
           )}
         >
-          Call
+          {isCalling ? "Calling…" : "Call"}
         </button>
       </div>
 

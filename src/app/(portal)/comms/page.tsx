@@ -4,7 +4,7 @@
 import PageHeader from "@/components/layout/page-header";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useCommsMobileWorkspaceScroll } from "@/hooks/useCommsMobileWorkspaceScroll";
-import { CallsPanel } from "@/components/comms/calls";
+import { CallsPanel, ActiveCallOverlay, MiniCallPill } from "@/components/comms/calls";
 import type { CallItem, Conversation, SmsMessage } from "@/components/comms/comms-types";
 import {
   listCalls,
@@ -923,6 +923,8 @@ useEffect(() => {
             "h-[min(820px,calc(100dvh-160px))] lg:h-[min(860px,calc(100dvh-140px))]"
           )}
         >
+          <ActiveCallOverlay />
+          <MiniCallPill />
           {/* Top chrome */}
           <div className="shrink-0 flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/70 px-4 py-3">
             <div className="min-w-0">
