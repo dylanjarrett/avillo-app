@@ -399,6 +399,69 @@ export async function markConversationRead(input: {
   );
 }
 
+
+/* ============================================================
+   Status + account helpers
+============================================================ */
+
+export type CommsStatus = {
+  ok: true;
+  commsEnabled: boolean;
+  canProvision: boolean;
+  hasActiveNumber: boolean;
+  activeNumber: { id: string; e164: string; status: string } | null;
+  ent?: any;
+};
+
+export async function getCommsStatus(signal?: AbortSignal): Promise<CommsStatus> {
+  const data = await requestJson<any>("/api/twilio/number/status", {
+    method: "GET",
+    cache: "no-store",
+    signal,
+  });
+
+  return {
+    ok: true,
+    commsEnabled: !!data?.commsEnabled,
+    canProvision: !!data?.canProvision,
+    hasActiveNumber: !!data?.hasActiveNumber,
+    activeNumber: data?.activeNumber
+      ? {
+          id: String(data.activeNumber.id),
+          e164: String(data.activeNumber.e164),
+          status: String(data.activeNumber.status ?? "ACTIVE"),
+        }
+      : null,
+    ent: data?.ent ?? null,
+  };
+}
+
+export async function getForwardingPhone(signal?: AbortSignal): Promise<string | null> {
+  // /api/account/me exists already and returns user.phone
+  const data = await requestJson<any>("/api/account/me", {
+    method: "GET",
+    cache: "no-store",
+    signal,
+  });
+
+  const phone = data?.user?.phone;
+  return phone ? String(phone) : null;
+}
+
+export async function saveForwardingPhone(phone: string | null) {
+  const res = await requestJson<any>("/api/account/change-phone", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone }),
+  });
+
+  const next =
+    typeof res?.phone !== "undefined" ? res.phone : res?.user?.phone;
+
+  return next ? String(next) : null;
+}
+
+
 /* ============================================================
    Phone helpers
 ============================================================ */

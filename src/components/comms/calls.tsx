@@ -53,6 +53,9 @@ type BeginOutgoingArgs = {
   convo: Conversation;
   hasMyNumber: boolean;
   commsLocked: boolean;
+
+  // ✅ required for call bridging (clients never see it)
+  forwardingPhone: string | null;
 };
 
 type BeginOutgoingResult =
@@ -110,15 +113,26 @@ export const useActiveCallStore = create<ActiveCallStore>((set, get) => ({
       return { active: null };
     }),
 
-  beginOutgoingCall: async ({ convo, hasMyNumber, commsLocked }) => {
+  beginOutgoingCall: async ({ convo, hasMyNumber, commsLocked, forwardingPhone }) => {
     if (commsLocked) return { ok: false, error: "Comms is locked." };
     if (!hasMyNumber) {
       return { ok: false, error: "You need a phone number before you can place calls." };
     }
 
+    // ✅ bridging requires the user's personal phone
+    const fwd = normalizePhone(forwardingPhone || "");
+    if (!fwd) {
+      return { ok: false, error: "Add your personal phone to enable calling." };
+    }
+
     const to = normalizePhone(convo.phone || convo.subtitle || "");
     if (!to) {
       return { ok: false, error: "This thread doesn’t have a destination phone number yet." };
+    }
+
+    // ✅ safety: don't allow calling your own forwarding phone
+    if (to === fwd) {
+      return { ok: false, error: "You can’t call your own phone number from Avillo." };
     }
 
     try {
@@ -140,7 +154,6 @@ export const useActiveCallStore = create<ActiveCallStore>((set, get) => ({
         },
       });
 
-      // startCall() should return { callId } (or { id })
       const res: any = await startCall({
         to,
         conversationId: convo.isDraft ? null : convo.id,
@@ -148,13 +161,11 @@ export const useActiveCallStore = create<ActiveCallStore>((set, get) => ({
 
       const callId = String(res?.callId || res?.id || "").trim();
 
-      // If no callId yet, still move UI forward
       if (!callId) {
         get().setPhase("connecting");
         return { ok: true, callId: optimisticId };
       }
 
-      // Promote optimistic → real id
       set((s) => {
         if (!s.active) return s;
         return { active: { ...s.active, callId, phase: "connecting" } };
@@ -439,6 +450,8 @@ type CallsPanelProps = {
   hasMyNumber?: boolean;
   commsLocked?: boolean;
 
+  forwardingPhone?: string | null;
+
   onStartCallFallback?: () => void;
 };
 
@@ -451,6 +464,7 @@ export function CallsPanel({
   activeConvo,
   hasMyNumber,
   commsLocked,
+  forwardingPhone,
   onStartCallFallback,
 }: CallsPanelProps) {
   const active = useActiveCallStore((s) => s.active);
@@ -472,6 +486,7 @@ export function CallsPanel({
         convo: activeConvo,
         hasMyNumber,
         commsLocked,
+        forwardingPhone: forwardingPhone ?? null,
       });
 
       if (!res.ok && onStartCallFallback) onStartCallFallback();

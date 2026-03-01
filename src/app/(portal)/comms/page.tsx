@@ -11,8 +11,10 @@ import {
   listConversations,
   listMessages,
   sendSms,
-  getMyNumber,
   provisionMyNumber,
+  getCommsStatus,
+  getForwardingPhone,
+  saveForwardingPhone,
   looksLikeEntitlementError,
   normalizeApiError,
   createDraftConversation,
@@ -39,6 +41,24 @@ function shortPhone(p?: string | null) {
   const s = String(p ?? "").trim();
   if (!s) return "";
   return s;
+}
+
+function normalizePhoneInput(raw: string) {
+  return String(raw ?? "").replace(/[^\d+]/g, "").trim();
+}
+
+function phoneLooksValid(value: string) {
+  const cleaned = normalizePhoneInput(value);
+  if (!cleaned) return false;
+
+  const digitsOnly = cleaned.startsWith("+")
+    ? cleaned.slice(1).replace(/\D/g, "")
+    : cleaned.replace(/\D/g, "");
+
+  if (digitsOnly.length < 10 || digitsOnly.length > 15) return false;
+  if (cleaned.includes("+") && !cleaned.startsWith("+")) return false;
+
+  return true;
 }
 
 function looksLikePhoneInput(v: string) {
@@ -134,8 +154,53 @@ export default function Page() {
 
   const hasMyNumber = !!myNumber?.e164;
 
+      // Comms status
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [canProvision, setCanProvision] = useState(false);
+
+  // Forwarding phone (bridge-to-personal)
+  const [hasForwardingPhone, setHasForwardingPhone] = useState(false);
+  const [forwardingPhone, setForwardingPhone] = useState<string | null>(null);
+
+  const [phoneModalOpen, setPhoneModalOpen] = useState(false);
+  const [phoneModalInput, setPhoneModalInput] = useState("");
+  const [phoneModalSaving, setPhoneModalSaving] = useState(false);
+  const [phoneModalError, setPhoneModalError] = useState<string | null>(null);
+
+  function openPhoneModal() {
+    setPhoneModalError(null);
+    setPhoneModalInput(forwardingPhone ?? "");
+    setPhoneModalOpen(true);
+  }
+
+  async function handleSaveForwardingPhone() {
+    const cleaned = normalizePhoneInput(phoneModalInput);
+
+    if (!phoneLooksValid(cleaned)) {
+      setPhoneModalError("Enter a valid phone number (10–15 digits). Include +1 if you can.");
+      return;
+    }
+
+    try {
+      setPhoneModalSaving(true);
+      setPhoneModalError(null);
+
+      const next = await saveForwardingPhone(cleaned.length ? cleaned : null);
+
+      setForwardingPhone(next);
+      setHasForwardingPhone(!!next);
+      setPhoneModalOpen(false);
+      setPhoneModalInput("");
+    } catch (e: any) {
+      setPhoneModalError(normalizeApiError(e, "Failed to update your phone."));
+    } finally {
+      setPhoneModalSaving(false);
+    }
+  }
+
   const activeDraft = activeConvo?.id ? drafts[activeConvo.id] ?? "" : "";
   const actionsDisabled = commsLocked || sending || !hasMyNumber;
+  const callsDisabled = commsLocked || !hasMyNumber || !hasForwardingPhone;
 
   // Quick start (new thread)
   const [newTo, setNewTo] = useState("");
@@ -162,34 +227,67 @@ export default function Page() {
     if (looksLikeEntitlementError(msg)) lockComms(msg);
   }
 
-  // ---------- Load my number ----------
+   // ---------- Boot: status-first ----------
   useEffect(() => {
     const controller = new AbortController();
 
-    async function load() {
+    async function boot() {
       try {
+        setStatusLoading(true);
         setLoadingMyNumber(true);
         setMyNumberError(null);
 
-        const n = await getMyNumber(controller.signal);
-        setMyNumber(n);
+        // 1) status-first
+        const s = await getCommsStatus(controller.signal);
+
+        if (!s.commsEnabled) {
+          lockComms("Comms requires a Pro plan (or Beta access).");
+        } else {
+          unlockComms();
+        }
+
+        setCanProvision(!!s.canProvision);
+
+        // active number from status
+        if (s.activeNumber?.id && s.activeNumber?.e164) {
+          setMyNumber({
+            id: String(s.activeNumber.id),
+            e164: String(s.activeNumber.e164),
+            status: String(s.activeNumber.status ?? "ACTIVE"),
+          });
+        } else {
+          setMyNumber(null);
+        }
+
+        // 2) forwarding phone
+        const p = await getForwardingPhone(controller.signal);
+        setForwardingPhone(p);
+        setHasForwardingPhone(!!p);
       } catch (e: any) {
         if (isAbortError(e)) return;
 
-        const msg = normalizeApiError(e, "We couldn’t load your phone number.");
+        const msg = normalizeApiError(e, "We couldn’t load Comms status.");
         setMyNumberError(msg);
+
+        // lock only if entitlement-ish
         safeSetLockFromMessage(msg);
       } finally {
+        setStatusLoading(false);
         setLoadingMyNumber(false);
       }
     }
 
-    load();
+    boot();
     return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleProvisionMyNumber() {
     if (commsLocked) return;
+    if (!canProvision) {
+      setMyNumberError("Provisioning isn’t enabled for this workspace.");
+      return;
+    }
 
     const acRaw = areaCode.trim();
     const ac = acRaw ? acRaw.replace(/\D/g, "").slice(0, 3) : "";
@@ -200,8 +298,17 @@ export default function Page() {
 
       await provisionMyNumber({ areaCode: ac || null });
 
-      const n = await getMyNumber();
-      setMyNumber(n);
+      // refresh via status
+      const s = await getCommsStatus();
+      if (s.activeNumber?.id && s.activeNumber?.e164) {
+        setMyNumber({
+          id: String(s.activeNumber.id),
+          e164: String(s.activeNumber.e164),
+          status: String(s.activeNumber.status ?? "ACTIVE"),
+        });
+      } else {
+        setMyNumber(null);
+      }
     } catch (e: any) {
       const msg = normalizeApiError(e, "We couldn’t provision a number. Please try again.");
       setMyNumberError(msg);
@@ -896,8 +1003,8 @@ useEffect(() => {
   const headerTitle = "Messages";
   const headerSubtitle = commsLocked
     ? "Locked"
-    : loadingMyNumber
-      ? "Loading number…"
+    : statusLoading
+      ? "Loading status…"
       : hasMyNumber
         ? `From: ${myNumber?.e164}`
         : "No number";
@@ -917,7 +1024,7 @@ useEffect(() => {
         {/* Window: make it reliably height-managed + scroll-safe */}
         <div
           className={cx(
-            "overflow-hidden rounded-[26px] border border-slate-800/70 bg-slate-950/65 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-xl",
+            "relative overflow-hidden rounded-[26px] border border-slate-800/70 bg-slate-950/65 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-xl",
             "flex flex-col min-h-[640px]",
             // Uses dynamic viewport height on mobile to avoid Safari URL-bar jumpiness
             "h-[min(820px,calc(100dvh-160px))] lg:h-[min(860px,calc(100dvh-140px))]"
@@ -925,6 +1032,78 @@ useEffect(() => {
         >
           <ActiveCallOverlay />
           <MiniCallPill />
+
+          {phoneModalOpen && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm">
+              <div className="w-[min(520px,calc(100%-32px))] rounded-[28px] border border-slate-800/70 bg-slate-950/85 shadow-[0_30px_80px_rgba(0,0,0,0.55)]">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 px-5 py-4">
+                  <div>
+                    <p className="text-[14px] font-semibold text-slate-50">Add your phone</p>
+                    <p className="mt-0.5 text-[12px] text-[var(--avillo-cream-muted)]">
+                      Used only for bridging calls. Clients never see this number.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setPhoneModalOpen(false)}
+                    className="rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-1.5 text-[12px] font-semibold text-[var(--avillo-cream-soft)] hover:bg-slate-900/55"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="px-5 py-5">
+                  <label className="block text-[11px] font-semibold text-slate-200/90">
+                    Personal phone
+                  </label>
+                  <input
+                    type="tel"
+                    value={phoneModalInput}
+                    onChange={(e) => {
+                      setPhoneModalInput(e.target.value);
+                      setPhoneModalError(null);
+                    }}
+                    placeholder="+1 555 555 5555"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
+                  />
+
+                  {phoneModalError && (
+                    <div className="mt-3 rounded-2xl border border-rose-400/50 bg-rose-950/35 px-3 py-2 text-[11px] text-rose-50">
+                      {phoneModalError}
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPhoneModalOpen(false)}
+                      className="rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-2 text-[12px] font-semibold text-[var(--avillo-cream-soft)] hover:bg-slate-900/55"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveForwardingPhone}
+                      disabled={phoneModalSaving}
+                      className={cx(
+                        "rounded-xl px-3 py-2 text-[12px] font-semibold",
+                        phoneModalSaving
+                          ? "border border-slate-700 bg-slate-900/60 text-slate-400 cursor-default"
+                          : "border border-amber-100/60 bg-amber-50/10 text-amber-50 hover:bg-amber-50/15"
+                      )}
+                    >
+                      {phoneModalSaving ? "Saving…" : "Save phone"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Top chrome */}
           <div className="shrink-0 flex items-center justify-between gap-3 border-b border-slate-800/60 bg-slate-950/70 px-4 py-3">
             <div className="min-w-0">
@@ -960,6 +1139,25 @@ useEffect(() => {
               <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
                 {commsLockMsg || "Comms requires a Pro plan (or Beta access)."}
               </p>
+            </div>
+          )}
+
+          {/* Call setup banner (only when Comms enabled + number exists but no forwarding phone) */}
+          {!commsLocked && hasMyNumber && !hasForwardingPhone && (
+            <div className="shrink-0 border-b border-slate-800/60 bg-slate-950/55 px-4 py-3">
+              <p className="text-[11px] font-semibold text-slate-50">Enable calling</p>
+              <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+                Add your personal phone so Avillo can bridge calls. Clients never see it.
+              </p>
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={openPhoneModal}
+                  className="rounded-xl border border-amber-100/50 bg-amber-50/10 px-3 py-2 text-[12px] font-semibold text-amber-50 hover:bg-amber-50/15"
+                >
+                  Add your phone
+                </button>
+              </div>
             </div>
           )}
 
@@ -1225,9 +1423,16 @@ useEffect(() => {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 onPickConvo(c.id);
+
+                                if (!hasForwardingPhone) {
+                                  // ensure convo is selected, then prompt setup
+                                  setTimeout(() => openPhoneModal(), 0);
+                                  return;
+                                }
+
                                 setTimeout(() => setMode("calls"), 0);
                               }}
-                              disabled={actionsDisabled || deleting}
+                              disabled={callsDisabled || deleting}
                             >
                               ☎︎
                             </IconButton>
@@ -1294,8 +1499,14 @@ useEffect(() => {
 
                   <IconButton
                     label="Call"
-                    onClick={() => setMode("calls")}
-                    disabled={!activeConvo || actionsDisabled}
+                    onClick={() => {
+                      if (!hasForwardingPhone) {
+                        openPhoneModal();
+                        return;
+                      }
+                      setMode("calls");
+                    }}
+                    disabled={!activeConvo || callsDisabled}
                   >
                     ☎︎
                   </IconButton>
@@ -1325,14 +1536,18 @@ useEffect(() => {
                     loading={loadingCalls}
                     error={callsError}
                     calls={calls}
-                    disabled={actionsDisabled}
+                    disabled={callsDisabled}
                     activeConvo={activeConvo}
                     hasMyNumber={hasMyNumber}
                     commsLocked={commsLocked}
+                    forwardingPhone={forwardingPhone}
                     onStartCallFallback={() => {
                       if (commsLocked) setCallsError("Comms is locked.");
                       else if (!hasMyNumber) setCallsError("You need a phone number before you can place calls.");
-                      else if (!activeConvo) setCallsError("Select a conversation first.");
+                      else if (!hasForwardingPhone) {
+                        setCallsError("Add your personal phone to enable calling.");
+                        openPhoneModal();
+                      } else if (!activeConvo) setCallsError("Select a conversation first.");
                       else setCallsError("Failed to start call.");
                     }}
                   />
