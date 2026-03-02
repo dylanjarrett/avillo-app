@@ -11,6 +11,7 @@ const TOOL_ITEMS = [
   { href: "/listings", label: "Listings" },
   { href: "/autopilot", label: "Autopilot" },
   { href: "/tasks", label: "Tasks" },
+  { href: "/comms", label: "Comms" }, 
   { href: "/hub", label: "Hub" },
 ];
 
@@ -39,6 +40,8 @@ function tourIdForHref(href: string) {
       return "tour-nav-autopilot";
     case "/tasks":
       return "tour-nav-tasks";
+    case "/comms":
+      return "tour-nav-comms"; 
     case "/hub":
       return "tour-nav-hub";
     default:

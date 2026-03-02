@@ -217,6 +217,14 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
         undimSidebar: true,
       },
       {
+        id: "nav-comms",
+        title: "Comms",
+        text: "Text and call from your dedicated Avillo number.",
+        attachTo: { element: "#tour-nav-comms", on: "right" },
+        offsetX: 0,
+        undimSidebar: true,
+      },
+      {
         id: "nav-hub",
         title: "Hub",
         text: "Your workspace hub — DMs, mentions, and a shared board for fast team context.",

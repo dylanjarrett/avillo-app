@@ -1134,11 +1134,30 @@ useEffect(() => {
 
           {/* Lock banner */}
           {commsLocked && (
-            <div className="shrink-0 border-b border-amber-200/20 bg-amber-500/10 px-4 py-3">
-              <p className="text-[11px] font-semibold text-amber-100">Comms locked</p>
-              <p className="mt-1 text-[11px] text-[var(--avillo-cream-soft)]">
-                {commsLockMsg || "Comms requires a Pro plan (or Beta access)."}
-              </p>
+            <div className="shrink-0 border-b border-amber-200/20 bg-amber-500/10 px-4 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[12px] font-semibold text-amber-100">
+                    Unlock Texting & Calling
+                  </p>
+                  <p className="mt-1 text-[12px] text-[var(--avillo-cream-soft)]">
+                    Comms is available on Pro or Enterprise plans with an active subscription.
+                    Upgrade to start texting and calling your clients directly from Avillo.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== "undefined") {
+                      window.location.href = "/billing";
+                    }
+                  }}
+                  className="rounded-xl border border-amber-100/50 bg-amber-50/10 px-4 py-2 text-[12px] font-semibold text-amber-50 hover:bg-amber-50/15 transition-colors"
+                >
+                  Go to Billing
+                </button>
+              </div>
             </div>
           )}
 
