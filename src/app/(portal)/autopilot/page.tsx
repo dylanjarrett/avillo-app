@@ -1,3 +1,4 @@
+//app/(portal)/autopilot/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -49,6 +50,7 @@ type AccountMe = {
   id?: string;
   email?: string | null;
   plan?: string | null;
+  avilloPhone?: string | null;
   entitlements?: Record<string, any> | null;
   [key: string]: any;
 };
@@ -395,6 +397,8 @@ export default function AutomationPage() {
   const [accountLoading, setAccountLoading] = useState(true);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const hasAutopilot = safeHasAutopilotEntitlement(account);
+  const hasProvisionedSmsNumber = Boolean(account?.avilloPhone);
+  const phoneStatusLoading = accountLoading;
 
   function openUpgrade(reason?: string) {
     // pass reason through if your modal uses it (it will just ignore if not)
@@ -450,7 +454,8 @@ const pausedWorkflowsCount = workflows.filter((w) => !isEffectivelyActive(w)).le
         const normalized: AccountMe = {
           id: raw?.user?.id,
           email: raw?.user?.email ?? null,
-          plan: raw?.user?.plan ?? null,
+          plan: raw?.workspace?.billing?.plan ?? null,
+          avilloPhone: raw?.user?.avilloPhone ?? null,
           entitlements: raw?.entitlements ?? null,
         };
 
@@ -514,12 +519,19 @@ const pausedWorkflowsCount = workflows.filter((w) => !isEffectivelyActive(w)).le
   }
 
   function openStepModal(type: StepType, step?: AutomationStep) {
-    if (step) {
+    const targetType = step?.type ?? type;
+
+     if (targetType === "SMS" && !phoneStatusLoading && !hasProvisionedSmsNumber) {
+       alert("To use SMS steps, first claim your Avillo number from the Comms page.");
+      return;
+     }
+
+     if (step) {
       setEditingStep(step);
       setStepModalType(step.type);
-    } else {
+          } else {
       setEditingStep(null);
-      setStepModalType(type);
+      setStepModalType(type);      
     }
   }
 
@@ -578,6 +590,13 @@ const pausedWorkflowsCount = workflows.filter((w) => !isEffectivelyActive(w)).le
     if (!template) return;
 
     const wf = template.build();
+    const hasSmsStep = (wf.steps ?? []).some((s) => s.type === "SMS");
+
+    if (hasSmsStep && !phoneStatusLoading && !hasProvisionedSmsNumber) {
+      alert("This template includes SMS. To use SMS steps, first claim your Avillo number from the Comms page.");
+      return;
+    }
+
     setActiveWorkflow(wf);
     setSelectedId("new");
     openWorkspaceForSelection();
@@ -1002,28 +1021,28 @@ async function handleToggleActive() {
         subtitle="Let Avillo monitor your leads, clients, and listings — then deliver the right text, email, or task at the perfect moment. No missed opportunities. No manual busywork."
       />
 
-      {/* Private beta messaging notice */}
-    <div className="rounded-2xl border border-amber-100/40 bg-amber-50/10 px-5 py-4 shadow-[0_0_26px_rgba(248,250,252,0.14)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-100/90">
-        Private beta messaging notice
-      </p>
+        {/* Messaging setup notice */}
+      <div className="rounded-2xl border border-amber-100/40 bg-amber-50/10 px-5 py-4 shadow-[0_0_26px_rgba(248,250,252,0.14)]">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-100/90">
+          Messaging setup
+        </p>
 
-      <p className="mt-1 text-[11px] text-amber-100/85">
-        <span className="font-semibold">One-way messaging only (for now).</span>{" "}
-        Autopilot can send outbound SMS and email, but replies are not yet captured inside Avillo.
-      </p>
+        <p className="mt-1 text-[11px] text-amber-100/85">
+          <span className="font-semibold">SMS steps require your own Avillo number.</span>{" "}
+          Claim one from the <span className="font-semibold">Comms</span> page before adding SMS to a workflow.
+        </p>
 
-      <p className="mt-1 text-[11px] text-amber-100/85">
-        <span className="font-semibold">SMS</span> is sent from an Avillo phone number.
-        <span className="mx-2 text-amber-100/40">•</span>
-        <span className="font-semibold">Email</span> is sent from{" "}
-        <span className="font-semibold">noreply@avillo.io</span>.
-      </p>
+        <p className="mt-1 text-[11px] text-amber-100/85">
+          <span className="font-semibold">Email</span> steps are available right away and send from{" "}
+          <span className="font-semibold">noreply@avillo.io</span>.
+        </p>
 
-      <p className="mt-1 text-[10px] text-amber-100/75">
-        Two-way messaging, reply tracking, and deeper delivery controls are actively being built during beta.
-      </p>
-    </div>
+        {!phoneStatusLoading && !hasProvisionedSmsNumber && (
+          <p className="mt-1 text-[10px] text-amber-100/75">
+            You can still build workflows with email, tasks, waits, and branches today. SMS unlocks as soon as you claim your number in Comms.
+          </p>
+        )}
+      </div>
 
       <section className="space-y-5">
         {/* Top bar: label + actions */}
@@ -1410,6 +1429,12 @@ async function handleToggleActive() {
                       Steps run from top to bottom. Think: text → wait → email → task. Tap a step to edit it, or remove it with one click.
                     </p>
 
+                    {!phoneStatusLoading && !hasProvisionedSmsNumber && (
+                      <div className="mt-2 rounded-lg border border-amber-100/30 bg-amber-50/5 px-3 py-2 text-[10px] text-amber-100/80">
+                        SMS steps are locked until you claim your Avillo number in Comms.
+                      </div>
+                    )}
+
                     <div className="mt-1 space-y-2">
                       {activeWorkflow.steps.length === 0 && (
                         <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
@@ -1432,9 +1457,18 @@ async function handleToggleActive() {
                           className="w-full cursor-pointer rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-left hover:border-amber-100/70 hover:bg-slate-900/90"
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <p className="text-[11px] font-semibold text-slate-50">
-                              Step {i + 1}: {s.type === "IF" ? "IF / Branch" : s.type}
-                            </p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-[11px] font-semibold text-slate-50">
+                                Step {i + 1}: {s.type === "IF" ? "IF / Branch" : s.type}
+                              </p>
+
+                              {s.type === "SMS" && !phoneStatusLoading && !hasProvisionedSmsNumber && (
+                                <span className="rounded-full border border-amber-200/60 bg-amber-400/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-100">
+                                  Number required
+                                </span>
+                              )}
+                            </div>
+
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1479,16 +1513,32 @@ async function handleToggleActive() {
 
                     {/* Add step buttons */}
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {(["SMS", "EMAIL", "TASK", "WAIT", "IF"] as StepType[]).map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => openStepModal(t)}
-                          className="rounded-full border border-slate-600/80 bg-slate-900/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50"
-                        >
-                          + {t === "IF" ? "IF / Branch" : t}
-                        </button>
-                      ))}
+                      {(["SMS", "EMAIL", "TASK", "WAIT", "IF"] as StepType[]).map((t) => {
+                        const smsLocked =
+                          t === "SMS" && !phoneStatusLoading && !hasProvisionedSmsNumber;
+
+                        return (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => openStepModal(t)}
+                            disabled={smsLocked}
+                            title={
+                              smsLocked
+                                ? "Claim your Avillo number in Comms to use SMS steps."
+                                : undefined
+                            }
+                            className={
+                              "rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] " +
+                              (smsLocked
+                                ? "cursor-not-allowed border-slate-700/80 bg-slate-900/40 text-slate-500"
+                                : "border-slate-600/80 bg-slate-900/80 text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50")
+                            }
+                          >
+                            + {t === "IF" ? "IF / Branch" : t}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -1608,6 +1658,8 @@ async function handleToggleActive() {
         initialThen={editingStep?.type === "IF" ? editingStep.thenSteps ?? [] : null}
         initialElse={editingStep?.type === "IF" ? editingStep.elseSteps ?? [] : null}
         conditionScope={conditionScopeForActive}
+        smsEnabled={hasProvisionedSmsNumber}
+        smsDisabledReason="To use SMS steps, first claim your Avillo number from the Comms page."
         onClose={() => {
           setStepModalType(null);
           setEditingStep(null);

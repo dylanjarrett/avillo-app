@@ -352,19 +352,31 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
             if (!toPhone) throw new Error("No phone number available for SMS.");
             const body = renderTemplate(step.config?.text ?? "", templateVars);
 
-            await sendAutomationSms({
+            const result = await sendAutomationSms({
               userId,
               workspaceId,
               to: toPhone,
               body,
               contactId: contactId ?? null,
+              listingId: listingId ?? null,
+              automationRunId: run.id,
             });
+
+            if (!result || (result as any).success === false) {
+              throw new Error(
+                (result as any)?.error || "Automation SMS failed to send."
+              );
+            }
 
             await recordStep({
               stepId: step.id,
               stepType: "SMS",
               status: "SUCCESS",
-              payload: { to: toPhone },
+              payload: {
+                to: toPhone,
+                listingId: listingId ?? null,
+                automationRunId: run.id,
+              },
             });
             break;
           }

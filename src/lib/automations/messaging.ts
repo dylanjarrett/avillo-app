@@ -2,6 +2,7 @@
 import { sendSms } from "@/lib/twilioClient";
 import { sendEmail } from "@/lib/resendClient";
 import { prisma } from "@/lib/prisma";
+import { getActiveOwnedSmsNumber } from "@/lib/comms/getActiveOwnedSmsNumber";
 
 type SendAutomationSmsArgs = {
   userId: string;
@@ -9,6 +10,8 @@ type SendAutomationSmsArgs = {
   to: string;
   body: string;
   contactId?: string | null;
+  listingId?: string | null;
+  automationRunId?: string | null;
 };
 
 type SendAutomationEmailArgs = {
@@ -65,49 +68,95 @@ async function auditMessage(args: {
 }
 
 export async function sendAutomationSms(args: SendAutomationSmsArgs) {
-  const { userId, workspaceId, to, body, contactId } = args;
+  const {
+    userId,
+    workspaceId,
+    to,
+    body,
+    contactId,
+    listingId,
+    automationRunId,
+  } = args;
 
-  // Optional defense-in-depth tenant guard
   if (!(await isMember(workspaceId, userId))) {
-    console.warn("🚫 [AUTOMATION] SMS blocked (no workspace membership)", { userId, workspaceId });
-    return { success: false, blocked: true } as any;
+    console.warn("🚫 [AUTOMATION] SMS blocked (no workspace membership)", {
+      userId,
+      workspaceId,
+    });
+    return {
+      success: false,
+      blocked: true,
+      error: "User is not an active member of this workspace.",
+    } as const;
+  }
+
+  const ownedNumber = await getActiveOwnedSmsNumber({ workspaceId, userId });
+
+  if (!ownedNumber) {
+    console.warn("🚫 [AUTOMATION] SMS blocked (no active provisioned number)", {
+      userId,
+      workspaceId,
+      contactId: contactId ?? null,
+      listingId: listingId ?? null,
+    });
+
+    return {
+      success: false,
+      blocked: true,
+      error: "No active provisioned SMS number found for this user. Provision one in Comms first.",
+    } as const;
   }
 
   console.log("📨 [AUTOMATION] SMS →", {
+    from: ownedNumber.e164,
+    phoneNumberId: ownedNumber.id,
     to,
     preview: safeLogText(body, 60),
     userId,
     workspaceId,
     contactId: contactId ?? null,
+    listingId: listingId ?? null,
+    automationRunId: automationRunId ?? null,
   });
 
-  // Fire-and-forget audit
   void auditMessage({
     workspaceId,
     actorUserId: userId,
     contactId: contactId ?? null,
     type: "automation_sms",
     summary: "Automation sent SMS.",
-    data: { to, preview: safeLogText(body, 60) },
+    data: {
+      from: ownedNumber.e164,
+      phoneNumberId: ownedNumber.id,
+      to,
+      preview: safeLogText(body, 60),
+      listingId: listingId ?? null,
+      automationRunId: automationRunId ?? null,
+    },
   });
 
   return sendSms({
     userId,
     workspaceId,
+    phoneNumberId: ownedNumber.id,
     to,
     body,
-    ...(contactId ? { contactId } : {}),
+    contactId: contactId ?? null,
+    listingId: listingId ?? null,
     source: "AUTOMATION",
+    automationRunId: automationRunId ?? null,
   });
 }
 
 export async function sendAutomationEmail(args: SendAutomationEmailArgs) {
   const { userId, workspaceId, to, subject, html, contactId } = args;
 
-  // Optional defense-in-depth tenant guard
   if (!(await isMember(workspaceId, userId))) {
-    console.warn("🚫 [AUTOMATION] EMAIL blocked (no workspace membership)", { userId, workspaceId });
-    return { success: false, blocked: true } as any;
+    console.warn("🚫 [AUTOMATION] EMAIL blocked (no workspace membership)", {
+      userId,
+      workspaceId,
+    });
+    return { success: false, blocked: true } as const;
   }
 
   console.log("📧 [AUTOMATION] EMAIL →", {
@@ -118,7 +167,6 @@ export async function sendAutomationEmail(args: SendAutomationEmailArgs) {
     contactId: contactId ?? null,
   });
 
-  // Fire-and-forget audit
   void auditMessage({
     workspaceId,
     actorUserId: userId,
@@ -128,6 +176,5 @@ export async function sendAutomationEmail(args: SendAutomationEmailArgs) {
     data: { to, subject: safeLogText(subject, 80) },
   });
 
-  // If you later want "from" to be workspace-branded, this is the spot.
   return sendEmail({ to, subject, html });
 }

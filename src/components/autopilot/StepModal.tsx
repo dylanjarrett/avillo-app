@@ -1,3 +1,4 @@
+//components/autopilot/StepModal.tsx
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
@@ -39,6 +40,8 @@ type Props = {
   // listing  -> only listing fields
   // both/undefined -> show everything
   conditionScope?: ConditionScope;
+  smsEnabled?: boolean;
+  smsDisabledReason?: string | null;
   onClose: () => void;
   onSave: (config: any, thenSteps?: BranchStep[], elseSteps?: BranchStep[]) => void;
 };
@@ -96,6 +99,8 @@ export default function StepModal({
   initialThen,
   initialElse,
   conditionScope,
+  smsEnabled = true,
+  smsDisabledReason = null,
   onClose,
   onSave,
 }: Props) {
@@ -105,6 +110,7 @@ export default function StepModal({
 
   const isEditing = !!initialConfig;
   const conditionFields = getConditionFields(conditionScope);
+  const smsLocked = !smsEnabled;
 
   function update(key: string, value: any) {
     setForm((prev: any) => ({ ...prev, [key]: value }));
@@ -312,6 +318,10 @@ export default function StepModal({
    * -----------------------------------*/
   function addBranchStep(branch: "then" | "else", stepType: StepType) {
     if (stepType === "IF") return; // no nested IF for now
+    if (stepType === "SMS" && smsLocked) {
+      alert("To use SMS steps, first claim your Avillo number from the Comms page.");
+      return;
+    }
 
     const newStep: BranchStep = {
       id: crypto.randomUUID(),
@@ -449,6 +459,12 @@ export default function StepModal({
                     <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
                       Short, conversational text. Keep it feeling like you — Avillo will handle the timing.
                     </p>
+
+                    {!smsEnabled && (
+                      <div className="mt-2 rounded-lg border border-amber-100/30 bg-amber-50/5 px-3 py-2 text-[10px] text-amber-100/85">
+                        {smsDisabledReason ?? "To use SMS steps, first claim your Avillo number from the Comms page."}
+                      </div>
+                    )}
 
                     <textarea
                       rows={5}
@@ -808,16 +824,31 @@ export default function StepModal({
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-1">
-                        {(["SMS", "EMAIL", "TASK", "WAIT"] as StepType[]).map((t) => (
-                          <button
-                            key={t}
-                            type="button"
-                            onClick={() => addBranchStep("then", t)}
-                            className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-emerald-100 hover:bg-emerald-500/20"
-                          >
-                            + {t}
-                          </button>
-                        ))}
+                        {(["SMS", "EMAIL", "TASK", "WAIT"] as StepType[]).map((t) => {
+                          const branchSmsLocked = t === "SMS" && smsLocked;
+
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => addBranchStep("then", t)}
+                              disabled={branchSmsLocked}
+                              title={
+                                branchSmsLocked
+                                  ? "Claim your Avillo number in Comms to use SMS steps."
+                                  : undefined
+                              }
+                              className={
+                                "rounded-full px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] " +
+                                (branchSmsLocked
+                                  ? "cursor-not-allowed border border-slate-700/80 bg-slate-900/40 text-slate-500"
+                                  : "border border-emerald-400/60 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20")
+                              }
+                            >
+                              + {t}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -956,16 +987,31 @@ export default function StepModal({
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-1">
-                        {(["SMS", "EMAIL", "TASK", "WAIT"] as StepType[]).map((t) => (
-                          <button
-                            key={t}
-                            type="button"
-                            onClick={() => addBranchStep("else", t)}
-                            className="rounded-full border border-slate-600/80 bg-slate-900/80 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50"
-                          >
-                            + {t}
-                          </button>
-                        ))}
+                        {(["SMS", "EMAIL", "TASK", "WAIT"] as StepType[]).map((t) => {
+                          const branchSmsLocked = t === "SMS" && smsLocked;
+
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => addBranchStep("else", t)}
+                              disabled={branchSmsLocked}
+                              title={
+                                branchSmsLocked
+                                  ? "Claim your Avillo number in Comms to use SMS steps."
+                                  : undefined
+                              }
+                              className={
+                                "rounded-full px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] " +
+                                (branchSmsLocked
+                                  ? "cursor-not-allowed border border-slate-700/80 bg-slate-900/40 text-slate-500"
+                                  : "border border-slate-600/80 bg-slate-900/80 text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50")
+                              }
+                            >
+                              + {t}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -990,12 +1036,13 @@ export default function StepModal({
                 <button
                   type="button"
                   onClick={handleSave}
+                  disabled={type === "SMS" && !smsEnabled}
                   className="
                     inline-flex items-center justify-center rounded-full
                     border border-amber-100/80 bg-amber-50/10
                     px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]
                     text-amber-100 shadow-[0_0_20px_rgba(248,250,252,0.18)]
-                    hover:bg-amber-50/20
+                    hover:bg-amber-50/20 disabled:cursor-not-allowed disabled:opacity-50
                   "
                 >
                   {isEditing ? "Update step" : "Save step"}
