@@ -23,6 +23,7 @@ type PageContext = {
   contactId?: string;
   listingId?: string;
   taskId?: string;
+  conversationId?: string;
   tab?: string;
   filters?: any;
 };
@@ -34,7 +35,20 @@ type ChatBody = {
   tz?: string; // browser IANA tz, e.g. "America/Los_Angeles"
 };
 
-type AIAction = { type: string; label?: string; id?: string; payload?: any };
+type AIAction =
+  | { type: "open_contact"; label?: string; id: string }
+  | { type: "open_listing"; label?: string; id: string }
+  | { type: "open_task"; label?: string; id: string }
+  | {
+      type: "draft_sms";
+      label?: string;
+      payload: {
+        contactId: string;
+        conversationId?: string;
+        message: string;
+      };
+    };
+
 type AIResponse = { reply?: string; actions?: AIAction[] };
 
 /* ------------------------------------
@@ -70,6 +84,11 @@ function sanitizeId(v: unknown) {
   const s = v.trim();
   if (!s) return null;
   return s.length > 128 ? s.slice(0, 128) : s;
+}
+
+function sanitizeDraftMessage(v: unknown, max = 1200) {
+  if (typeof v !== "string") return "";
+  return v.replace(/\r\n/g, "\n").trim().slice(0, max);
 }
 
 function jsonError(status: number, error: string, extra?: Record<string, any>) {
@@ -221,11 +240,38 @@ COMPLIANCE (FAIR HOUSING / NAR):
 - Avoid school quality rankings/superlatives; keep school mentions neutral and suggest verification.
 
 DRAFTING (EMAIL/SMS):
-- You may draft emails/texts ONLY when tied to Avillo context (a contact, listing, task, follow-up, or workflow described by the user).
-- Do not fabricate names, details, or outcomes. If details are missing, ask concise questions.
+- You may draft emails/texts ONLY when tied to Avillo context (a contact, conversation, listing, task, follow-up, or workflow described by the user).
+- For SMS, prefer focus.conversation and focus.contact when available.
+- Use recent conversation context when provided so the message feels like a natural continuation of the thread.
+- Keep SMS concise, natural, and ready to send.
+- Do not fabricate names, details, timelines, or outcomes.
+- If key details are missing, ask concise follow-up questions instead of inventing them.
+
+SMS ACTION CONTRACT:
+- If the user asks you to write, draft, or suggest a text message, you may return an action:
+  {
+    "type": "draft_sms",
+    "label": "Draft text",
+    "payload": {
+      "contactId": "contact id",
+      "conversationId": "conversation id if available",
+      "message": "draft text body"
+    }
+  }
+- Only return draft_sms if a valid contactId is available in the provided context.
+- If you can suggest SMS wording but no valid contactId is available, reply with the suggested draft in plain text only and do not return an action.
+- Never return draft_sms with an empty or placeholder message.
+- Do NOT send messages yourself. Only draft them for the user to review and edit before sending.
+- Never ask the user whether you should send a message.
+- Never say or imply that you can send, deliver, or text on the user's behalf in this chat flow.
+- When drafting SMS, present it as a draft for the user to review, edit, or place into the composer.
+- Prefer phrases like "Here’s a draft", "I drafted this for you", or "You can edit this before sending."
+- Do not use phrases like "Should I send it?", "Want me to send this?", or "I can send this now."
+- If context.comms.canText is false, explain that texting is unavailable and do not return draft_sms.
 
 ACTIONS:
 - Only include actions when they map to Avillo UI behavior and are supported by provided IDs/context.
+- Allowed action types are: open_contact, open_listing, open_task, draft_sms.
 - Never invent action types or IDs.
 
 STYLE:
@@ -301,6 +347,7 @@ export async function POST(req: Request) {
       contactId: sanitizeId(pageContextRaw?.contactId) ?? undefined,
       listingId: sanitizeId(pageContextRaw?.listingId) ?? undefined,
       taskId: sanitizeId(pageContextRaw?.taskId) ?? undefined,
+      conversationId: sanitizeId(pageContextRaw?.conversationId) ?? undefined,
       tab: typeof pageContextRaw?.tab === "string" ? clampStr(pageContextRaw.tab, 64) : undefined,
       filters: pageContextRaw?.filters ?? undefined,
     };
@@ -317,6 +364,21 @@ export async function POST(req: Request) {
       deletedAt: null as Date | null,
       assignedToUserId: userId,
     };
+
+    const myActivePhoneNumber = await prisma.userPhoneNumber.findFirst({
+      where: {
+        workspaceId: wsId,
+        assignedToUserId: userId,
+        status: "ACTIVE",
+        capabilities: { has: "SMS" },
+      },
+      select: {
+        id: true,
+        e164: true,
+        status: true,
+        label: true,
+      },
+    });
 
     // ----------------------------
     // Parallel queries (lean + high value)
@@ -537,6 +599,7 @@ export async function POST(req: Request) {
     const focusTaskId = pageContext.taskId;
     const focusContactId = pageContext.contactId;
     const focusListingId = pageContext.listingId;
+    const focusConversationId = pageContext.conversationId;
 
     if (focusTaskId) {
       const task = await prisma.task.findFirst({
@@ -729,8 +792,140 @@ export async function POST(req: Request) {
       }
     }
 
+    if (focusConversationId) {
+      const convo = await prisma.conversation.findFirst({
+        where: {
+          id: focusConversationId,
+          workspaceId: wsId,
+          assignedToUserId: userId,
+        },
+        select: {
+          id: true,
+          assignedToUserId: true,
+          phoneNumberId: true,
+          otherPartyE164: true,
+          displayName: true,
+          lastMessageAt: true,
+          lastInboundAt: true,
+          lastOutboundAt: true,
+          zoraSummary: true,
+          zoraState: true,
+          updatedAt: true,
+          contact: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              phone: true,
+              relationshipType: true,
+              stage: true,
+              clientRole: true,
+            },
+          },
+          listing: {
+            select: {
+              id: true,
+              address: true,
+              status: true,
+              price: true,
+            },
+          },
+          smsMessages: {
+            where: {
+              workspaceId: wsId,
+              assignedToUserId: userId,
+            },
+            orderBy: { createdAt: "desc" },
+            take: 12,
+            select: {
+              id: true,
+              direction: true,
+              body: true,
+              status: true,
+              source: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
+
+      if (convo) {
+        focus.conversation = {
+          id: convo.id,
+          assignedToUserId: convo.assignedToUserId,
+          phoneNumberId: convo.phoneNumberId,
+          otherPartyE164: convo.otherPartyE164,
+          displayName: convo.displayName ?? null,
+          lastMessageAt: convo.lastMessageAt ?? null,
+          lastInboundAt: convo.lastInboundAt ?? null,
+          lastOutboundAt: convo.lastOutboundAt ?? null,
+          zoraSummary: convo.zoraSummary ?? null,
+          zoraState: convo.zoraState ?? null,
+          updatedAt: convo.updatedAt,
+          contact: convo.contact
+            ? {
+                id: convo.contact.id,
+                name: formatName(convo.contact.firstName, convo.contact.lastName),
+                phone: convo.contact.phone ?? null,
+                relationshipType: convo.contact.relationshipType,
+                stage: convo.contact.stage,
+                clientRole: convo.contact.clientRole,
+              }
+            : null,
+          listing: convo.listing
+            ? {
+                id: convo.listing.id,
+                address: convo.listing.address,
+                status: convo.listing.status,
+                price: convo.listing.price ?? null,
+              }
+            : null,
+          recentMessages: convo.smsMessages
+            .slice()
+            .reverse()
+            .map((m) => ({
+              id: m.id,
+              direction: m.direction,
+              body: m.body,
+              status: m.status ?? null,
+              source: m.source,
+              createdAt: m.createdAt,
+            })),
+        };
+
+        if (!focus.contact && convo.contact) {
+          focus.contact = {
+            id: convo.contact.id,
+            name: formatName(convo.contact.firstName, convo.contact.lastName),
+            phone: convo.contact.phone ?? null,
+            relationshipType: convo.contact.relationshipType,
+            stage: convo.contact.stage,
+            clientRole: convo.contact.clientRole,
+          };
+        }
+
+        if (!focus.listing && convo.listing) {
+          focus.listing = {
+            id: convo.listing.id,
+            address: convo.listing.address,
+            status: convo.listing.status,
+            price: convo.listing.price ?? null,
+          };
+        }
+      }
+    }
+
     // Fuzzy focus only if no explicit ids and nothing hydrated yet
-    if (!focus.task && !focus.contact && !focus.listing && !focusTaskId && !focusContactId && !focusListingId) {
+    if (
+      !focus.task &&
+      !focus.contact &&
+      !focus.listing &&
+      !focus.conversation &&
+      !focusTaskId &&
+      !focusContactId &&
+      !focusListingId &&
+      !focusConversationId
+    ) {     
       const hintTask = hints.task?.slice(0, 80) || null;
       const hintContact = hints.contact?.slice(0, 80) || null;
       const hintListing = hints.listing?.slice(0, 80) || null;
@@ -839,6 +1034,18 @@ export async function POST(req: Request) {
           in7Start: in7Start.toISOString(),
           browserTz: browserTZ,
         },
+      },
+
+      comms: {
+        canText: !!myActivePhoneNumber,
+        myPhoneNumber: myActivePhoneNumber
+          ? {
+              id: myActivePhoneNumber.id,
+              e164: myActivePhoneNumber.e164,
+              status: myActivePhoneNumber.status,
+              label: myActivePhoneNumber.label ?? null,
+            }
+          : null,
       },
 
       focus: Object.keys(focus).length ? focus : null,
@@ -1012,9 +1219,63 @@ export async function POST(req: Request) {
       return jsonError(502, "AI returned empty reply.", { rawSnippet: raw.slice(0, 500) });
     }
 
+    const allowedActionTypes = new Set(["open_contact", "open_listing", "open_task", "draft_sms"]);
+
     const actions =
       Array.isArray(parsed.actions) && parsed.actions.length
-        ? parsed.actions.filter((a) => a && typeof a.type === "string" && a.type.trim()).slice(0, 6)
+        ? parsed.actions
+            .filter((a) => a && typeof a.type === "string" && allowedActionTypes.has(a.type))
+            .map((a) => {
+              if (a.type === "draft_sms") {
+                const payload = a.payload && typeof a.payload === "object" ? a.payload : null;
+                const contactId = sanitizeId(payload?.contactId);
+                const conversationId = sanitizeId(payload?.conversationId);
+                const message = sanitizeDraftMessage(payload?.message);
+
+                if (!contactId || !message || !myActivePhoneNumber) return null;
+
+                const focusedConversationId =
+                  focus?.conversation?.id && typeof focus.conversation.id === "string"
+                    ? focus.conversation.id
+                    : null;
+
+                const focusedConversationContactId =
+                  focus?.conversation?.contact?.id && typeof focus.conversation.contact.id === "string"
+                    ? focus.conversation.contact.id
+                    : null;
+
+                if (focusedConversationId) {
+                  if (!conversationId || conversationId !== focusedConversationId) return null;
+                }
+
+                if (focusedConversationContactId && contactId !== focusedConversationContactId) return null;
+
+                return {
+                  type: "draft_sms" as const,
+                  label: typeof a.label === "string" ? clampStr(a.label, 80) : "Draft text",
+                  payload: {
+                    contactId,
+                    ...(conversationId ? { conversationId } : {}),
+                    message,
+                  },
+                };
+              }
+
+              if (a.type === "open_contact" || a.type === "open_listing" || a.type === "open_task") {
+                const id = sanitizeId(a.id);
+                if (!id) return null;
+
+                return {
+                  type: a.type,
+                  id,
+                  ...(typeof a.label === "string" ? { label: clampStr(a.label, 80) } : {}),
+                };
+              }
+
+              return null;
+            })
+            .filter(Boolean)
+            .slice(0, 6)
         : undefined;
 
     return NextResponse.json(actions ? { reply, actions } : { reply });

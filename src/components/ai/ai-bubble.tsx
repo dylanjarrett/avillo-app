@@ -6,10 +6,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 type Msg = { id: string; role: "assistant" | "user"; text: string };
 
 const QUICK_CHIPS = [
-  "What should I do today?",
-  "Any overdue tasks?",
-  "Who needs a follow-up?",
-  "Summarize my pipeline",
+  "What should I focus on today?",
+  "Show my overdue tasks",
+  "Who should I follow up with?",
+  "Draft a follow-up text",
 ] as const;
 
 function uid() {
@@ -76,8 +76,7 @@ export default function AIBubble() {
     {
       id: uid(),
       role: "assistant",
-      text: "Hey — I’m Zora. Ask me anything about your workspace: tasks, people, listings, follow-ups, and what to do next.",
-    },
+      text: "Hey — I’m Zora. I can help you prioritize your day, find follow-ups, summarize pipeline, and draft messages.",    },
   ]);
   const [isTyping, setIsTyping] = useState(false);
 
@@ -457,7 +456,7 @@ export default function AIBubble() {
               </div>
 
               <div className="text-[11px] text-white/40">
-                Tip: Ask for next steps, overdue items, follow-ups, or a quick pipeline summary.
+                Tip: Ask Zora what to focus on, who needs a follow-up, or have her draft a message for you.
               </div>
             </div>
 
