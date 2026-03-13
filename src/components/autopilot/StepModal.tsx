@@ -10,6 +10,7 @@ import {
   TransitionChild,
 } from "@headlessui/react";
 
+// EMAIL kept for backend compatibility but hidden from UI
 export type StepType = "SMS" | "EMAIL" | "TASK" | "WAIT" | "IF";
 
 type BranchStep = {
@@ -329,8 +330,6 @@ export default function StepModal({
       config:
         stepType === "WAIT"
           ? DEFAULT_WAIT
-          : stepType === "EMAIL"
-          ? { subject: "", body: "" }
           : { text: "" },
     };
 
@@ -421,7 +420,6 @@ export default function StepModal({
                 <div>
                   <DialogTitle className="text-[13px] font-semibold tracking-[0.02em] text-slate-50">
                     {type === "SMS" && (isEditing ? "Edit SMS" : "Add SMS message")}
-                    {type === "EMAIL" && (isEditing ? "Edit email" : "Add email step")}
                     {type === "TASK" && (isEditing ? "Edit task" : "Add task reminder")}
                     {type === "WAIT" && (isEditing ? "Edit delay" : "Add wait / delay")}
                     {type === "IF" && (isEditing ? "Edit branch condition" : "Add IF / branch")}
@@ -429,8 +427,6 @@ export default function StepModal({
 
                   <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
                     {type === "SMS" && "Short, conversational text. Use merge tags to personalize."}
-                    {type === "EMAIL" &&
-                      "Subject + full body. You can paste from Intelligence and tweak it here."}
                     {type === "TASK" &&
                       "This shows up as a to-do for you – keep it clear and action-focused."}
                     {type === "WAIT" && "Tell Avillo how long to pause before the next step runs."}
@@ -475,36 +471,6 @@ export default function StepModal({
                     />
 
                     <MergeTagsHint />
-                  </div>
-                </div>
-              )}
-
-              {/* EMAIL */}
-              {type === "EMAIL" && (
-                <div className="space-y-4">
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
-                    <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                      Subject
-                    </label>
-                    <input
-                      className="mt-1 w-full bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                      placeholder="Ex: Quick market update for {{firstName}} — {{propertyAddress}}"
-                      value={form.subject ?? ""}
-                      onChange={(e) => update("subject", e.target.value)}
-                    />
-                  </div>
-
-                  <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-3">
-                    <label className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-                      Body
-                    </label>
-                    <textarea
-                      rows={6}
-                      className="mt-1 w-full resize-none bg-transparent text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                      placeholder="Write the full email body…"
-                      value={form.body ?? ""}
-                      onChange={(e) => update("body", e.target.value)}
-                    />
                   </div>
                 </div>
               )}
@@ -739,40 +705,6 @@ export default function StepModal({
                               </div>
                             )}
 
-                            {/* EMAIL */}
-                            {s.type === "EMAIL" && (
-                              <div className="mt-1 space-y-2">
-                                <div>
-                                  <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
-                                    Subject
-                                  </label>
-                                  <input
-                                    className="mt-0.5 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                                    placeholder="Ex: Quick market update for {{firstName}} — {{propertyAddress}}"
-                                    value={s.config?.subject ?? ""}
-                                    onChange={(e) =>
-                                      updateBranchStep("then", s.id, { subject: e.target.value })
-                                    }
-                                  />
-                                </div>
-
-                                <div>
-                                  <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
-                                    Body
-                                  </label>
-                                  <textarea
-                                    rows={4}
-                                    className="mt-0.5 w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                                    placeholder="Write the full email body…"
-                                    value={s.config?.body ?? ""}
-                                    onChange={(e) =>
-                                      updateBranchStep("then", s.id, { body: e.target.value })
-                                    }
-                                  />
-                                </div>
-                              </div>
-                            )}
-
                             {/* TASK */}
                             {s.type === "TASK" && (
                               <input
@@ -824,7 +756,7 @@ export default function StepModal({
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-1">
-                        {(["SMS", "EMAIL", "TASK", "WAIT"] as StepType[]).map((t) => {
+                        {(["SMS", "TASK", "WAIT"] as StepType[]).map((t) => {
                           const branchSmsLocked = t === "SMS" && smsLocked;
 
                           return (
@@ -902,40 +834,6 @@ export default function StepModal({
                               </div>
                             )}
 
-                            {/* EMAIL */}
-                            {s.type === "EMAIL" && (
-                              <div className="mt-1 space-y-2">
-                                <div>
-                                  <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
-                                    Subject
-                                  </label>
-                                  <input
-                                    className="mt-0.5 w-full bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                                    placeholder="Ex: Quick market update for {{firstName}} — {{propertyAddress}}"
-                                    value={s.config?.subject ?? ""}
-                                    onChange={(e) =>
-                                      updateBranchStep("else", s.id, { subject: e.target.value })
-                                    }
-                                  />
-                                </div>
-
-                                <div>
-                                  <label className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
-                                    Body
-                                  </label>
-                                  <textarea
-                                    rows={4}
-                                    className="mt-0.5 w-full resize-none bg-transparent text-[10px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)]"
-                                    placeholder="Write the full email body…"
-                                    value={s.config?.body ?? ""}
-                                    onChange={(e) =>
-                                      updateBranchStep("else", s.id, { body: e.target.value })
-                                    }
-                                  />
-                                </div>
-                              </div>
-                            )}
-
                             {/* TASK */}
                             {s.type === "TASK" && (
                               <input
@@ -987,7 +885,7 @@ export default function StepModal({
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-1">
-                        {(["SMS", "EMAIL", "TASK", "WAIT"] as StepType[]).map((t) => {
+                        {(["SMS", "TASK", "WAIT"] as StepType[]).map((t) => {
                           const branchSmsLocked = t === "SMS" && smsLocked;
 
                           return (

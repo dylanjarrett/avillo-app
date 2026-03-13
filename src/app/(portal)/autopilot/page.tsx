@@ -89,17 +89,16 @@ const RECOMMENDED_TEMPLATES: {
   trigger: string;
   build: () => AutomationWorkflow;
 }[] = [
-  // 🟢 NEW_CONTACT – speed-to-lead + same-day follow-up (one-way)
   {
     id: "new-contact-speed-to-lead",
     label: "New online lead follow-up (same day)",
     description:
-      "Instant SMS, same-day email, then a reminder to call — built for one-way outbound messaging.",
+      "Instant SMS, same-day check-in, then a reminder to call — built for fast lead response.",
     trigger: "NEW_CONTACT",
     build: () => ({
       name: "New online lead follow-up (same day)",
       description:
-        "Automatically welcome new leads, follow up by email, and remind me to call within 24 hours.",
+        "Automatically welcome new leads by text, send a same-day follow-up, and remind me to call within 24 hours.",
       trigger: "NEW_CONTACT",
       active: true,
       steps: [
@@ -108,7 +107,7 @@ const RECOMMENDED_TEMPLATES: {
           type: "SMS",
           config: {
             text:
-              "Hey {{firstName}} — thanks for reaching out. I can help with next steps.\n\nBest way to connect: call/text {{agentPhone}} or email {{agentEmail}}.",
+              "Hey {{firstName}} — thanks for reaching out. I can help with next steps.\n\nBest way to connect is call/text {{agentPhone}}.",
           },
         },
         {
@@ -118,11 +117,10 @@ const RECOMMENDED_TEMPLATES: {
         },
         {
           id: crypto.randomUUID(),
-          type: "EMAIL",
+          type: "SMS",
           config: {
-            subject: "Thanks for reaching out — quick next steps",
-            body:
-              "Hi {{firstName}},\n\nThanks again for reaching out. I’d love to learn what you’re looking for and help you map out next steps.\n\nThe best way to connect is by phone — call or text me at {{agentPhone}}. If email is easier, you can reach me at {{agentEmail}}.\n\nBest,\n{{agentName}}",
+            text:
+              "Just checking back in, {{firstName}} — I’d be happy to help you map out next steps whenever you're ready.",
           },
         },
         {
@@ -142,17 +140,16 @@ const RECOMMENDED_TEMPLATES: {
     }),
   },
 
-  // 🟠 LEAD_STAGE_CHANGE – only fire when contact is a HOT BUYER (one-way)
   {
     id: "hot-buyer-stage-change",
     label: "Buyer follow-up when stage changes to HOT",
     description:
-      "When a buyer becomes HOT, send a focused email and reminder to set showings — one-way outbound.",
+      "When a buyer becomes HOT, send a focused text and reminder to line up showings.",
     trigger: "LEAD_STAGE_CHANGE",
     build: () => ({
       name: "Buyer follow-up (stage = HOT)",
       description:
-        "When I move a contact to HOT and they’re marked as a buyer, send them a focused email and remind me to line up showings.",
+        "When I move a contact to HOT and they’re marked as a buyer, send them a focused text and remind me to line up showings.",
       trigger: "LEAD_STAGE_CHANGE",
       active: true,
       steps: [
@@ -177,11 +174,10 @@ const RECOMMENDED_TEMPLATES: {
           thenSteps: [
             {
               id: crypto.randomUUID(),
-              type: "EMAIL",
+              type: "SMS",
               config: {
-                subject: "Next step: lining up showings",
-                body:
-                  "Hi {{firstName}},\n\nSince you’re actively looking, I want to line up a few showings that really match what you want.\n\nCall or text me directly at {{agentPhone}} and I’ll coordinate options and set everything up. If email is easier: {{agentEmail}}.\n\nBest,\n{{agentName}}",
+                text:
+                  "Hey {{firstName}} — since you're actively looking, I’d love to line up a few showings that really fit what you want. Call or text me at {{agentPhone}} and we’ll get it set up.",
               },
             },
             {
@@ -204,27 +200,25 @@ const RECOMMENDED_TEMPLATES: {
     }),
   },
 
-  // 🏡 LISTING_CREATED – welcome seller + set expectations (one-way)
   {
     id: "new-listing-seller-welcome",
     label: "New listing — welcome the seller",
     description:
-      "When you create a new listing with a seller attached, send a welcome email and set expectations — one-way outbound.",
+      "When you create a new listing with a seller attached, send a welcome text and set expectations.",
     trigger: "LISTING_CREATED",
     build: () => ({
       name: "New listing — seller welcome + expectations",
       description:
-        "As soon as I create a new listing and attach the seller, send them a welcome email and remind me to check in.",
+        "As soon as I create a new listing and attach the seller, send them a welcome text and remind me to check in.",
       trigger: "LISTING_CREATED",
       active: true,
       steps: [
         {
           id: crypto.randomUUID(),
-          type: "EMAIL",
+          type: "SMS",
           config: {
-            subject: "Excited to list your home at {{propertyAddress}}",
-            body:
-              "Hi {{firstName}},\n\nI’m excited to officially get your home at {{propertyAddress}} on the market.\n\nOver the next few days, we’ll be focused on marketing, online exposure, and getting qualified eyes on your home. I’ll keep you updated on important activity as we go.\n\nIf anything comes up, call/text me at {{agentPhone}}. You can also reach me at {{agentEmail}}.\n\nBest,\n{{agentName}}",
+            text:
+              "Hi {{firstName}} — excited to officially get your home at {{propertyAddress}} on the market. I’ll keep you updated as activity picks up. Reach out anytime at {{agentPhone}}.",
           },
         },
         {
@@ -244,17 +238,16 @@ const RECOMMENDED_TEMPLATES: {
     }),
   },
 
-  // 🔁 LISTING_STAGE_CHANGE – notify seller when status moves to PENDING (one-way)
   {
     id: "listing-pending-seller-update",
     label: "Listing goes pending — seller update",
     description:
-      "When a listing status moves to PENDING, update the seller and remind yourself to manage next steps — one-way outbound.",
+      "When a listing status moves to PENDING, update the seller by text and remind yourself to manage next steps.",
     trigger: "LISTING_STAGE_CHANGE",
     build: () => ({
       name: "Listing pending — seller update + next steps",
       description:
-        "When a listing moves to pending, email the seller with next steps and remind me to manage key dates.",
+        "When a listing moves to pending, text the seller with next steps and remind me to manage key dates.",
       trigger: "LISTING_STAGE_CHANGE",
       active: true,
       steps: [
@@ -274,11 +267,10 @@ const RECOMMENDED_TEMPLATES: {
           thenSteps: [
             {
               id: crypto.randomUUID(),
-              type: "EMAIL",
+              type: "SMS",
               config: {
-                subject: "Great news — your home is now pending",
-                body:
-                  "Hi {{firstName}},\n\nGreat news: your home at {{propertyAddress}} is now under contract (pending)!\n\nFrom here, we’ll be focused on inspections, appraisal, and any remaining contingencies. I’ll keep you posted on key updates and anything we need from you.\n\nIf you have questions at any point, call/text me at {{agentPhone}}. You can also reach me at {{agentEmail}}.\n\nBest,\n{{agentName}}",
+                text:
+                  "Hi {{firstName}} — great news: your home at {{propertyAddress}} is now pending. From here we’ll be focused on inspections, appraisal, and remaining deadlines. I’ll keep you posted every step of the way.",
               },
             },
             {
@@ -1018,7 +1010,7 @@ async function handleToggleActive() {
       <PageHeader
         eyebrow="Autopilot"
         title="Automate your busy work"
-        subtitle="Let Avillo monitor your leads, clients, and listings — then deliver the right text, email, or task at the perfect moment. No missed opportunities. No manual busywork."
+        subtitle="Let Avillo monitor your leads, clients, and listings — then deliver the right text or task at the perfect moment. No missed opportunities. No manual busywork."
       />
 
         {/* Messaging setup notice */}
@@ -1032,14 +1024,9 @@ async function handleToggleActive() {
           Claim one from the <span className="font-semibold">Comms</span> page before adding SMS to a workflow.
         </p>
 
-        <p className="mt-1 text-[11px] text-amber-100/85">
-          <span className="font-semibold">Email</span> steps are available right away and send from{" "}
-          <span className="font-semibold">noreply@avillo.io</span>.
-        </p>
-
         {!phoneStatusLoading && !hasProvisionedSmsNumber && (
           <p className="mt-1 text-[10px] text-amber-100/75">
-            You can still build workflows with email, tasks, waits, and branches today. SMS unlocks as soon as you claim your number in Comms.
+            You can still build workflows with tasks, waits, and branches today. SMS unlocks as soon as you claim your number in Comms.
           </p>
         )}
       </div>
@@ -1053,7 +1040,7 @@ async function handleToggleActive() {
             </p>
             <p className="mt-1 max-w-xl text-xs text-[var(--avillo-cream-soft)]">
               Build simple, powerful automations that connect your contacts and listings to real-world
-              actions. Start from templates or craft your own — no tech skills needed.
+              actions. Start from templates or craft your own with texts, tasks, waits, and branches — no tech skills needed.
             </p>
 
             {!accountLoading && !hasAutopilot && (
@@ -1426,7 +1413,7 @@ async function handleToggleActive() {
                       3. What should happen, in order?
                     </p>
                     <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                      Steps run from top to bottom. Think: text → wait → email → task. Tap a step to edit it, or remove it with one click.
+                      Steps run from top to bottom. Think: text → wait → task. Tap a step to edit it, or remove it with one click.
                     </p>
 
                     {!phoneStatusLoading && !hasProvisionedSmsNumber && (
@@ -1438,7 +1425,7 @@ async function handleToggleActive() {
                     <div className="mt-1 space-y-2">
                       {activeWorkflow.steps.length === 0 && (
                         <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
-                          No steps yet. Start by adding a welcome SMS or email below.
+                          No steps yet. Start by adding a welcome SMS, or task below.
                         </p>
                       )}
 
@@ -1483,7 +1470,6 @@ async function handleToggleActive() {
 
                           <p className="mt-1 truncate text-[10px] text-[var(--avillo-cream-muted)]">
                             {s.type === "SMS" && s.config?.text}
-                            {s.type === "EMAIL" && s.config?.subject}
                             {s.type === "TASK" && s.config?.text}
                             {s.type === "WAIT" && formatWait(s.config)}
                             {s.type === "IF" &&
@@ -1513,7 +1499,7 @@ async function handleToggleActive() {
 
                     {/* Add step buttons */}
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {(["SMS", "EMAIL", "TASK", "WAIT", "IF"] as StepType[]).map((t) => {
+                      {(["SMS", "TASK", "WAIT", "IF"] as StepType[]).map((t) => {
                         const smsLocked =
                           t === "SMS" && !phoneStatusLoading && !hasProvisionedSmsNumber;
 
@@ -1551,7 +1537,7 @@ async function handleToggleActive() {
                         4. Turn it on, test, & save
                       </p>
                       <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                        You can pause a workflow anytime. Click “Run test” to send this workflow to your own email or phone.
+                        You can pause a workflow anytime. Click “Run test” to test the workflow behavior.
                       </p>
                     </div>
 
