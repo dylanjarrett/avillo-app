@@ -9,15 +9,18 @@ import { requireEntitlement } from "@/lib/entitlements";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function buildTwiml(message: string) {
+function buildTwiml(message?: string) {
   const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(message);
+  if (message) twiml.message(message);
   return twiml.toString();
 }
 
-function twimlResponse(message: string) {
+function twimlResponse(message?: string) {
   const xml = buildTwiml(message);
-  return new NextResponse(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
+  return new NextResponse(xml, {
+    status: 200,
+    headers: { "Content-Type": "text/xml" },
+  });
 }
 
 function isStopWord(upper: string) {
@@ -227,9 +230,18 @@ export async function POST(req: NextRequest) {
   }
 
   // TwiML responses
-  if (isStopWord(upper)) return twimlResponse("You’re unsubscribed. Reply START to re-subscribe.");
-  if (isStartWord(upper)) return twimlResponse("You’re back in. Reply STOP to opt out, HELP for help.");
-  if (isHelpWord(upper)) return twimlResponse("Avillo: Reply STOP to opt out. Help: support@avillo.io");
+  if (isStopWord(upper)) {
+    return twimlResponse("You’re unsubscribed. Reply START to re-subscribe.");
+  }
 
-  return twimlResponse("Got it. Reply STOP to opt out, HELP for help.");
+  if (isStartWord(upper)) {
+    return twimlResponse("You’re back in. Reply STOP to opt out, HELP for help.");
+  }
+
+  if (isHelpWord(upper)) {
+    return twimlResponse("Avillo: Reply STOP to opt out. Help: support@avillo.io");
+  }
+
+  // Normal inbound conversational messages should not auto-reply
+  return twimlResponse();
 }
