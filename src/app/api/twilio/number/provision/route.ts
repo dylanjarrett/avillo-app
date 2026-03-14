@@ -49,6 +49,28 @@ function safeStatusCode(err: any, fallback = 500) {
   return fallback;
 }
 
+function getMessagingServiceSid() {
+  const sid = String(process.env.TWILIO_MESSAGING_SERVICE_SID || "").trim();
+  if (!sid) {
+    throw new Error("TWILIO_MESSAGING_SERVICE_SID is not set.");
+  }
+  if (!/^MG[a-fA-F0-9]{32}$/.test(sid)) {
+    throw new Error("TWILIO_MESSAGING_SERVICE_SID is invalid.");
+  }
+  return sid;
+}
+
+async function attachPhoneNumberToMessagingService(phoneNumberSid: string) {
+  const client = getTwilioClient();
+  const serviceSid = getMessagingServiceSid();
+
+  await client.messaging.v1
+    .services(serviceSid)
+    .phoneNumbers.create({
+      phoneNumberSid,
+    });
+}
+
 async function releaseTwilioNumberBestEffort(sid: string) {
   try {
     const client = getTwilioClient();
@@ -158,6 +180,12 @@ export async function POST(req: NextRequest) {
     });
 
     purchasedSid = purchased.sid;
+
+    // -------------------------
+    // Twilio: attach number to Messaging Service sender pool
+    // Required so the number is campaign-enabled for sending
+    // -------------------------
+    await attachPhoneNumberToMessagingService(purchased.sid);
 
     // -------------------------
     // Persist to DB
