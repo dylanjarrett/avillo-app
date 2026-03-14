@@ -537,10 +537,6 @@ export default function DashboardPage() {
     const context = [
       `Name: ${profileName || ""}`,
       `Brokerage: ${brokerage || ""}`,
-      `Pipeline: ${totalPipelineContacts}`,
-      `Active listings: ${listingSummary?.activeCount ?? 0}`,
-      `Open tasks: ${openTasks.length}`,
-      `AI recent: ${aiRecent.length}`,
       "",
       "Feedback:",
       feedbackText.trim(),
@@ -549,7 +545,9 @@ export default function DashboardPage() {
       .join("\n");
 
     const body = encodeURIComponent(context);
+
     window.location.href = `mailto:support@avillo.io?subject=${subject}&body=${body}`;
+
     setFeedbackSent(true);
     setTimeout(() => setFeedbackSent(false), 2500);
     setFeedbackText("");
