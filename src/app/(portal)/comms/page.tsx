@@ -154,9 +154,12 @@ export default function Page() {
 
   const hasMyNumber = !!myNumber?.e164;
 
-      // Comms status
+  // Comms status
   const [statusLoading, setStatusLoading] = useState(true);
   const [canProvision, setCanProvision] = useState(false);
+
+  // Only show number / calling setup UI after boot checks finish
+  const commsChecksReady = !statusLoading && !loadingMyNumber;
 
   // Forwarding phone (bridge-to-personal)
   const [hasForwardingPhone, setHasForwardingPhone] = useState(false);
@@ -230,6 +233,7 @@ export default function Page() {
    // ---------- Boot: status-first ----------
   useEffect(() => {
     const controller = new AbortController();
+    let cancelled = false;
 
     async function boot() {
       try {
@@ -237,8 +241,8 @@ export default function Page() {
         setLoadingMyNumber(true);
         setMyNumberError(null);
 
-        // 1) status-first
         const s = await getCommsStatus(controller.signal);
+        if (cancelled) return;
 
         if (!s.commsEnabled) {
           lockComms("Comms requires a Pro or Enterprise plan.");
@@ -248,7 +252,6 @@ export default function Page() {
 
         setCanProvision(!!s.canProvision);
 
-        // active number from status
         if (s.activeNumber?.id && s.activeNumber?.e164) {
           setMyNumber({
             id: String(s.activeNumber.id),
@@ -259,26 +262,31 @@ export default function Page() {
           setMyNumber(null);
         }
 
-        // 2) forwarding phone
         const p = await getForwardingPhone(controller.signal);
+        if (cancelled) return;
+
         setForwardingPhone(p);
         setHasForwardingPhone(!!p);
       } catch (e: any) {
-        if (isAbortError(e)) return;
+        if (isAbortError(e) || cancelled) return;
 
         const msg = normalizeApiError(e, "We couldn’t load Comms status.");
         setMyNumberError(msg);
-
-        // lock only if entitlement-ish
         safeSetLockFromMessage(msg);
       } finally {
-        setStatusLoading(false);
-        setLoadingMyNumber(false);
+        if (!cancelled) {
+          setStatusLoading(false);
+          setLoadingMyNumber(false);
+        }
       }
     }
 
     boot();
-    return () => controller.abort();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -323,20 +331,20 @@ export default function Page() {
     const controller = new AbortController();
 
     async function load() {
+      if (statusLoading || loadingMyNumber) return;
+
       try {
         setLoadingConvos(true);
         setError(null);
 
         const items = await listConversations(controller.signal);
 
-        unlockComms();
-
         const sorted = sortConvos(items);
         setConvos(sorted);
 
-        if (selectedId && !sorted.find((c) => c.id === selectedId)) {
-          setSelectedId(null);
-        }
+        setSelectedId((prev) =>
+          prev && !sorted.find((c) => c.id === prev) ? null : prev
+        );
       } catch (e: any) {
         if (isAbortError(e)) return;
 
@@ -354,7 +362,7 @@ export default function Page() {
     load();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [statusLoading, loadingMyNumber]);
 
   useEffect(() => {
     if (commsLocked) return;
@@ -1001,13 +1009,13 @@ useEffect(() => {
   }
 
   const headerTitle = "Messages";
-  const headerSubtitle = commsLocked
+  const headerSubtitle = !commsChecksReady
+  ? "Loading status…"
+  : commsLocked
     ? "Locked"
-    : statusLoading
-      ? "Loading status…"
-      : hasMyNumber
-        ? `From: ${myNumber?.e164}`
-        : "No number";
+    : hasMyNumber
+      ? `From: ${myNumber?.e164}`
+      : "No number";
 
   const activeIsDraft = !!activeConvo?.isDraft;
 
@@ -1162,7 +1170,7 @@ useEffect(() => {
           )}
 
           {/* Call setup banner (only when Comms enabled + number exists but no forwarding phone) */}
-          {!commsLocked && hasMyNumber && !hasForwardingPhone && (
+          {commsChecksReady && !commsLocked && hasMyNumber && !hasForwardingPhone && (
             <div className="shrink-0 border-b border-slate-800/60 bg-slate-950/55 px-4 py-3">
               <p className="text-[11px] font-semibold text-slate-50">Enable calling</p>
               <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
@@ -1194,11 +1202,10 @@ useEffect(() => {
             >
               {/* Sidebar header (shrink-0) */}
               <div className="shrink-0 border-b border-slate-800/60 px-3 py-3">
-                {!commsLocked && (
+                {commsChecksReady && !commsLocked && (
                   <div className="mb-3">
                     {!hasMyNumber ? (
-                      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3
-                      shadow-[inset_0_0_45px_rgba(251,191,36,0.12)]">
+                      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-3 shadow-[inset_0_0_45px_rgba(251,191,36,0.12)]">
                         <p className="text-[12px] font-semibold text-slate-50">Activate your work number.</p>
                         <p className="mt-0.5 text-[11px] text-[var(--avillo-cream-muted)]">
                           Choose your area code — we’ll take care of the rest.
