@@ -126,13 +126,6 @@ export default function Navbar({ sidebarOpen, onToggleSidebar }: NavbarProps) {
             </span>
           </button>
 
-          {/* Private beta pill (desktop only) */}
-          <button
-            type="button"
-            className="hidden rounded-full border border-[#273247] bg-[#0b1220] px-3 py-1 text-[0.65rem] font-medium uppercase tracking-[0.18em] text-[#f7f0d8] shadow-[0_0_20px_rgba(0,0,0,0.6)] sm:inline-flex"
-          >
-            Private beta
-          </button>
 
           {/* Tour button (desktop only) */}
           <button

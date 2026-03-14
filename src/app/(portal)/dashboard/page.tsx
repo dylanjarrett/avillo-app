@@ -533,7 +533,7 @@ export default function DashboardPage() {
   const visibleTasks = useMemo(() => (taskTab === "open" ? openTasks : completedTasks), [taskTab, openTasks, completedTasks]);
 
   function openFeedbackEmail() {
-    const subject = encodeURIComponent("Avillo beta feedback");
+    const subject = encodeURIComponent("Avillo feedback");
     const context = [
       `Name: ${profileName || ""}`,
       `Brokerage: ${brokerage || ""}`,
@@ -614,7 +614,7 @@ export default function DashboardPage() {
               value={feedbackText}
               onChange={(e) => setFeedbackText(e.target.value)}
               rows={5}
-              placeholder='Example: “On People, I want a quick way to see who I haven’t touched in 14 days.”'
+              placeholder='Example: “It would be great if Avillo could...”'
               className="w-full resize-none rounded-xl border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-50 outline-none placeholder:text-[var(--avillo-cream-muted)] focus:border-sky-400/70"
             />
 
@@ -633,7 +633,7 @@ export default function DashboardPage() {
             {feedbackSent && <p className="mt-2 text-[10px] font-medium text-emerald-200">Ready to send — your mail app will open.</p>}
           </div>
 
-          <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">Beta goal: collect 3–5 “pain points” per user and ship weekly improvements.</p>
+          <p className="mt-3 text-[10px] text-[var(--avillo-cream-muted)]">Share feedback, feature requests, or friction points so we can keep improving.</p>
         </div>
       </section>
 

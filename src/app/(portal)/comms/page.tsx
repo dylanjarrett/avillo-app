@@ -215,7 +215,7 @@ export default function Page() {
 
   function lockComms(msg?: string | null) {
     setCommsLocked(true);
-    setCommsLockMsg(msg || "Comms requires a Pro plan (or Beta access).");
+    setCommsLockMsg(msg || "Comms requires a Pro or Enterprise plan.");
   }
 
   function unlockComms() {
@@ -241,7 +241,7 @@ export default function Page() {
         const s = await getCommsStatus(controller.signal);
 
         if (!s.commsEnabled) {
-          lockComms("Comms requires a Pro plan (or Beta access).");
+          lockComms("Comms requires a Pro or Enterprise plan.");
         } else {
           unlockComms();
         }

@@ -63,7 +63,7 @@ export function buildWelcomeEmailHtml({
                     <td style="padding:20px 20px 22px 20px;">
 
                       <p style="margin:0 0 6px 0; font-size:11px; line-height:1.4; font-weight:600; letter-spacing:0.16em; text-transform:uppercase; color:#6b7280;">
-                        You're in🏡
+                        Your workspace is ready 🏡
                       </p>
 
                       <h1 style="margin:0 0 14px 0; font-size:18px; line-height:1.4; font-weight:600; color:#111827;">
@@ -71,15 +71,19 @@ export function buildWelcomeEmailHtml({
                       </h1>
 
                       <p style="margin:0 0 12px 0; font-size:13px; line-height:1.6; color:#374151;">
-                        We're really glad you're here. You're early to what we're building with Avillo — an AI operating system for real estate designed to remove busywork and give you back your time.
+                        You just created your Avillo workspace. Avillo is designed to be the most complete operating platform in real estate — bringing your contacts, listings, conversations, tasks, and automations into one place so you can run your entire business from a single workspace.
                       </p>
 
                       <p style="margin:0 0 12px 0; font-size:13px; line-height:1.6; color:#374151;">
-                        Because you're part of the private beta, your feedback has a direct impact on Avillo's future. We're shaping this platform <strong style="font-weight:600;">with you</strong>, not just for you — and your ideas genuinely help us build a better experience for every agent who joins after you.
+                        The next step is to activate your plan and begin your free trial. This unlocks the full platform so you can start texting and calling clients from your Avillo number, organizing your contacts and listings, and letting automations handle the repetitive work agents deal with every day.
                       </p>
 
                       <p style="margin:0 0 12px 0; font-size:13px; line-height:1.6; color:#374151;">
-                        You can sign in anytime at:
+                        Most agents finish setup in under a minute — activate your plan, add your first contact, and you’ll immediately see how Avillo keeps your pipeline organized and your day moving forward.
+                      </p>
+
+                      <p style="margin:0 0 12px 0; font-size:13px; line-height:1.6; color:#374151;">
+                        Finish setting up your workspace here:
                         <br />
                         <a href="http://${safeAppUrl}" style="color:#f4b41a; text-decoration:none;" target="_blank" rel="noopener">
                           ${safeAppUrl}
@@ -87,8 +91,8 @@ export function buildWelcomeEmailHtml({
                       </p>
 
                       <p style="margin:0 0 0 0; font-size:13px; line-height:1.6; color:#374151;">
-                        If you ever have questions, ideas, or feedback — even small things — just reply to this email or reach us at
-                        <a href="mailto:support@avillo.io" style="color:#f4b41a; text-decoration:none;">support@avillo.io</a>. We truly appreciate you helping shape Avillo.
+                        If you have any questions while getting started, just reply to this email or reach us at
+                        <a href="mailto:support@avillo.io" style="color:#f4b41a; text-decoration:none;">support@avillo.io</a>. We're here to help you get up and running quickly.
                       </p>
 
                       <p style="margin:18px 0 0 0; font-size:13px; line-height:1.6; color:#4b5563;">

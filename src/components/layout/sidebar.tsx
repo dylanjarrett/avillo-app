@@ -113,7 +113,7 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
 
         {/* Footer stays reachable without needing zoom-out */}
         <div className="border-t border-[#1d2940]/60 px-6 py-4 text-[0.7rem] text-[#8f9bb8]/70">
-          Private beta · <span className="text-[#f7f2e9]">Single-seat preview</span>
+          Avillo · <span className="text-[#f7f2e9]">Built for agents & teams</span>
         </div>
       </div>
     );
