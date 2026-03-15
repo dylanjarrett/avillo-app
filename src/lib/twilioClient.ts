@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { normalizeE164, safeStr } from "@/lib/phone/normalize";
 import { threadKeyForSms } from "@/lib/phone/threadKey";
 import { requireEntitlement } from "@/lib/entitlements";
+import type { VisibilityCtx } from "@/lib/visibility";
+import { whereReadableContact } from "@/lib/visibility";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID || "";
 const apiKeySid = process.env.TWILIO_API_KEY_SID || "";
@@ -249,13 +251,23 @@ export async function sendSms(opts: {
   const fromE164 = normalizeE164(pn.e164);
   if (!fromE164) throw new Error("Your Avillo number is invalid. Please re-provision.");
 
-  // Optional: validate contact belongs to workspace + respect contact opt-out
+  // Optional: validate contact is actually readable by this user + respect opt-out
   if (contactId) {
+    const vctx: VisibilityCtx = {
+      workspaceId,
+      userId,
+      isWorkspaceAdmin: false,
+    };
+
     const c = await prisma.contact.findFirst({
-      where: { id: contactId, workspaceId },
+      where: {
+        id: contactId,
+        ...whereReadableContact(vctx),
+      },
       select: { id: true, smsOptedOutAt: true },
     });
-    if (!c) throw new Error("Contact not found in workspace.");
+
+    if (!c) throw new Error("Contact not found.");
     if (c.smsOptedOutAt) throw new Error("Contact has opted out of SMS.");
   }
 

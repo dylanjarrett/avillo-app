@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { normalizeE164, upperTrim } from "@/lib/phone/normalize";
 import { threadKeyForSms } from "@/lib/phone/threadKey";
 import { requireEntitlement } from "@/lib/entitlements";
+import type { VisibilityCtx } from "@/lib/visibility";
+import { whereReadableContact } from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,10 +84,16 @@ export async function POST(req: NextRequest) {
 
   const now = new Date();
 
-  // Optional contact link (best-effort; supports non-normalized stored phones)
+  // Optional contact link, but only if the assigned user can actually read it
+  const vctx: VisibilityCtx = {
+    workspaceId,
+    userId: assignedToUserId,
+    isWorkspaceAdmin: false,
+  };
+
   const contact = await prisma.contact.findFirst({
     where: {
-      workspaceId,
+      ...whereReadableContact(vctx),
       OR: [{ phone: fromNorm.e164 }, { phone: fromNorm.alt }],
     },
     select: { id: true },
@@ -112,11 +120,11 @@ export async function POST(req: NextRequest) {
       updatedAt: now, 
     },
     update: {
-      contactId: contact?.id ?? undefined,
+      contactId: contact?.id ?? null,
       otherPartyE164: from,
       lastMessageAt: now,
       lastInboundAt: now,
-      updatedAt: now, 
+      updatedAt: now,
     },
     select: { id: true },
   });
@@ -147,14 +155,20 @@ export async function POST(req: NextRequest) {
     });
 
     await prisma.contact.updateMany({
-      where: { workspaceId, OR: [{ phone: fromNorm.e164 }, { phone: fromNorm.alt }] },
+      where: {
+        ...whereReadableContact(vctx),
+        OR: [{ phone: fromNorm.e164 }, { phone: fromNorm.alt }],
+      },
       data: { smsOptedOutAt: now },
     });
   } else if (isStartWord(upper)) {
     await prisma.smsSuppression.deleteMany({ where: { workspaceId, phone: from } });
 
     await prisma.contact.updateMany({
-      where: { workspaceId, OR: [{ phone: fromNorm.e164 }, { phone: fromNorm.alt }] },
+      where: {
+        ...whereReadableContact(vctx),
+        OR: [{ phone: fromNorm.e164 }, { phone: fromNorm.alt }],
+      },
       data: { smsOptedOutAt: null },
     });
   }
