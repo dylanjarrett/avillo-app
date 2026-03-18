@@ -1711,7 +1711,7 @@ return (
           </div>
 
             {/* MAIN */}
-          <main className="min-h-[72vh]">
+          <main className="min-h-[72vh] md:flex md:min-h-0 md:h-[75vh] md:flex-col">
             {/* Channel header */}
             <div className="px-4 pt-4 md:px-5">
               <div className="space-y-2">
@@ -1805,10 +1805,10 @@ return (
             </div>
 
               {/* Messages + Composer (messages scroll; composer below) */}
-                <div className="px-2 pb-4 pt-3 md:px-4">
-                  <div className="space-y-3">
+                <div className="px-2 pb-4 pt-3 md:flex md:min-h-0 md:flex-1 md:flex-col md:px-4">
+                  <div className="space-y-3 md:flex md:min-h-0 md:flex-1 md:flex-col md:gap-3 md:space-y-0">
                     {/* MESSAGES BOX */}
-                    <GlassPanel inner className="h-[52vh] min-h-0 overflow-hidden">
+                    <GlassPanel inner className="h-[52vh] min-h-0 overflow-hidden md:h-auto md:flex-1">
                         <div className="flex h-full min-h-0 flex-col overflow-hidden">
                           <div
                             ref={scrollerInnerRef}
@@ -1860,7 +1860,7 @@ return (
                     </GlassPanel>
 
                     {/* COMPOSER (now below the message box) */}
-                    <GlassPanel inner className="p-2 relative">
+                    <GlassPanel inner className="relative p-2 md:shrink-0">
                      <div className="flex items-end gap-2">
                       <div className="flex-1 min-w-0">
                         <MentionComposer
