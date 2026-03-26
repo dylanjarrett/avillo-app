@@ -54,7 +54,19 @@ export async function requireWorkspace(): Promise<WorkspaceCtx> {
     },
   });
 
-  if (!sessionKey || !user?.currentSessionKey || sessionKey !== user.currentSessionKey) {
+  if (!sessionKey) {
+    return {
+      ok: false,
+      status: 401,
+      error: { error: "Session expired. Please sign in again." },
+      userId: null,
+      workspaceId: null,
+      workspaceRole: null,
+      workspace: null,
+    };
+  }
+
+  if (user?.currentSessionKey && sessionKey !== user.currentSessionKey) {
     return {
       ok: false,
       status: 401,

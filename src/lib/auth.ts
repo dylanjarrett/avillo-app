@@ -335,12 +335,25 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         const userId = String((user as any).id);
 
+        const existingUser = await prisma.user.findUnique({
+          where: { id: userId },
+          select: {
+            id: true,
+            role: true,
+            currentSessionKey: true,
+            email: true,
+            name: true,
+          },
+        });
+
+        if (!existingUser) return t;
+
         const dbUser = await prisma.user.update({
           where: { id: userId },
           data: {
-            currentSessionKey: crypto.randomUUID(),
             lastLoginAt: new Date(),
             email: (user as any)?.email ? normalizeEmail((user as any).email) : undefined,
+            currentSessionKey: existingUser.currentSessionKey ?? crypto.randomUUID(),
           },
           select: {
             id: true,
