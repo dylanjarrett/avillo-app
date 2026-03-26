@@ -29,6 +29,7 @@ export type WorkspaceCtx = {
 export async function requireWorkspace(): Promise<WorkspaceCtx> {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as any)?.id as string | undefined;
+  const sessionKey = (session?.user as any)?.sessionKey as string | undefined;
   const tokenWorkspaceId = (session?.user as any)?.workspaceId as string | undefined;
 
   if (!userId) {
@@ -47,8 +48,23 @@ export async function requireWorkspace(): Promise<WorkspaceCtx> {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { defaultWorkspaceId: true },
+    select: {
+      defaultWorkspaceId: true,
+      currentSessionKey: true,
+    },
   });
+
+  if (!sessionKey || !user?.currentSessionKey || sessionKey !== user.currentSessionKey) {
+    return {
+      ok: false,
+      status: 401,
+      error: { error: "Session expired. Please sign in again." },
+      userId: null,
+      workspaceId: null,
+      workspaceRole: null,
+      workspace: null,
+    };
+  }
 
   const pickedWorkspaceId =
     cookieWorkspaceId || tokenWorkspaceId || user?.defaultWorkspaceId || undefined;

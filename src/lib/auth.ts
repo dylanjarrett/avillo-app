@@ -306,7 +306,28 @@ export const authOptions: NextAuthOptions = {
    * Callbacks
    * ------------------------------------- */
 
-  callbacks: {
+    callbacks: {
+    async signIn({ user, account, profile }) {
+      if (account?.provider === "google") {
+        const email = normalizeEmail((user as any)?.email || (profile as any)?.email);
+        if (!email) return false;
+
+        const existing = await prisma.user.findUnique({
+          where: { email },
+          select: { id: true },
+        });
+
+        console.log("[auth.signIn] google", {
+          email,
+          hasExistingUser: !!existing,
+        });
+
+        return true;
+      }
+
+      return true;
+    },
+
     async jwt({ token, user, trigger }) {
       const t = token as TokenShape;
 
@@ -347,10 +368,10 @@ export const authOptions: NextAuthOptions = {
         t.seatLimit = ws.seatLimit ?? null;
         t.includedSeats = ws.includedSeats ?? null;
 
-        return token;
+        return t;
       }
 
-      if (!t?.id) return token;
+      if (!t?.id) return t;
 
       // Client called useSession().update()
       if (trigger === "update") {
@@ -374,7 +395,7 @@ export const authOptions: NextAuthOptions = {
         } catch {
           // keep token
         }
-        return token;
+        return t;
       }
 
       // Safety net: hydrate missing fields
@@ -401,7 +422,7 @@ export const authOptions: NextAuthOptions = {
         }
       }
 
-      return token;
+      return t;
     },
 
     async session({ session, token }) {

@@ -2,7 +2,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { compare, hash } from "bcryptjs";
-import { requireWorkspace } from "@/lib/workspace"; // <-- adjust path if needed
+import crypto from "crypto";
+import { requireWorkspace } from "@/lib/workspace"; 
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,7 +64,10 @@ export async function POST(req: NextRequest) {
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: hashed },
+      data: {
+        passwordHash: hashed,
+        currentSessionKey: crypto.randomUUID(),
+     },
     });
 
     return NextResponse.json(

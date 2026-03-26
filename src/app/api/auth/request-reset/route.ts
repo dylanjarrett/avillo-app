@@ -122,8 +122,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Still log for dev
+  if (process.env.NODE_ENV !== "production") {
     console.log("📧 Password reset link:", resetUrl);
     console.log("From no-reply@avillo.io → To:", email);
+  }
 
     return NextResponse.json({ ok: true });
   } catch (err) {
