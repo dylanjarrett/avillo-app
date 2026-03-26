@@ -6,6 +6,7 @@ import Navbar from "@/components/layout/navbar";
 import Sidebar from "@/components/layout/sidebar";
 import { TourProvider } from "@/components/tour/tour-provider";
 import AIBubble from "@/components/ai/ai-bubble";
+import SessionGuard from "@/components/auth/session-guard";
 
 export default function PortalLayout({
   children,
@@ -16,6 +17,8 @@ export default function PortalLayout({
 
   return (
     <TourProvider>
+      <SessionGuard />
+
       <Navbar
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
