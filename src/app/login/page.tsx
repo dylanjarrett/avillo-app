@@ -6,6 +6,7 @@ import Image from "next/image";
 import { signIn, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import PasswordInput from "@/components/ui/password-input";
 
 function GoogleIcon() {
   return (
@@ -181,12 +182,11 @@ export default function LoginPage() {
               <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
                 Password
               </label>
-              <input
-                type="password"
+              <PasswordInput
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="avillo-input w-full"
+                className="avillo-input"
               />
 
               <div className="mt-1 flex justify-end">

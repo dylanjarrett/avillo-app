@@ -4,6 +4,7 @@
 import { FormEvent, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import PasswordInput from "@/components/ui/password-input";
 
 function AuthLogo() {
   return (
@@ -126,12 +127,11 @@ export default function ResetPasswordPage({ searchParams }: ResetPasswordPagePro
                 <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
                   New password
                 </label>
-                <input
-                  type="password"
+                <PasswordInput
                   autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="avillo-input w-full"
+                  className="avillo-input"
                 />
               </div>
 
@@ -139,12 +139,11 @@ export default function ResetPasswordPage({ searchParams }: ResetPasswordPagePro
                 <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
                   Confirm password
                 </label>
-                <input
-                  type="password"
+                <PasswordInput
                   autoComplete="new-password"
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
-                  className="avillo-input w-full"
+                  className="avillo-input"
                 />
               </div>
 

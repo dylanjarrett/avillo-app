@@ -6,6 +6,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import PasswordInput from "@/components/ui/password-input";
 
 function AuthLogo() {
   return (
@@ -421,13 +422,12 @@ export default function InviteAcceptPage() {
                     <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
                       Password
                     </label>
-                    <input
-                      type="password"
+                    <PasswordInput
                       autoComplete="new-password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="At least 8 characters"
-                      className="avillo-input w-full"
+                      className="avillo-input"
                     />
                   </div>
                 ) : (

@@ -1,7 +1,7 @@
 // src/app/(portal)/account/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
 import { signOut } from "next-auth/react";
 
@@ -94,6 +94,81 @@ function planLabel(plan?: WorkspaceBilling["plan"]) {
   if (!plan) return "—";
   if (plan === "FOUNDING_PRO") return "Founding Pro";
   return plan.charAt(0) + plan.slice(1).toLowerCase();
+}
+
+function EyeIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      aria-hidden="true"
+      {...props}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"
+      />
+      <circle cx="12" cy="12" r="2.2" />
+    </svg>
+  );
+}
+
+function EyeOffIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      aria-hidden="true"
+      {...props}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M10.5 6.3A8.8 8.8 0 0 1 12 6c5.5 0 9 6 9 6a13.3 13.3 0 0 1-3.2 4.1M6.7 6.7A13.2 13.2 0 0 0 3 12s3.5 6 9 6c1.2 0 2.3-.2 3.3-.6"
+      />
+    </svg>
+  );
+}
+
+type AccountPasswordFieldProps = Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "type"
+>;
+
+function AccountPasswordField({ className, ...props }: AccountPasswordFieldProps) {
+  const [visible, setVisible] = useState(false);
+  const buttonId = useId();
+
+  return (
+    <div className="relative mt-1">
+      <input
+        {...props}
+        type={visible ? "text" : "password"}
+        className={cx(className, "w-full pr-8")}
+        aria-describedby={props["aria-describedby"]}
+      />
+      <button
+        type="button"
+        aria-label={visible ? "Hide password" : "Show password"}
+        aria-pressed={visible}
+        aria-controls={buttonId}
+        onClick={() => setVisible((v) => !v)}
+        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-slate-400 transition hover:text-slate-200 focus:outline-none"
+      >
+        {visible ? (
+          <EyeOffIcon className="h-3 w-3" />
+        ) : (
+          <EyeIcon className="h-3 w-3" />
+        )}
+      </button>
+    </div>
+  );
 }
 
 export default function AccountPage() {
@@ -730,12 +805,11 @@ export default function AccountPage() {
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-200/90">Current password</label>
-                  <input
-                    type="password"
+                  <AccountPasswordField
                     value={emailPassword}
                     onChange={(e) => setEmailPassword(e.target.value)}
                     placeholder="Required to confirm email change"
-                    className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
+                    className="rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
                   />
                 </div>
 
@@ -770,33 +844,30 @@ export default function AccountPage() {
               <form onSubmit={handleChangePassword} className="mt-2 space-y-2.5">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-200/90">Current password</label>
-                  <input
-                    type="password"
+                  <AccountPasswordField
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
+                    className="rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
                     placeholder="••••••••"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-200/90">New password</label>
-                  <input
-                    type="password"
+                  <AccountPasswordField
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
+                    className="rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
                     placeholder="At least 8 characters"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-200/90">Confirm new password</label>
-                  <input
-                    type="password"
+                  <AccountPasswordField
                     value={confirmNewPassword}
                     onChange={(e) => setConfirmNewPassword(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
+                    className="rounded-xl border border-slate-600 bg-slate-900/70 px-3 py-2 text-xs text-slate-50 outline-none ring-0 focus:border-amber-100/70 focus:ring-2 focus:ring-amber-100/40"
                     placeholder="Re-type new password"
                   />
                   {confirmNewPassword.length > 0 && newPassword !== confirmNewPassword && (
