@@ -1,3 +1,4 @@
+// components/intelligence/engines/NeighborhoodEngine.tsx
 "use client";
 
 import { useEffect, useState } from "react";

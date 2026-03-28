@@ -42,6 +42,12 @@ export default function IntelligencePage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+// Mobile route transitions can sometimes restore a stale scroll position.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.scrollTo(0, 0);
+  }, []);
+
   // ✅ HARD-only compliance banner state
   const [complianceGuard, setComplianceGuard] = useState<ComplianceGuardState>(null);
 

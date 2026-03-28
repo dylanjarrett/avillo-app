@@ -1,3 +1,4 @@
+// components/intelligence/engines/BuyerEngine.tsx
 "use client";
 
 import { useEffect, useState } from "react";

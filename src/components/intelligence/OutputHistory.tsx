@@ -112,12 +112,17 @@ export default function OutputHistory({ onSelectEntry, refreshKey }: OutputHisto
 
   // Engine pill scroller ref (mobile)
   const pillsRef = useRef<HTMLDivElement | null>(null);
+  const hasMountedPillsRef = useRef(false);
 
-  // Auto-scroll active pill (mobile only)
+  // Auto-scroll active pill on mobile only AFTER initial mount
   useEffect(() => {
-    // md breakpoint = 768px
     if (typeof window === "undefined") return;
     if (window.matchMedia("(min-width: 768px)").matches) return;
+
+    if (!hasMountedPillsRef.current) {
+      hasMountedPillsRef.current = true;
+      return;
+    }
 
     const root = pillsRef.current;
     if (!root) return;
