@@ -93,7 +93,7 @@ const RECOMMENDED_TEMPLATES: {
     id: "new-contact-speed-to-lead",
     label: "New online lead follow-up (same day)",
     description:
-      "Instant SMS, same-day check-in, then a reminder to call — built for fast lead response.",
+      "Requires SMS. Instantly texts a new lead, checks back in the same day, then reminds you to call.",
     trigger: "NEW_CONTACT",
     build: () => ({
       name: "New online lead follow-up (same day)",
@@ -144,7 +144,7 @@ const RECOMMENDED_TEMPLATES: {
     id: "hot-buyer-stage-change",
     label: "Buyer follow-up when stage changes to HOT",
     description:
-      "When a buyer becomes HOT, send a focused text and reminder to line up showings.",
+      "Requires SMS. When a buyer becomes HOT, send a focused text and reminder to line up showings.",
     trigger: "LEAD_STAGE_CHANGE",
     build: () => ({
       name: "Buyer follow-up (stage = HOT)",
@@ -160,7 +160,7 @@ const RECOMMENDED_TEMPLATES: {
             join: "AND",
             conditions: [
               {
-                field: "contact.type",
+                field: "contact.clientRole",
                 operator: "equals",
                 value: "buyer",
               },
@@ -201,54 +201,16 @@ const RECOMMENDED_TEMPLATES: {
   },
 
   {
-    id: "new-listing-seller-welcome",
-    label: "New listing — welcome the seller",
+    id: "new-contact-client-follow-up-task",
+    label: "New client follow-up task",
     description:
-      "When you create a new listing with a seller attached, send a welcome text and set expectations.",
-    trigger: "LISTING_CREATED",
+      "A simple no-SMS workflow that reminds you to follow up with new client contacts the next day.",
+    trigger: "NEW_CONTACT",
     build: () => ({
-      name: "New listing — seller welcome + expectations",
+      name: "New client follow-up task",
       description:
-        "As soon as I create a new listing and attach the seller, send them a welcome text and remind me to check in.",
-      trigger: "LISTING_CREATED",
-      active: true,
-      steps: [
-        {
-          id: crypto.randomUUID(),
-          type: "SMS",
-          config: {
-            text:
-              "Hi {{firstName}} — excited to officially get your home at {{propertyAddress}} on the market. I’ll keep you updated as activity picks up. Reach out anytime at {{agentPhone}}.",
-          },
-        },
-        {
-          id: crypto.randomUUID(),
-          type: "WAIT",
-          config: { hours: 48, amount: 48, unit: "hours" },
-        },
-        {
-          id: crypto.randomUUID(),
-          type: "TASK",
-          config: {
-            text:
-              "Check in with {{firstName}} about early activity and questions on {{propertyAddress}}.",
-          },
-        },
-      ],
-    }),
-  },
-
-  {
-    id: "listing-pending-seller-update",
-    label: "Listing goes pending — seller update",
-    description:
-      "When a listing status moves to PENDING, update the seller by text and remind yourself to manage next steps.",
-    trigger: "LISTING_STAGE_CHANGE",
-    build: () => ({
-      name: "Listing pending — seller update + next steps",
-      description:
-        "When a listing moves to pending, text the seller with next steps and remind me to manage key dates.",
-      trigger: "LISTING_STAGE_CHANGE",
+        "When I add a new client contact, wait one day and remind me to reach out personally.",
+      trigger: "NEW_CONTACT",
       active: true,
       steps: [
         {
@@ -258,36 +220,58 @@ const RECOMMENDED_TEMPLATES: {
             join: "AND",
             conditions: [
               {
-                field: "listing.status",
+                field: "contact.relationshipType",
                 operator: "equals",
-                value: "pending",
+                value: "client",
               },
             ],
           },
           thenSteps: [
             {
               id: crypto.randomUUID(),
-              type: "SMS",
-              config: {
-                text:
-                  "Hi {{firstName}} — great news: your home at {{propertyAddress}} is now pending. From here we’ll be focused on inspections, appraisal, and remaining deadlines. I’ll keep you posted every step of the way.",
-              },
-            },
-            {
-              id: crypto.randomUUID(),
               type: "WAIT",
-              config: { hours: 24, amount: 24, unit: "hours" },
+              config: { amount: 1, unit: "days" },
             },
             {
               id: crypto.randomUUID(),
               type: "TASK",
               config: {
                 text:
-                  "Review contract dates and set reminders for inspections, appraisal, and contingency deadlines for {{propertyAddress}}.",
+                  "Follow up with {{firstName}} and confirm their goals, timeline, and next steps.",
               },
             },
           ],
           elseSteps: [],
+        },
+      ],
+    }),
+  },
+
+  {
+    id: "new-listing-seller-followup-task",
+    label: "New listing — seller follow-up task",
+    description:
+      "A no-SMS workflow that reminds you to check in with your seller shortly after listing their home.",
+    trigger: "LISTING_CREATED",
+    build: () => ({
+      name: "New listing — seller follow-up task",
+      description:
+        "After creating a new listing, wait two days and remind me to check in with the seller about activity and expectations.",
+      trigger: "LISTING_CREATED",
+      active: true,
+      steps: [
+        {
+          id: crypto.randomUUID(),
+          type: "WAIT",
+          config: { amount: 2, unit: "days" },
+        },
+        {
+          id: crypto.randomUUID(),
+          type: "TASK",
+          config: {
+            text:
+              "Check in with {{firstName}} about prep, early activity, and expectations for {{propertyAddress}}.",
+          },
         },
       ],
     }),
@@ -360,6 +344,21 @@ function safeHasAutopilotEntitlement(account: AccountMe | null): boolean {
   return Boolean(ent.isPaidTier);
 }
 
+function workflowHasSmsSteps(steps: AutomationStep[] | BranchStep[] | undefined): boolean {
+  if (!Array.isArray(steps) || !steps.length) return false;
+
+  return steps.some((step: any) => {
+    if (step?.type === "SMS") return true;
+
+    const thenHasSms = Array.isArray(step?.thenSteps) && workflowHasSmsSteps(step.thenSteps);
+    if (thenHasSms) return true;
+
+    const elseHasSms = Array.isArray(step?.elseSteps) && workflowHasSmsSteps(step.elseSteps);
+    if (elseHasSms) return true;
+
+    return false;
+  });
+}
 
 /* ------------------------------------
  * Page
@@ -582,7 +581,7 @@ const pausedWorkflowsCount = workflows.filter((w) => !isEffectivelyActive(w)).le
     if (!template) return;
 
     const wf = template.build();
-    const hasSmsStep = (wf.steps ?? []).some((s) => s.type === "SMS");
+    const hasSmsStep = workflowHasSmsSteps(wf.steps);
 
     if (hasSmsStep && !phoneStatusLoading && !hasProvisionedSmsNumber) {
       alert("This template includes SMS. To use SMS steps, first claim your Avillo number from the Comms page.");

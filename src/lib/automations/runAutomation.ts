@@ -74,7 +74,11 @@ function getConditionFieldValue(field: string, contact: any | null, listing: any
     case "contact.stage":
       return contact?.stage != null ? norm(contact.stage) : null;
 
+    // canonical + backwards-compatible aliases
     case "contact.clientRole":
+    case "contact.type":
+    case "contact.role":
+    case "contact.contactType":
       return contact?.clientRole != null ? norm(contact.clientRole) : null;
 
     case "contact.source":
@@ -91,11 +95,34 @@ function getConditionFieldValue(field: string, contact: any | null, listing: any
   }
 }
 
+function normalizeExpectedValue(field: string, value: string): string {
+  const v = norm(value);
+
+  if (
+    field === "contact.clientRole" ||
+    field === "contact.type" ||
+    field === "contact.role" ||
+    field === "contact.contactType"
+  ) {
+    if (v === "buyer" || v === "buying") return "buyer";
+    if (v === "seller" || v === "selling") return "seller";
+    if (v === "both") return "both";
+  }
+
+  if (field === "contact.relationshipType") {
+    if (v === "client") return "client";
+    if (v === "partner") return "partner";
+  }
+
+  return v;
+}
+
 function evaluateSingleCondition(config: ConditionConfig, contact: any | null, listing: any | null): boolean {
   const actual = getConditionFieldValue(config.field, contact, listing);
   if (actual == null) return false;
 
-  const expected = norm(config.value);
+  const expected = normalizeExpectedValue(config.field, config.value);
+
   if (config.operator === "equals") return actual === expected;
   if (config.operator === "not_equals") return actual !== expected;
 
@@ -476,12 +503,31 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
           case "IF": {
             const result = evaluateIfGroup(step.config, contact, listing);
 
+            const normalizedConfig = normalizeIfConfig(step.config);
+
             await recordStep({
               stepId: step.id,
               stepType: "IF",
               status: "SUCCESS",
               message: `Condition evaluated to ${result}.`,
-              payload: normalizeIfConfig(step.config),
+              payload: {
+                ...normalizedConfig,
+                contactSnapshot: contact
+                  ? {
+                      id: contact.id,
+                      relationshipType: contact.relationshipType ?? null,
+                      clientRole: contact.clientRole ?? null,
+                      stage: contact.stage ?? null,
+                      source: contact.source ?? null,
+                    }
+                  : null,
+                listingSnapshot: listing
+                  ? {
+                      id: listing.id,
+                      status: listing.status ?? null,
+                    }
+                  : null,
+              },
             });
 
             const branch = result ? step.thenSteps ?? [] : step.elseSteps ?? [];

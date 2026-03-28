@@ -53,7 +53,8 @@ type Props = {
 
 const CONTACT_CONDITION_FIELDS = [
   { value: "contact.stage", label: "Contact stage" },
-  { value: "contact.type", label: "Contact type" },
+  { value: "contact.clientRole", label: "Client role" },
+  { value: "contact.relationshipType", label: "Relationship type" },
   { value: "contact.source", label: "Contact source" },
 ];
 
@@ -63,7 +64,8 @@ const ALL_CONDITION_FIELDS = [...CONTACT_CONDITION_FIELDS, ...LISTING_CONDITION_
 
 const FIELD_VALUE_OPTIONS: Record<string, string[]> = {
   "contact.stage": ["new", "warm", "hot", "past"],
-  "contact.type": ["buyer", "seller", "buyer & seller"],
+  "contact.clientRole": ["buyer", "seller", "both"],
+  "contact.relationshipType": ["client", "partner"],
   "contact.source": ["zillow", "referral", "open house", "website", "social media", "other"],
   "listing.status": ["draft", "active", "pending", "closed"],
 };
@@ -546,7 +548,7 @@ export default function StepModal({
                       Conditions
                     </label>
                     <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                      Example: Contact type is <strong>buyer</strong> AND Contact stage is <strong>hot</strong>.
+                      Example: Client role is <strong>buyer</strong> AND Contact stage is <strong>hot</strong>.
                     </p>
 
                     {/* Join selector */}
