@@ -700,7 +700,7 @@ export async function POST(req: NextRequest) {
 /* ----------------------------------------------------
  * DELETE /api/crm/contacts
  * - Clients: only owner can delete
- * - Partners: allow delete only if createdByUserId = current user (conservative)
+ * - Partners: any workspace member can delete
  * ---------------------------------------------------*/
 export async function DELETE(req: NextRequest) {
   try {
@@ -708,28 +708,34 @@ export async function DELETE(req: NextRequest) {
     if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
 
     const body = (await req.json().catch(() => null)) as { id?: string } | null;
-    if (!body?.id) return NextResponse.json({ error: "Contact id is required." }, { status: 400 });
+    if (!body?.id) {
+      return NextResponse.json({ error: "Contact id is required." }, { status: 400 });
+    }
 
     const existing = await prisma.contact.findFirst({
       where: {
         id: body.id,
         workspaceId: ctx.workspaceId,
         OR: [
-          // client owner
-          { ownerUserId: ctx.userId },
-          // partner creator (conservative)
-          { createdByUserId: ctx.userId },
+          {
+            relationshipType: RelationshipType.CLIENT,
+            ownerUserId: ctx.userId,
+          },
+          {
+            relationshipType: RelationshipType.PARTNER,
+          },
         ],
       },
       select: { id: true, relationshipType: true },
     });
 
-    if (!existing) return NextResponse.json({ error: "Contact not found." }, { status: 404 });
+    if (!existing) {
+      return NextResponse.json({ error: "Contact not found." }, { status: 404 });
+    }
 
     const contactId = existing.id;
 
     await prisma.$transaction(async (tx) => {
-      // Always delete listing links for this contact (cleanup)
       await tx.listingBuyerLink.deleteMany({
         where: { contactId, listing: { workspaceId: ctx.workspaceId } },
       });

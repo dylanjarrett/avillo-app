@@ -7,6 +7,7 @@ import { useCrmMobileWorkspaceScroll } from "@/hooks/useCrmMobileWorkspaceScroll
 import { FilterPill } from "@/components/ui/filter-pill";
 import PeoplePins from "@/components/people/pins";
 import { avilloTabPillClass } from "@/components/ui/tabPills";
+import ImportContactsModal from "@/components/people/import-contacts-modal";
 
 /* ------------------------------------
  * Types
@@ -175,6 +176,7 @@ export default function CrmPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   // ---------- Derived counts for pills ----------
   const clientContacts = contacts.filter((c) => c.relationshipType !== "partner");
@@ -293,6 +295,64 @@ export default function CrmPage() {
   return () => controller.abort();
 }, [activeContact?.id, activeContact?.relationshipType, activeTab]);
 
+
+async function reloadContacts(options?: { preserveSelection?: boolean }) {
+  const preserveSelection = options?.preserveSelection ?? false;
+
+  const res = await fetch("/api/crm/contacts");
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || "Failed to load contacts.");
+  }
+
+  const data = await res.json();
+
+  const loaded: Contact[] = (data.contacts ?? []).map((c: any) => {
+    const clientRole: ClientRole = normalizeClientRole(c.clientRole);
+    const relationshipType =
+      (c.relationshipType === "partner" ? "partner" : "client") as RelationshipType;
+
+    const stage: Stage | null =
+      relationshipType === "partner"
+        ? null
+        : (c.stage as Stage) && ["new", "warm", "hot", "past"].includes(c.stage)
+        ? (c.stage as Stage)
+        : "new";
+
+    return {
+      id: c.id,
+      name: c.name ?? "",
+      label: c.label ?? "",
+      relationshipType,
+      stage,
+      clientRole,
+      priceRange: c.priceRange ?? "",
+      areas: c.areas ?? "",
+      timeline: c.timeline ?? "",
+      source: (c.source ?? "").toString().toLowerCase(),
+      email: c.email ?? "",
+      phone: c.phone ?? "",
+      notes: Array.isArray(c.notes) ? c.notes : [],
+      linkedListings: Array.isArray(c.linkedListings) ? c.linkedListings : [],
+      partnerProfile: c.partnerProfile ?? null,
+      pins: Array.isArray(c.pins) ? c.pins : [],
+    };
+  });
+
+  setContacts(loaded);
+
+  if (!preserveSelection) {
+    setSelectedId(null);
+    setActiveContact(null);
+    return;
+  }
+
+  if (!selectedId || selectedId === "new") return;
+
+  const found = loaded.find((c) => c.id === selectedId) ?? null;
+  setActiveContact(found);
+  if (!found) setSelectedId(null);
+}
 
   // ---------- Load contacts & listings on mount ----------
   useEffect(() => {
@@ -1129,13 +1189,36 @@ export default function CrmPage() {
             </p>
           </div>
 
+          {/* Mobile: EXACT original button */}
           <button
             type="button"
             onClick={handleAddContact}
-            className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20"
+            className="md:hidden inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20"
           >
             + Add contact
           </button>
+
+          {/* Desktop: Import + Add */}
+          <div className="hidden md:flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                setImportOpen(true);
+              }}
+              className="hidden lg:inline-flex items-center justify-center rounded-full border border-slate-700/80 bg-slate-900/70 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)] transition hover:border-amber-100/60 hover:text-amber-50"
+            >
+              Import
+            </button>
+
+            <button
+              type="button"
+              onClick={handleAddContact}
+              className="inline-flex items-center justify-center rounded-full border border-amber-100/70 bg-amber-50/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-100 shadow-[0_0_26px_rgba(248,250,252,0.2)] hover:bg-amber-50/20"
+            >
+              + Add contact
+            </button>
+          </div>
         </div>
 
         {/* Error bar */}
@@ -2045,6 +2128,25 @@ export default function CrmPage() {
           </div>
         </div>
       </section>
+
+      <ImportContactsModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={async () => {
+          try {
+            setError(null);
+            setLoading(true);
+            await reloadContacts();
+          } catch (err: any) {
+            console.error("Import refresh error", err);
+            setError(
+              err?.message || "Contacts were imported, but we couldn’t refresh the list."
+            );
+          } finally {
+            setLoading(false);
+          }
+        }}
+      />
     </div>
   );
 }
