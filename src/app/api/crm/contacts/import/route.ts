@@ -12,23 +12,24 @@ import { normalizeContactWrite } from "@/lib/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
 const MAX_IMPORT_ROWS = 1000;
 
-type MappingMode = "full" | "split";
+type ImportMappings = {
+  fullName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+
+  // One or many CSV columns that should be joined and stored in Contact.areas
+  areas?: string[] | null;
+};
 
 type ImportBody = {
-  mappingMode?: MappingMode;
-
-  fullNameColumn?: string | null;
-  firstNameColumn?: string | null;
-  lastNameColumn?: string | null;
-
-  emailColumn?: string | null;
-  phoneColumn?: string | null;
-
+  mappings?: ImportMappings | null;
   relationshipType?: "CLIENT" | "PARTNER" | string | null;
   clientRole?: "BUYER" | "SELLER" | "BOTH" | string | null;
-
   rows?: Record<string, string>[];
 };
 
@@ -77,7 +78,9 @@ function splitFullName(value: unknown): {
 
 function normalizeRelationshipType(raw?: string | null): RelationshipType {
   const value = String(raw ?? "").trim().toUpperCase();
-  return value === "PARTNER" ? RelationshipType.PARTNER : RelationshipType.CLIENT;
+  return value === "PARTNER"
+    ? RelationshipType.PARTNER
+    : RelationshipType.CLIENT;
 }
 
 function normalizeClientRole(raw?: string | null): ClientRole | null {
@@ -98,6 +101,53 @@ function getColumnValue(
   return cleanString(row[column]);
 }
 
+function normalizeSelectedColumns(columns?: string[] | null): string[] {
+  if (!Array.isArray(columns)) return [];
+
+  return columns
+    .map((value) => cleanString(value))
+    .filter((value): value is string => !!value);
+}
+
+function getRowHeaders(rows: Record<string, string>[]): Set<string> {
+  const headers = new Set<string>();
+
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+
+    for (const key of Object.keys(row)) {
+      const cleaned = cleanString(key);
+      if (cleaned) headers.add(cleaned);
+    }
+  }
+
+  return headers;
+}
+
+function hasMappedColumn(
+  availableHeaders: Set<string>,
+  column?: string | null
+): boolean {
+  const cleaned = cleanString(column);
+  if (!cleaned) return false;
+  return availableHeaders.has(cleaned);
+}
+
+function getJoinedColumnValues(
+  row: Record<string, string>,
+  columns?: string[] | null
+): string | null {
+  if (!Array.isArray(columns) || columns.length === 0) return null;
+
+  const values = columns
+    .map((column) => getColumnValue(row, column))
+    .filter((value): value is string => !!value);
+
+  if (!values.length) return null;
+
+  return values.join(", ");
+}
+
 function isLikelyValidEmail(email: string | null): boolean {
   if (!email) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -110,62 +160,70 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json().catch(() => null)) as ImportBody | null;
     if (!body) {
-      return NextResponse.json({ error: "Missing import payload." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing import payload." },
+        { status: 400 }
+      );
     }
 
     const {
-      mappingMode,
-      fullNameColumn,
-      firstNameColumn,
-      lastNameColumn,
-      emailColumn,
-      phoneColumn,
+      mappings,
       relationshipType: rawRelationshipType,
       clientRole: rawClientRole,
       rows,
     } = body;
 
     if (!Array.isArray(rows) || rows.length === 0) {
-      return NextResponse.json({ error: "No rows provided for import." }, { status: 400 });
+      return NextResponse.json(
+        { error: "No rows provided for import." },
+        { status: 400 }
+      );
     }
 
     if (rows.length > MAX_IMPORT_ROWS) {
-     return NextResponse.json(
-       {
-        error: `This file is too large. Please limit imports to ${MAX_IMPORT_ROWS} contacts. For larger uploads, contact support@avillo.io.`,
-       },
-       { status: 400 }
-     );
-    }
-
-    if (mappingMode !== "full" && mappingMode !== "split") {
       return NextResponse.json(
-        { error: "Invalid mapping mode. Use 'full' or 'split'." },
+        {
+          error: `This file is too large. Please limit imports to ${MAX_IMPORT_ROWS} contacts. For larger uploads, contact support@avillo.io.`,
+        },
         { status: 400 }
       );
     }
 
-    if (mappingMode === "full" && !cleanString(fullNameColumn)) {
+    if (!mappings || typeof mappings !== "object") {
       return NextResponse.json(
-        { error: "A full name column is required for full-name mapping." },
+        { error: "Missing field mappings." },
         { status: 400 }
       );
     }
 
-    if (
-      mappingMode === "split" &&
-      !cleanString(firstNameColumn) &&
-      !cleanString(lastNameColumn)
-    ) {
+    const hasNameMapping =
+      !!cleanString(mappings.fullName) ||
+      !!cleanString(mappings.firstName) ||
+      !!cleanString(mappings.lastName);
+
+    if (!hasNameMapping) {
       return NextResponse.json(
-        { error: "Select at least a first name or last name column." },
+        {
+          error:
+            "Select a full name column or at least a first/last name column.",
+        },
         { status: 400 }
       );
     }
 
-    if (!cleanString(emailColumn) && !cleanString(phoneColumn)) {
+    if (!cleanString(mappings.email) && !cleanString(mappings.phone)) {
       return NextResponse.json(
-        { error: "At least one contact method column is required: email or phone." },
+        {
+          error:
+            "At least one contact method column is required: email or phone.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (mappings.areas && !Array.isArray(mappings.areas)) {
+      return NextResponse.json(
+        { error: "Address mapping must be an array of selected columns." },
         { status: 400 }
       );
     }
@@ -175,6 +233,82 @@ export async function POST(req: NextRequest) {
       relationshipType === RelationshipType.PARTNER
         ? null
         : normalizeClientRole(rawClientRole) ?? ClientRole.BUYER;
+
+    const areaColumns = normalizeSelectedColumns(mappings.areas);
+    const availableHeaders = getRowHeaders(rows);
+
+    const requiresAddress =
+      relationshipType === RelationshipType.CLIENT &&
+      (clientRole === ClientRole.SELLER || clientRole === ClientRole.BOTH);
+
+    if (
+      cleanString(mappings.fullName) &&
+      !hasMappedColumn(availableHeaders, mappings.fullName)
+    ) {
+      return NextResponse.json(
+        { error: "Selected full name column was not found in the uploaded file." },
+        { status: 400 }
+      );
+    }
+
+    if (
+      cleanString(mappings.firstName) &&
+      !hasMappedColumn(availableHeaders, mappings.firstName)
+    ) {
+      return NextResponse.json(
+        { error: "Selected first name column was not found in the uploaded file." },
+        { status: 400 }
+      );
+    }
+
+    if (
+      cleanString(mappings.lastName) &&
+      !hasMappedColumn(availableHeaders, mappings.lastName)
+    ) {
+      return NextResponse.json(
+        { error: "Selected last name column was not found in the uploaded file." },
+        { status: 400 }
+      );
+    }
+
+    if (
+      cleanString(mappings.email) &&
+      !hasMappedColumn(availableHeaders, mappings.email)
+    ) {
+      return NextResponse.json(
+        { error: "Selected email column was not found in the uploaded file." },
+        { status: 400 }
+      );
+    }
+
+    if (
+      cleanString(mappings.phone) &&
+      !hasMappedColumn(availableHeaders, mappings.phone)
+    ) {
+      return NextResponse.json(
+        { error: "Selected phone column was not found in the uploaded file." },
+        { status: 400 }
+      );
+    }
+
+    for (const column of areaColumns) {
+      if (!hasMappedColumn(availableHeaders, column)) {
+        return NextResponse.json(
+          {
+            error:
+              "One or more selected address columns were not found in the uploaded file.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (requiresAddress && areaColumns.length === 0) {
+      return NextResponse.json(
+        { error: "Address mapping is required for seller contacts." },
+        { status: 400 }
+      );
+    }
 
     // IMPORTANT:
     // Imports are intentionally data-only operations.
@@ -205,29 +339,45 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        const row = rawRow as Record<string, string>;
+        const row: Record<string, string> = Object.fromEntries(
+          Object.entries(rawRow).map(([key, value]) => [key, String(value ?? "")])
+        );
 
         let firstName: string | null = null;
         let lastName: string | null = null;
 
-        if (mappingMode === "full") {
-          const fullName = getColumnValue(row, fullNameColumn);
+        if (cleanString(mappings.fullName)) {
+          const fullName = getColumnValue(row, mappings.fullName);
           const split = splitFullName(fullName);
           firstName = split.firstName;
           lastName = split.lastName;
         } else {
-          firstName = getColumnValue(row, firstNameColumn);
-          lastName = getColumnValue(row, lastNameColumn);
+          firstName = getColumnValue(row, mappings.firstName);
+          lastName = getColumnValue(row, mappings.lastName);
         }
 
-        const rawEmail = getColumnValue(row, emailColumn);
-        const rawPhone = getColumnValue(row, phoneColumn);
+        const hasRowName = !!cleanString(
+          [firstName, lastName].filter(Boolean).join(" ")
+        );
+
+        if (!hasRowName) {
+          summary.failed += 1;
+          continue;
+        }
+
+        const rawEmail = getColumnValue(row, mappings.email);
+        const rawPhone = getColumnValue(row, mappings.phone);
 
         const normalizedEmail = normalizeEmail(rawEmail);
         const normalizedPhone = normalizePhone(rawPhone);
+        const normalizedAreas = getJoinedColumnValues(row, areaColumns);
 
-        // Constraint from modal/spec:
-        // each row must have at least one of email or phone
+        if (requiresAddress && !normalizedAreas) {
+          summary.failed += 1;
+          continue;
+        }
+
+        // Each row must have at least one of email or phone
         if (!normalizedEmail && !normalizedPhone) {
           summary.failed += 1;
           continue;
@@ -268,28 +418,26 @@ export async function POST(req: NextRequest) {
         // - PARTNER => workspace-wide
         // - CLIENT => only against this user's private clients
         const duplicateWhere: Prisma.ContactWhereInput =
-        relationshipType === RelationshipType.PARTNER
+          relationshipType === RelationshipType.PARTNER
             ? {
                 workspaceId: ctx.workspaceId,
                 relationshipType: RelationshipType.PARTNER,
                 OR: duplicateOr,
-            }
+              }
             : {
                 workspaceId: ctx.workspaceId,
                 relationshipType: RelationshipType.CLIENT,
                 ownerUserId: ctx.userId,
                 OR: duplicateOr,
-            };
+              };
 
         const duplicate = await prisma.contact.findFirst({
-        where: duplicateWhere,
-        select: { id: true },
+          where: duplicateWhere,
+          select: { id: true },
         });
 
         if (duplicate) {
           summary.skippedDuplicates += 1;
-          if (validEmail) seenEmails.add(validEmail);
-          if (normalizedPhone) seenPhones.add(normalizedPhone);
           continue;
         }
 
@@ -317,7 +465,7 @@ export async function POST(req: NextRequest) {
 
           label: "",
           priceRange: "",
-          areas: "",
+          areas: normalizedAreas ?? "",
           timeline: "",
           source: "",
         };

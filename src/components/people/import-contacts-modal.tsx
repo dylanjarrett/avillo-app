@@ -9,7 +9,14 @@ import {
   Transition,
   TransitionChild,
 } from "@headlessui/react";
-import { Check, ChevronLeft, ChevronRight, Loader2, Upload, X } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  Upload,
+  X,
+} from "lucide-react";
 
 type Props = {
   open: boolean;
@@ -17,7 +24,7 @@ type Props = {
   onImported?: () => void | Promise<void>;
 };
 
-type Step = 1 | 2 | 3 | 4 | 5 | 6;
+type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 type HeaderOption = {
   value: string;
@@ -25,6 +32,7 @@ type HeaderOption = {
 };
 
 type MappingMode = "full" | "split";
+type AddressMappingMode = "full" | "split";
 type RelationshipType = "CLIENT" | "PARTNER";
 type ClientRole = "BUYER" | "SELLER" | "BOTH" | null;
 
@@ -35,6 +43,7 @@ type PreviewRow = {
   name: string;
   email: string | null;
   phone: string | null;
+  address: string | null;
   duplicate: boolean;
   warnings: string[];
 };
@@ -98,7 +107,9 @@ function parseCsv(text: string): ParsedRow[] {
 
   if (!rows.length) return [];
 
-  const headers = rows[0].map((h) => h.trim());
+  const headers = rows[0].map((h, idx) =>
+    idx === 0 ? h.replace(/^\uFEFF/, "").trim() : h.trim()
+  );
   const body = rows.slice(1);
 
   return body.map((cells) => {
@@ -127,7 +138,10 @@ function normalizePhone(value: string | null | undefined): string | null {
   return cleaned || null;
 }
 
-function splitFullName(fullName: string | null | undefined): { firstName: string | null; lastName: string | null } {
+function splitFullName(fullName: string | null | undefined): {
+  firstName: string | null;
+  lastName: string | null;
+} {
   const value = cleanString(fullName);
   if (!value) return { firstName: null, lastName: null };
 
@@ -142,8 +156,14 @@ function splitFullName(fullName: string | null | undefined): { firstName: string
   };
 }
 
-function buildNameFromSplit(firstName: string | null | undefined, lastName: string | null | undefined) {
-  return [cleanString(firstName), cleanString(lastName)].filter(Boolean).join(" ").trim();
+function buildNameFromSplit(
+  firstName: string | null | undefined,
+  lastName: string | null | undefined
+) {
+  return [cleanString(firstName), cleanString(lastName)]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 }
 
 function isLikelyValidEmail(value: string | null) {
@@ -151,7 +171,10 @@ function isLikelyValidEmail(value: string | null) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-function getContactTypeLabel(relationshipType: RelationshipType, clientRole: ClientRole) {
+function getContactTypeLabel(
+  relationshipType: RelationshipType,
+  clientRole: ClientRole
+) {
   if (relationshipType === "PARTNER") return "Partner";
   if (clientRole === "BUYER") return "Client • Buyer";
   if (clientRole === "SELLER") return "Client • Seller";
@@ -164,21 +187,101 @@ function stepLabel(step: Step) {
     case 1:
       return "Upload";
     case 2:
-      return "Name";
-    case 3:
-      return "Email";
-    case 4:
-      return "Phone";
-    case 5:
       return "Type";
+    case 3:
+      return "Name";
+    case 4:
+      return "Email";
+    case 5:
+      return "Phone";
     case 6:
+      return "Address";
+    case 7:
       return "Preview";
     default:
       return "";
   }
 }
 
-export default function ImportContactsModal({ open, onClose, onImported }: Props) {
+function normalizeSelectedColumns(columns: string[]) {
+  return columns.map((value) => cleanString(value)).filter((value): value is string => !!value);
+}
+
+function buildJoinedAddress(row: ParsedRow, columns: string[]) {
+  const parts = normalizeSelectedColumns(columns)
+    .map((column) => cleanString(row[column]))
+    .filter((value): value is string => !!value);
+
+  if (!parts.length) return null;
+  return parts.join(", ");
+}
+
+function guessAddressColumns(parsedHeaders: string[]): string[] {
+  const lowerMap = new Map(parsedHeaders.map((header) => [header.toLowerCase(), header]));
+
+  const singleColumnCandidates = [
+    "property address",
+    "full address",
+    "mailing address",
+    "address",
+    "address 1",
+  ];
+
+  for (const key of singleColumnCandidates) {
+    const match = lowerMap.get(key);
+    if (match) return [match];
+  }
+
+  const orderedCandidates = [
+    "property street",
+    "property address 1",
+    "address 1 - street",
+    "street",
+    "street address",
+    "address line 1",
+    "address1",
+    "address 1",
+
+    "address 1 - line 2",
+    "unit",
+    "apt",
+    "suite",
+    "address line 2",
+    "address2",
+
+    "property city",
+    "address 1 - city",
+    "city",
+
+    "property state",
+    "address 1 - state",
+    "state",
+
+    "property postal code",
+    "property zip",
+    "address 1 - zip",
+    "zip",
+    "postal code",
+
+    "country",
+  ];
+
+  const results: string[] = [];
+  for (const key of orderedCandidates) {
+    const match = lowerMap.get(key);
+    if (match && !results.includes(match)) {
+      results.push(match);
+    }
+  }
+
+  return results;
+}
+
+export default function ImportContactsModal({
+  open,
+  onClose,
+  onImported,
+}: Props) {
   const [step, setStep] = useState<Step>(1);
 
   const [fileName, setFileName] = useState("");
@@ -194,12 +297,28 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
   const [emailColumn, setEmailColumn] = useState(NO_COLUMN);
   const [phoneColumn, setPhoneColumn] = useState(NO_COLUMN);
 
-  const [relationshipType, setRelationshipType] = useState<RelationshipType>("CLIENT");
+  const [addressMappingMode, setAddressMappingMode] =
+    useState<AddressMappingMode>("full");
+  const [areasColumns, setAreasColumns] = useState<string[]>([]);
+
+  const [relationshipType, setRelationshipType] =
+    useState<RelationshipType>("CLIENT");
   const [clientRole, setClientRole] = useState<ClientRole>("BUYER");
 
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+
+  const needsAddressStep =
+    relationshipType === "CLIENT" &&
+    (clientRole === "SELLER" || clientRole === "BOTH");
+
+  const visibleSteps = useMemo(() => {
+    const steps: Step[] = [1, 2, 3, 4, 5];
+    if (needsAddressStep) steps.push(6);
+    steps.push(7);
+    return steps;
+  }, [needsAddressStep]);
 
   useEffect(() => {
     if (!open) {
@@ -214,6 +333,8 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
       setLastNameColumn("");
       setEmailColumn(NO_COLUMN);
       setPhoneColumn(NO_COLUMN);
+      setAddressMappingMode("full");
+      setAreasColumns([]);
       setRelationshipType("CLIENT");
       setClientRole("BUYER");
       setImporting(false);
@@ -221,6 +342,12 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
       setImportSummary(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!visibleSteps.includes(step)) {
+      setStep(7);
+    }
+  }, [step, visibleSteps]);
 
   const headerOptions: HeaderOption[] = useMemo(
     () => headers.map((header) => ({ value: header, label: header })),
@@ -245,6 +372,11 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
       const phone =
         phoneColumn === NO_COLUMN ? null : normalizePhone(row[phoneColumn]);
 
+      const address =
+        needsAddressStep && areasColumns.length
+          ? buildJoinedAddress(row, areasColumns)
+          : null;
+
       const warnings: string[] = [];
 
       if (!email && !phone) {
@@ -255,45 +387,113 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
         warnings.push("Email format looks invalid");
       }
 
+      if (needsAddressStep && !address) {
+        warnings.push("Missing address");
+      }
+
       return {
         rowIndex: idx + 1,
         name,
         email,
         phone,
+        address,
         duplicate: false,
         warnings,
       };
     });
-  }, [rows, mappingMode, fullNameColumn, firstNameColumn, lastNameColumn, emailColumn, phoneColumn]);
+  }, [
+    rows,
+    mappingMode,
+    fullNameColumn,
+    firstNameColumn,
+    lastNameColumn,
+    emailColumn,
+    phoneColumn,
+    needsAddressStep,
+    areasColumns,
+  ]);
 
   const canGoNext = useMemo(() => {
     switch (step) {
       case 1:
         return rows.length > 0;
       case 2:
+        return relationshipType === "PARTNER" || !!clientRole;
+      case 3:
         return mappingMode === "full"
           ? !!fullNameColumn
           : !!firstNameColumn || !!lastNameColumn;
-      case 3:
-        return true;
       case 4:
-        return emailColumn !== NO_COLUMN || phoneColumn !== NO_COLUMN;
+        return true;
       case 5:
-        return relationshipType === "PARTNER" || !!clientRole;
+        return emailColumn !== NO_COLUMN || phoneColumn !== NO_COLUMN;
       case 6:
+        return addressMappingMode === "full"
+          ? !!cleanString(getAreaColumnAt(0)) && getAreaColumnAt(0) !== NO_COLUMN
+          : [
+              getAreaColumnAt(0),
+              getAreaColumnAt(1),
+              getAreaColumnAt(2),
+              getAreaColumnAt(3),
+              getAreaColumnAt(4),
+            ].some((column) => !!cleanString(column) && column !== NO_COLUMN);
+      case 7:
         return true;
       default:
         return false;
     }
-  }, [step, rows.length, mappingMode, fullNameColumn, firstNameColumn, lastNameColumn, emailColumn, phoneColumn, relationshipType, clientRole]);
+  }, [
+        step,
+        rows.length,
+        relationshipType,
+        clientRole,
+        mappingMode,
+        fullNameColumn,
+        firstNameColumn,
+        lastNameColumn,
+        emailColumn,
+        phoneColumn,
+        addressMappingMode,
+        areasColumns,
+      ]);
 
   function handleNext() {
     if (!canGoNext) return;
-    setStep((prev) => Math.min(6, prev + 1) as Step);
+    const currentIndex = visibleSteps.indexOf(step);
+    const nextStep = visibleSteps[currentIndex + 1];
+    if (nextStep) setStep(nextStep);
   }
 
   function handleBack() {
-    setStep((prev) => Math.max(1, prev - 1) as Step);
+    const currentIndex = visibleSteps.indexOf(step);
+    const previousStep = visibleSteps[currentIndex - 1];
+    if (previousStep) {
+      setStep(previousStep);
+      return;
+    }
+    onClose();
+  }
+
+  function setAreaColumnAt(index: number, value: string) {
+    setAreasColumns((prev) => {
+      const next = [...prev];
+
+      while (next.length <= index) {
+        next.push(NO_COLUMN);
+      }
+
+      next[index] = value;
+
+      while (next.length > 0 && next[next.length - 1] === NO_COLUMN) {
+        next.pop();
+      }
+
+      return next;
+    });
+  }
+
+  function getAreaColumnAt(index: number) {
+    return areasColumns[index] ?? NO_COLUMN;
   }
 
   async function handleFileChange(file: File | null) {
@@ -301,9 +501,19 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
 
     if (!file.name.toLowerCase().endsWith(".csv")) {
       setParseError("Please upload a .csv file.");
+      setImportError(null);
+      setImportSummary(null);
       setFileName("");
       setHeaders([]);
       setRows([]);
+      setMappingMode("full");
+      setFullNameColumn("");
+      setFirstNameColumn("");
+      setLastNameColumn("");
+      setEmailColumn(NO_COLUMN);
+      setPhoneColumn(NO_COLUMN);
+      setAddressMappingMode("full");
+      setAreasColumns([]);
       return;
     }
 
@@ -328,7 +538,9 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
       setHeaders(parsedHeaders);
       setRows(parsedRows);
 
-      const lowerMap = new Map(parsedHeaders.map((header) => [header.toLowerCase(), header]));
+      const lowerMap = new Map(
+        parsedHeaders.map((header) => [header.toLowerCase(), header])
+      );
 
       const guessedFullName =
         lowerMap.get("name") ||
@@ -337,14 +549,10 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
         "";
 
       const guessedFirstName =
-        lowerMap.get("first name") ||
-        lowerMap.get("firstname") ||
-        "";
+        lowerMap.get("first name") || lowerMap.get("firstname") || "";
 
       const guessedLastName =
-        lowerMap.get("last name") ||
-        lowerMap.get("lastname") ||
-        "";
+        lowerMap.get("last name") || lowerMap.get("lastname") || "";
 
       const guessedEmail =
         lowerMap.get("email") ||
@@ -359,6 +567,8 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
         lowerMap.get("mobile") ||
         NO_COLUMN;
 
+      const guessedAreas = guessAddressColumns(parsedHeaders);
+
       if (guessedFirstName || guessedLastName) {
         setMappingMode("split");
         setFirstNameColumn(guessedFirstName);
@@ -370,11 +580,22 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
 
       setEmailColumn(guessedEmail);
       setPhoneColumn(guessedPhone);
+
+      setAddressMappingMode(guessedAreas.length > 1 ? "split" : "full");
+      setAreasColumns(guessedAreas);
     } catch (error: any) {
       setParseError(error?.message || "We couldn’t parse this CSV.");
       setFileName("");
       setHeaders([]);
       setRows([]);
+      setMappingMode("full");
+      setFullNameColumn("");
+      setFirstNameColumn("");
+      setLastNameColumn("");
+      setEmailColumn(NO_COLUMN);
+      setPhoneColumn(NO_COLUMN);
+      setAddressMappingMode("full");
+      setAreasColumns([]);
     }
   }
 
@@ -385,12 +606,16 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
       setImportSummary(null);
 
       const payload = {
-        mappingMode,
-        fullNameColumn: mappingMode === "full" ? fullNameColumn : null,
-        firstNameColumn: mappingMode === "split" ? firstNameColumn : null,
-        lastNameColumn: mappingMode === "split" ? lastNameColumn : null,
-        emailColumn: emailColumn === NO_COLUMN ? null : emailColumn,
-        phoneColumn: phoneColumn === NO_COLUMN ? null : phoneColumn,
+        mappings: {
+          fullName: mappingMode === "full" ? fullNameColumn : null,
+          firstName: mappingMode === "split" ? firstNameColumn : null,
+          lastName: mappingMode === "split" ? lastNameColumn : null,
+          email: emailColumn === NO_COLUMN ? null : emailColumn,
+          phone: phoneColumn === NO_COLUMN ? null : phoneColumn,
+          areas: needsAddressStep
+            ? areasColumns.filter((column) => column && column !== NO_COLUMN)
+            : [],
+        },
         relationshipType,
         clientRole: relationshipType === "PARTNER" ? null : clientRole,
         rows,
@@ -424,6 +649,8 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
       setImporting(false);
     }
   }
+
+  const isPreviewStep = step === 7;
 
   return (
     <Transition show={open} as={Fragment}>
@@ -468,16 +695,19 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                     type="button"
                     onClick={onClose}
                     disabled={importing}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600/80 bg-slate-900/70 text-[var(--avillo-cream-soft)] hover:border-red-400/80 disabled:opacity-50">
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600/80 bg-slate-900/70 text-[var(--avillo-cream-soft)] hover:border-red-400/80 disabled:opacity-50"
+                  >
                     <X size={16} />
                   </button>
                 </div>
 
                 <div className="border-b border-slate-800/70 px-6 py-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    {([1, 2, 3, 4, 5, 6] as Step[]).map((item) => {
+                    {visibleSteps.map((item, index) => {
                       const active = step === item;
-                      const complete = item < step || !!importSummary;
+                      const currentIndex = visibleSteps.indexOf(step);
+                      const complete = index < currentIndex || !!importSummary;
+
                       return (
                         <div
                           key={item}
@@ -491,7 +721,7 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                           }
                         >
                           <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px]">
-                            {complete ? <Check size={10} /> : item}
+                            {complete ? <Check size={10} /> : index + 1}
                           </span>
                           {stepLabel(item)}
                         </div>
@@ -515,44 +745,53 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                           </div>
 
                           <label className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-600/80 bg-slate-950/60 px-6 py-8 text-center transition hover:border-amber-100/60 hover:bg-slate-950/80">
-                            <Upload className="mb-4 text-[var(--avillo-cream-muted)]" size={24} />
+                            <Upload
+                              className="mb-4 text-[var(--avillo-cream-muted)]"
+                              size={24}
+                            />
                             <p className="text-sm font-medium text-slate-50">
                               {fileName || "Choose a CSV file"}
                             </p>
-                             <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
-                               Upload a contact export and we’ll help you map the basics.
-                             </p>
-                             <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
-                               Import up to {MAX_IMPORT_ROWS.toLocaleString()} contacts per file. Need more? Contact support@avillo.io
+                            <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Upload a contact export and we’ll help you map the basics.
+                            </p>
+                            <p className="mt-2 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Import up to {MAX_IMPORT_ROWS.toLocaleString()} contacts per
+                              file. Need more? Contact support@avillo.io
                             </p>
                             <input
                               type="file"
                               accept=".csv,text/csv"
                               className="hidden"
-                              onChange={(e) => void handleFileChange(e.target.files?.[0] ?? null)}
+                              onChange={(e) =>
+                                void handleFileChange(e.target.files?.[0] ?? null)
+                              }
                             />
                           </label>
 
-                        {rows.length > 0 && (
-                        <div className="rounded-xl border border-emerald-300/40 bg-emerald-500/10 px-4 py-3 text-[11px] text-emerald-50">
-                            <div className="flex items-start gap-3">
-                            <div className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-emerald-300/50 bg-emerald-500/10 text-emerald-100">
-                                <Check size={12} />
+                          {rows.length > 0 && (
+                            <div className="rounded-xl border border-emerald-300/40 bg-emerald-500/10 px-4 py-3 text-[11px] text-emerald-50">
+                              <div className="flex items-start gap-3">
+                                <div className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-emerald-300/50 bg-emerald-500/10 text-emerald-100">
+                                  <Check size={12} />
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-emerald-100">
+                                    File uploaded successfully
+                                  </p>
+                                  <p className="mt-1">
+                                    <span className="font-semibold text-slate-50">
+                                      {fileName}
+                                    </span>
+                                  </p>
+                                  <p className="mt-1 text-emerald-50/80">
+                                    {rows.length} row{rows.length === 1 ? "" : "s"} detected •{" "}
+                                    {headers.length} column{headers.length === 1 ? "" : "s"} found
+                                  </p>
+                                </div>
+                              </div>
                             </div>
-                            <div>
-                                <p className="font-semibold text-emerald-100">
-                                File uploaded successfully
-                                </p>
-                                <p className="mt-1">
-                                <span className="font-semibold text-slate-50">{fileName}</span>
-                                </p>
-                                <p className="mt-1 text-emerald-50/80">
-                                {rows.length} row{rows.length === 1 ? "" : "s"} detected • {headers.length} column{headers.length === 1 ? "" : "s"} found
-                                </p>
-                            </div>
-                            </div>
-                        </div>
-                        )}
+                          )}
 
                           {parseError && (
                             <div className="rounded-xl border border-rose-400/60 bg-rose-950/40 px-4 py-3 text-[11px] text-rose-50">
@@ -563,121 +802,6 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                       )}
 
                       {step === 2 && (
-                        <section className="space-y-4">
-                          <div>
-                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
-                              Confirm name column
-                            </p>
-                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
-                              Choose either one full name column or separate first and last name columns.
-                            </p>
-                          </div>
-
-                          <div className="inline-flex rounded-full border border-slate-700/80 bg-slate-950/70 p-1 text-[11px] font-semibold text-slate-300">
-                            <button
-                              type="button"
-                              onClick={() => setMappingMode("full")}
-                              className={
-                                "rounded-full px-3 py-1.5 transition " +
-                                (mappingMode === "full"
-                                  ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.3)]"
-                                  : "text-slate-400")
-                              }
-                            >
-                              Full name
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setMappingMode("split")}
-                              className={
-                                "rounded-full px-3 py-1.5 transition " +
-                                (mappingMode === "split"
-                                  ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.3)]"
-                                  : "text-slate-400")
-                              }
-                            >
-                              First + last
-                            </button>
-                          </div>
-
-                          {mappingMode === "full" ? (
-                            <SelectField
-                              label="Full name column"
-                              value={fullNameColumn}
-                              onChange={setFullNameColumn}
-                              options={headerOptions}
-                              placeholder="Select a name column…"
-                            />
-                          ) : (
-                            <div className="grid gap-3 md:grid-cols-2">
-                              <SelectField
-                                label="First name column"
-                                value={firstNameColumn}
-                                onChange={setFirstNameColumn}
-                                options={headerOptions}
-                                placeholder="Select first name…"
-                              />
-                              <SelectField
-                                label="Last name column"
-                                value={lastNameColumn}
-                                onChange={setLastNameColumn}
-                                options={headerOptions}
-                                placeholder="Select last name…"
-                              />
-                            </div>
-                          )}
-                        </section>
-                      )}
-
-                      {step === 3 && (
-                        <section className="space-y-4">
-                          <div>
-                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
-                              Confirm email column
-                            </p>
-                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
-                              Email is optional, but recommended for cleaner matching and follow-up.
-                            </p>
-                          </div>
-
-                          <SelectField
-                            label="Email column"
-                            value={emailColumn}
-                            onChange={setEmailColumn}
-                            options={[{ value: NO_COLUMN, label: "No email column" }, ...headerOptions]}
-                            placeholder="Select email column…"
-                          />
-                        </section>
-                      )}
-
-                      {step === 4 && (
-                        <section className="space-y-4">
-                          <div>
-                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
-                              Confirm phone column
-                            </p>
-                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
-                              Each row must have at least an email or a phone number to import.
-                            </p>
-                          </div>
-
-                          <SelectField
-                            label="Phone column"
-                            value={phoneColumn}
-                            onChange={setPhoneColumn}
-                            options={[{ value: NO_COLUMN, label: "No phone column" }, ...headerOptions]}
-                            placeholder="Select phone column…"
-                          />
-
-                          {emailColumn === NO_COLUMN && phoneColumn === NO_COLUMN && (
-                            <div className="rounded-xl border border-amber-300/50 bg-amber-500/10 px-4 py-3 text-[11px] text-amber-100">
-                              Select at least one contact method: email or phone.
-                            </div>
-                          )}
-                        </section>
-                      )}
-
-                      {step === 5 && (
                         <section className="space-y-4">
                           <div>
                             <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
@@ -755,7 +879,245 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                         </section>
                       )}
 
-                      {step === 6 && (
+                      {step === 3 && (
+                        <section className="space-y-4">
+                          <div>
+                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
+                              Confirm name column
+                            </p>
+                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Choose either one full name column or separate first and last name columns.
+                            </p>
+                          </div>
+
+                          <div className="inline-flex rounded-full border border-slate-700/80 bg-slate-950/70 p-1 text-[11px] font-semibold text-slate-300">
+                            <button
+                              type="button"
+                              onClick={() => setMappingMode("full")}
+                              className={
+                                "rounded-full px-3 py-1.5 transition " +
+                                (mappingMode === "full"
+                                  ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.3)]"
+                                  : "text-slate-400")
+                              }
+                            >
+                              Full name
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMappingMode("split")}
+                              className={
+                                "rounded-full px-3 py-1.5 transition " +
+                                (mappingMode === "split"
+                                  ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.3)]"
+                                  : "text-slate-400")
+                              }
+                            >
+                              First + last
+                            </button>
+                          </div>
+
+                          {mappingMode === "full" ? (
+                            <SelectField
+                              label="Full name column"
+                              value={fullNameColumn}
+                              onChange={setFullNameColumn}
+                              options={headerOptions}
+                              placeholder="Select a name column…"
+                            />
+                          ) : (
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <SelectField
+                                label="First name column"
+                                value={firstNameColumn}
+                                onChange={setFirstNameColumn}
+                                options={headerOptions}
+                                placeholder="Select first name…"
+                              />
+                              <SelectField
+                                label="Last name column"
+                                value={lastNameColumn}
+                                onChange={setLastNameColumn}
+                                options={headerOptions}
+                                placeholder="Select last name…"
+                              />
+                            </div>
+                          )}
+                        </section>
+                      )}
+
+                      {step === 4 && (
+                        <section className="space-y-4">
+                          <div>
+                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
+                              Confirm email column
+                            </p>
+                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Email is optional, but recommended for cleaner matching and follow-up.
+                            </p>
+                          </div>
+
+                          <SelectField
+                            label="Email column"
+                            value={emailColumn}
+                            onChange={setEmailColumn}
+                            options={[
+                              { value: NO_COLUMN, label: "No email column" },
+                              ...headerOptions,
+                            ]}
+                            placeholder="Select email column…"
+                          />
+                        </section>
+                      )}
+
+                      {step === 5 && (
+                        <section className="space-y-4">
+                          <div>
+                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
+                              Confirm phone column
+                            </p>
+                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Each row must have at least an email or a phone number to import.
+                            </p>
+                          </div>
+
+                          <SelectField
+                            label="Phone column"
+                            value={phoneColumn}
+                            onChange={setPhoneColumn}
+                            options={[
+                              { value: NO_COLUMN, label: "No phone column" },
+                              ...headerOptions,
+                            ]}
+                            placeholder="Select phone column…"
+                          />
+
+                          {emailColumn === NO_COLUMN && phoneColumn === NO_COLUMN && (
+                            <div className="rounded-xl border border-amber-300/50 bg-amber-500/10 px-4 py-3 text-[11px] text-amber-100">
+                              Select at least one contact method: email or phone.
+                            </div>
+                          )}
+                        </section>
+                      )}
+
+                      {step === 6 && needsAddressStep && (
+                        <section className="space-y-4">
+                          <div>
+                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
+                              Confirm address columns
+                            </p>
+                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Choose either one full address column or separate columns like street, unit, city, state, and zip.
+                            </p>
+                          </div>
+
+                          <div className="inline-flex rounded-full border border-slate-700/80 bg-slate-950/70 p-1 text-[11px] font-semibold text-slate-300">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAddressMappingMode("full");
+                                setAreasColumns([NO_COLUMN]);
+                              }}
+                              className={
+                                "rounded-full px-3 py-1.5 transition " +
+                                (addressMappingMode === "full"
+                                  ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.3)]"
+                                  : "text-slate-400")
+                              }
+                            >
+                              Full address
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAddressMappingMode("split");
+                                setAreasColumns([NO_COLUMN, NO_COLUMN, NO_COLUMN, NO_COLUMN, NO_COLUMN]);
+                              }}
+                              className={
+                                "rounded-full px-3 py-1.5 transition " +
+                                (addressMappingMode === "split"
+                                  ? "bg-slate-800 text-amber-100 shadow-[0_0_18px_rgba(148,163,184,0.3)]"
+                                  : "text-slate-400")
+                              }
+                            >
+                              Street + unit + city + state + zip
+                            </button>
+                          </div>
+
+                          {addressMappingMode === "full" ? (
+                            <SelectField
+                              label="Address column"
+                              value={getAreaColumnAt(0)}
+                              onChange={(value) => setAreaColumnAt(0, value)}
+                              options={[{ value: NO_COLUMN, label: "No address column" }, ...headerOptions]}
+                              placeholder="Select address column…"
+                            />
+                          ) : (
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <SelectField
+                                label="Street column"
+                                value={getAreaColumnAt(0)}
+                                onChange={(value) => setAreaColumnAt(0, value)}
+                                options={[{ value: NO_COLUMN, label: "No street column" }, ...headerOptions]}
+                                placeholder="Select street column…"
+                              />
+                              <SelectField
+                                label="Apt / Unit / Suite column"
+                                value={getAreaColumnAt(1)}
+                                onChange={(value) => setAreaColumnAt(1, value)}
+                                options={[{ value: NO_COLUMN, label: "No unit column" }, ...headerOptions]}
+                                placeholder="Select apt / unit / suite column…"
+                              />
+                              <SelectField
+                                label="City column"
+                                value={getAreaColumnAt(2)}
+                                onChange={(value) => setAreaColumnAt(2, value)}
+                                options={[{ value: NO_COLUMN, label: "No city column" }, ...headerOptions]}
+                                placeholder="Select city column…"
+                              />
+                              <SelectField
+                                label="State column"
+                                value={getAreaColumnAt(3)}
+                                onChange={(value) => setAreaColumnAt(3, value)}
+                                options={[{ value: NO_COLUMN, label: "No state column" }, ...headerOptions]}
+                                placeholder="Select state column…"
+                              />
+                              <SelectField
+                                label="Zip column"
+                                value={getAreaColumnAt(4)}
+                                onChange={(value) => setAreaColumnAt(4, value)}
+                                options={[{ value: NO_COLUMN, label: "No zip column" }, ...headerOptions]}
+                                placeholder="Select zip column…"
+                              />
+                            </div>
+                          )}
+
+                          {!(addressMappingMode === "full"
+                            ? !!cleanString(getAreaColumnAt(0)) && getAreaColumnAt(0) !== NO_COLUMN
+                            : [
+                                getAreaColumnAt(0),
+                                getAreaColumnAt(1),
+                                getAreaColumnAt(2),
+                                getAreaColumnAt(3),
+                                getAreaColumnAt(4),
+                              ].some((column) => !!cleanString(column) && column !== NO_COLUMN)) && (
+                            <div className="rounded-xl border border-amber-300/40 bg-amber-500/10 px-4 py-3 text-[11px] text-amber-100">
+                              Select at least one address-related column.
+                            </div>
+                          )}
+
+                          {addressMappingMode === "split" && (
+                            <div className="rounded-xl border border-blue-400/40 bg-blue-500/10 px-4 py-3 text-[11px] text-blue-100">
+                              <p className="font-semibold text-blue-50">How this works</p>
+                              <p className="mt-1 text-blue-200/80">
+                                We’ll join the selected address columns in the order shown and save the combined result.
+                              </p>
+                            </div>
+                          )}
+                        </section>
+                      )}
+
+                      {step === 7 && (
                         <section className="space-y-4">
                           <div className="flex items-start justify-between gap-4">
                             <div>
@@ -773,11 +1135,18 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                           </div>
 
                           <div className="overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/70">
-                            <div className="grid grid-cols-[70px_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_120px_minmax(0,1fr)] gap-3 border-b border-slate-800/80 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]">
+                            <div
+                              className={
+                                needsAddressStep
+                                  ? "grid grid-cols-[70px_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_120px_minmax(0,1fr)] gap-3 border-b border-slate-800/80 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]"
+                                  : "grid grid-cols-[70px_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_120px_minmax(0,1fr)] gap-3 border-b border-slate-800/80 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--avillo-cream-muted)]"
+                              }
+                            >
                               <div>Row</div>
                               <div>Name</div>
                               <div>Email</div>
                               <div>Phone</div>
+                              {needsAddressStep && <div>Address</div>}
                               <div>Status</div>
                               <div>Warnings</div>
                             </div>
@@ -786,12 +1155,23 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                               {previewRows.map((row) => (
                                 <div
                                   key={row.rowIndex}
-                                  className="grid grid-cols-[70px_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_120px_minmax(0,1fr)] gap-3 border-b border-slate-800/60 px-4 py-3 text-[11px] text-[var(--avillo-cream-soft)] last:border-b-0"
+                                  className={
+                                    needsAddressStep
+                                      ? "grid grid-cols-[70px_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_120px_minmax(0,1fr)] gap-3 border-b border-slate-800/60 px-4 py-3 text-[11px] text-[var(--avillo-cream-soft)] last:border-b-0"
+                                      : "grid grid-cols-[70px_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_120px_minmax(0,1fr)] gap-3 border-b border-slate-800/60 px-4 py-3 text-[11px] text-[var(--avillo-cream-soft)] last:border-b-0"
+                                  }
                                 >
-                                  <div className="text-[var(--avillo-cream-muted)]">{row.rowIndex}</div>
-                                  <div className="truncate text-slate-50">{row.name || "—"}</div>
+                                  <div className="text-[var(--avillo-cream-muted)]">
+                                    {row.rowIndex}
+                                  </div>
+                                  <div className="truncate text-slate-50">
+                                    {row.name || "—"}
+                                  </div>
                                   <div className="truncate">{row.email || "—"}</div>
                                   <div className="truncate">{row.phone || "—"}</div>
+                                  {needsAddressStep && (
+                                    <div className="truncate">{row.address || "—"}</div>
+                                  )}
                                   <div>
                                     <span
                                       className={
@@ -801,11 +1181,13 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                                           : "border-emerald-200/70 bg-emerald-500/10 text-emerald-100")
                                       }
                                     >
-                                      {row.duplicate ? "Duplicate" : "Ready"}
+                                      {row.duplicate ? "Duplicate" : "Mapped"}
                                     </span>
                                   </div>
                                   <div className="text-[var(--avillo-cream-muted)]">
-                                    {row.warnings.length ? row.warnings.join(" • ") : "—"}
+                                    {row.warnings.length
+                                      ? row.warnings.join(" • ")
+                                      : "—"}
                                   </div>
                                 </div>
                               ))}
@@ -814,10 +1196,14 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
 
                           <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3 text-[11px] text-[var(--avillo-cream-soft)]">
                             <p>
-                              Total rows: <span className="font-semibold text-slate-50">{rows.length}</span>
+                              Total rows:{" "}
+                              <span className="font-semibold text-slate-50">
+                                {rows.length}
+                              </span>
                             </p>
                             <p className="mt-1 text-[var(--avillo-cream-muted)]">
-                              Duplicates are skipped during import. Existing contacts are never overwritten in v1.
+                              Duplicates are skipped during import. Existing contacts are
+                              never overwritten in v1.
                             </p>
                           </div>
 
@@ -850,10 +1236,22 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                       </div>
 
                       <div className="grid gap-3 md:grid-cols-4">
-                        <SummaryCard label="Total rows" value={String(importSummary.totalRows)} />
-                        <SummaryCard label="Imported" value={String(importSummary.imported)} />
-                        <SummaryCard label="Skipped duplicates" value={String(importSummary.skippedDuplicates)} />
-                        <SummaryCard label="Failed" value={String(importSummary.failed)} />
+                        <SummaryCard
+                          label="Total rows"
+                          value={String(importSummary.totalRows)}
+                        />
+                        <SummaryCard
+                          label="Imported"
+                          value={String(importSummary.imported)}
+                        />
+                        <SummaryCard
+                          label="Skipped duplicates"
+                          value={String(importSummary.skippedDuplicates)}
+                        />
+                        <SummaryCard
+                          label="Failed"
+                          value={String(importSummary.failed)}
+                        />
                       </div>
                     </section>
                   )}
@@ -862,7 +1260,7 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                 <div className="flex items-center justify-between gap-3 border-t border-slate-800/80 px-6 py-4">
                   <div className="text-[11px] text-[var(--avillo-cream-muted)]">
                     {!importSummary
-                      ? `Import is limited to name, email, phone, and contact type in v1. Max ${MAX_IMPORT_ROWS.toLocaleString()} contacts per file.`
+                      ? `Import is limited to name, email, phone, address, and contact type in v1. Max ${MAX_IMPORT_ROWS.toLocaleString()} contacts per file.`
                       : "You can now close this modal and review imported contacts in People."}
                   </div>
 
@@ -879,7 +1277,7 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                           {step === 1 ? "Cancel" : "Back"}
                         </button>
 
-                        {step < 6 ? (
+                        {!isPreviewStep ? (
                           <button
                             type="button"
                             onClick={handleNext}
