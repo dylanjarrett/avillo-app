@@ -427,7 +427,7 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
 
   return (
     <Transition show={open} as={Fragment}>
-      <Dialog onClose={importing ? () => {} : onClose} className="relative z-[9999]">
+      <Dialog onClose={() => {}} className="relative z-[9999]">
         <TransitionChild
           as={Fragment}
           enter="ease-out duration-150"
@@ -468,8 +468,7 @@ export default function ImportContactsModal({ open, onClose, onImported }: Props
                     type="button"
                     onClick={onClose}
                     disabled={importing}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600/80 bg-slate-900/70 text-[var(--avillo-cream-soft)] hover:border-amber-100/80 hover:text-amber-50 disabled:opacity-50"
-                  >
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600/80 bg-slate-900/70 text-[var(--avillo-cream-soft)] hover:border-red-400/80 disabled:opacity-50">
                     <X size={16} />
                   </button>
                 </div>
