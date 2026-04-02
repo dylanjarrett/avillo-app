@@ -21,8 +21,6 @@ type ImportMappings = {
   lastName?: string | null;
   email?: string | null;
   phone?: string | null;
-
-  // One or many CSV columns that should be joined and stored in Contact.areas
   areas?: string[] | null;
 };
 
@@ -33,11 +31,20 @@ type ImportBody = {
   rows?: Record<string, string>[];
 };
 
+type ImportFailure = {
+  rowIndex: number;
+  reason: string;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
+
 type ImportSummary = {
   totalRows: number;
   imported: number;
   skippedDuplicates: number;
   failed: number;
+  failures: ImportFailure[];
 };
 
 function cleanString(value: unknown): string | null {
@@ -151,6 +158,17 @@ function getJoinedColumnValues(
 function isLikelyValidEmail(email: string | null): boolean {
   if (!email) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function buildDisplayName(firstName: string | null, lastName: string | null) {
+  return cleanString([firstName, lastName].filter(Boolean).join(" "));
+}
+
+function pushFailure(
+  summary: ImportSummary,
+  failure: ImportFailure
+) {
+  summary.failures.push(failure);
 }
 
 export async function POST(req: NextRequest) {
@@ -310,13 +328,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // IMPORTANT:
-    // Imports are intentionally data-only operations.
-    // Do NOT trigger automations from this route.
-    //
-    // Visibility/ownership rules must match /api/crm/contacts:
-    // - CLIENT => PRIVATE + ownerUserId = current user
-    // - PARTNER => WORKSPACE + owner behavior per helper
     const normalizedWrite = normalizeContactWrite({
       relationshipType,
       currentUserId: ctx.userId,
@@ -327,15 +338,23 @@ export async function POST(req: NextRequest) {
       imported: 0,
       skippedDuplicates: 0,
       failed: 0,
+      failures: [],
     };
 
     const seenEmails = new Set<string>();
     const seenPhones = new Set<string>();
 
-    for (const rawRow of rows) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const rawRow = rows[index];
+      const rowIndex = index + 1;
+
       try {
         if (!rawRow || typeof rawRow !== "object" || Array.isArray(rawRow)) {
           summary.failed += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Unexpected import error",
+          });
           continue;
         }
 
@@ -356,15 +375,7 @@ export async function POST(req: NextRequest) {
           lastName = getColumnValue(row, mappings.lastName);
         }
 
-        const hasRowName = !!cleanString(
-          [firstName, lastName].filter(Boolean).join(" ")
-        );
-
-        if (!hasRowName) {
-          summary.failed += 1;
-          continue;
-        }
-
+        const name = buildDisplayName(firstName, lastName);
         const rawEmail = getColumnValue(row, mappings.email);
         const rawPhone = getColumnValue(row, mappings.phone);
 
@@ -372,18 +383,42 @@ export async function POST(req: NextRequest) {
         const normalizedPhone = normalizePhone(rawPhone);
         const normalizedAreas = getJoinedColumnValues(row, areaColumns);
 
+        if (!name) {
+          summary.failed += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Missing name",
+            name: null,
+            email: normalizedEmail,
+            phone: normalizedPhone,
+          });
+          continue;
+        }
+
         if (requiresAddress && !normalizedAreas) {
           summary.failed += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Missing required address",
+            name,
+            email: normalizedEmail,
+            phone: normalizedPhone,
+          });
           continue;
         }
 
-        // Each row must have at least one of email or phone
         if (!normalizedEmail && !normalizedPhone) {
           summary.failed += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Missing email and phone",
+            name,
+            email: null,
+            phone: null,
+          });
           continue;
         }
 
-        // Invalid email is allowed only if phone exists
         const validEmail =
           normalizedEmail && isLikelyValidEmail(normalizedEmail)
             ? normalizedEmail
@@ -391,16 +426,29 @@ export async function POST(req: NextRequest) {
 
         if (normalizedEmail && !validEmail && !normalizedPhone) {
           summary.failed += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Invalid email and no phone",
+            name,
+            email: normalizedEmail,
+            phone: normalizedPhone,
+          });
           continue;
         }
 
-        // Duplicate check within this import batch first
         const duplicateInBatch =
           (validEmail && seenEmails.has(validEmail)) ||
           (normalizedPhone && seenPhones.has(normalizedPhone));
 
         if (duplicateInBatch) {
           summary.skippedDuplicates += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Duplicate in file",
+            name,
+            email: validEmail ?? normalizedEmail,
+            phone: normalizedPhone,
+          });
           continue;
         }
 
@@ -411,12 +459,16 @@ export async function POST(req: NextRequest) {
 
         if (duplicateOr.length === 0) {
           summary.failed += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Missing email and phone",
+            name,
+            email: validEmail ?? normalizedEmail,
+            phone: normalizedPhone,
+          });
           continue;
         }
 
-        // Duplicate check:
-        // - PARTNER => workspace-wide
-        // - CLIENT => only against this user's private clients
         const duplicateWhere: Prisma.ContactWhereInput =
           relationshipType === RelationshipType.PARTNER
             ? {
@@ -438,6 +490,13 @@ export async function POST(req: NextRequest) {
 
         if (duplicate) {
           summary.skippedDuplicates += 1;
+          pushFailure(summary, {
+            rowIndex,
+            reason: "Duplicate existing contact",
+            name,
+            email: validEmail ?? normalizedEmail,
+            phone: normalizedPhone,
+          });
           continue;
         }
 
@@ -479,6 +538,10 @@ export async function POST(req: NextRequest) {
       } catch (error) {
         console.error("crm/contacts/import row error:", error);
         summary.failed += 1;
+        pushFailure(summary, {
+          rowIndex,
+          reason: "Unexpected import error",
+        });
       }
     }
 

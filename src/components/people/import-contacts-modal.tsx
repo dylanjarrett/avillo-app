@@ -44,8 +44,15 @@ type PreviewRow = {
   email: string | null;
   phone: string | null;
   address: string | null;
-  duplicate: boolean;
   warnings: string[];
+};
+
+type ImportFailure = {
+  rowIndex: number;
+  reason: string;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
 };
 
 type ImportSummary = {
@@ -53,6 +60,7 @@ type ImportSummary = {
   imported: number;
   skippedDuplicates: number;
   failed: number;
+  failures: ImportFailure[];
 };
 
 const NO_COLUMN = "__none__";
@@ -355,7 +363,7 @@ export default function ImportContactsModal({
   );
 
   const previewRows: PreviewRow[] = useMemo(() => {
-    return rows.slice(0, 10).map((row, idx) => {
+    return rows.map((row, idx) => {
       let name = "";
       if (mappingMode === "full") {
         name = cleanString(row[fullNameColumn]) ?? "";
@@ -379,17 +387,21 @@ export default function ImportContactsModal({
 
       const warnings: string[] = [];
 
+      if (!name) {
+        warnings.push("Missing name");
+      }
+
       if (!email && !phone) {
         warnings.push("Missing email and phone");
       }
 
-      if (rawEmail && email && !isLikelyValidEmail(email)) {
+      if (rawEmail && !isLikelyValidEmail(normalizeEmail(rawEmail))) {
         warnings.push("Email format looks invalid");
       }
 
       if (needsAddressStep && !address) {
         warnings.push(
-          "Address is blank. Please re-check your CSV columns and address mapping."
+          "Missing required address"
         );
       }
 
@@ -399,7 +411,6 @@ export default function ImportContactsModal({
         email,
         phone,
         address,
-        duplicate: false,
         warnings,
       };
     });
@@ -640,6 +651,7 @@ export default function ImportContactsModal({
         imported: data?.imported ?? 0,
         skippedDuplicates: data?.skippedDuplicates ?? 0,
         failed: data?.failed ?? 0,
+        failures: Array.isArray(data?.failures) ? data.failures : [],
       });
 
       if (onImported) {
@@ -1127,7 +1139,7 @@ export default function ImportContactsModal({
                                 Preview import
                               </p>
                               <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
-                                Review the first 10 rows before importing.
+                                Review all rows before importing. Rows with issues will be marked for fixing.
                               </p>
                             </div>
 
@@ -1178,12 +1190,12 @@ export default function ImportContactsModal({
                                     <span
                                       className={
                                         "inline-flex rounded-full border px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] " +
-                                        (row.duplicate
+                                        (row.warnings.length
                                           ? "border-amber-200/70 bg-amber-500/10 text-amber-100"
                                           : "border-emerald-200/70 bg-emerald-500/10 text-emerald-100")
                                       }
                                     >
-                                      {row.duplicate ? "Duplicate" : "Mapped"}
+                                      {row.warnings.length ? "Fix" : "Ready"}
                                     </span>
                                   </div>
                                   <div className="text-[var(--avillo-cream-muted)]">
@@ -1204,8 +1216,7 @@ export default function ImportContactsModal({
                               </span>
                             </p>
                             <p className="mt-1 text-[var(--avillo-cream-muted)]">
-                              Duplicates are skipped during import. Existing contacts are
-                              never overwritten in v1.
+                              Rows marked Ready look valid based on your current mapping. Rows marked Fix need attention before import. Duplicates are still checked during import, and existing contacts are never overwritten in v1.
                             </p>
                             {needsAddressStep && (
                               <p className="mt-2 text-[var(--avillo-cream-muted)]">
@@ -1236,7 +1247,7 @@ export default function ImportContactsModal({
                               Import complete
                             </p>
                             <p className="mt-1 text-[11px] text-emerald-50/80">
-                              Your CSV has been processed successfully.
+                              Your CSV has been processed. Review the summary below for imported, skipped, and failed rows.
                             </p>
                           </div>
                         </div>
@@ -1260,6 +1271,55 @@ export default function ImportContactsModal({
                           value={String(importSummary.failed)}
                         />
                       </div>
+
+                      {!!importSummary.failures?.length && (
+                        <div className="rounded-2xl border border-amber-300/30 bg-slate-950/70">
+                          <div className="border-b border-slate-800/80 px-4 py-3">
+                            <p className="text-[12px] font-semibold text-[var(--avillo-cream-soft)]">
+                              Rows not imported
+                            </p>
+                            <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
+                              Showing all {importSummary.failures.length} row
+                              {importSummary.failures.length === 1 ? "" : "s"} that were skipped or failed.
+                            </p>
+                          </div>
+
+                          <div className="max-h-[320px] overflow-y-auto">
+                            {importSummary.failures.map((failure, idx) => (
+                              <div
+                                key={`${failure.rowIndex}-${idx}`}
+                                className="border-b border-slate-800/60 px-4 py-3 last:border-b-0"
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="inline-flex rounded-full border border-rose-300/40 bg-rose-500/10 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-rose-100">
+                                    Row {failure.rowIndex}
+                                  </span>
+                                  <span className="text-[11px] font-semibold text-slate-50">
+                                    {failure.reason}
+                                  </span>
+                                </div>
+
+                                {(failure.name || failure.email || failure.phone) && (
+                                  <div className="mt-2 grid gap-2 text-[11px] text-[var(--avillo-cream-muted)] md:grid-cols-3">
+                                    <div>
+                                      <span className="font-semibold text-slate-300">Name:</span>{" "}
+                                      {failure.name || "—"}
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold text-slate-300">Email:</span>{" "}
+                                      {failure.email || "—"}
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold text-slate-300">Phone:</span>{" "}
+                                      {failure.phone || "—"}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </section>
                   )}
                 </div>
