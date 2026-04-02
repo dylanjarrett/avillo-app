@@ -388,7 +388,9 @@ export default function ImportContactsModal({
       }
 
       if (needsAddressStep && !address) {
-        warnings.push("Missing address");
+        warnings.push(
+          "Address is blank. Please re-check your CSV columns and address mapping."
+        );
       }
 
       return {
@@ -1205,6 +1207,11 @@ export default function ImportContactsModal({
                               Duplicates are skipped during import. Existing contacts are
                               never overwritten in v1.
                             </p>
+                            {needsAddressStep && (
+                              <p className="mt-2 text-[var(--avillo-cream-muted)]">
+                                Seller contacts require an address for this import. If any row shows a blank address above, please re-check your CSV file and address mapping before importing.
+                              </p>
+                            )}
                           </div>
 
                           {importError && (
