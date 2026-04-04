@@ -8,7 +8,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
-if (!stripeSecretKey) throw new Error("Missing STRIPE_SECRET_KEY in environment.");
+if (!stripeSecretKey) {
+  throw new Error("Missing STRIPE_SECRET_KEY in environment.");
+}
 
 const stripe = new Stripe(stripeSecretKey);
 
@@ -18,7 +20,7 @@ type Plan = "starter" | "pro" | "founding_pro" | "enterprise";
 type CheckoutBody = {
   plan?: Plan | string;
   period?: BillingPeriod;
-  seatLimit?: number; // enterprise only (TOTAL seats desired, incl. included seats)
+  seatLimit?: number; // enterprise only (TOTAL desired seats, including included seats)
 };
 
 function isPlan(x: string): x is Plan {
@@ -31,6 +33,10 @@ function clampInt(n: unknown, min: number, max: number) {
   return Math.max(min, Math.min(max, x));
 }
 
+function isLiveSubscriptionStatus(status: string | null | undefined) {
+  return status === "ACTIVE" || status === "TRIALING" || status === "PAST_DUE";
+}
+
 async function ensureCustomer(params: {
   wsId: string;
   wsName: string | null;
@@ -41,8 +47,10 @@ async function ensureCustomer(params: {
 
   if (existingCustomerId) {
     try {
-      const c = await stripe.customers.retrieve(existingCustomerId);
-      if ((c as any)?.deleted) throw new Error("Customer deleted");
+      const customer = await stripe.customers.retrieve(existingCustomerId);
+      if ((customer as Stripe.DeletedCustomer)?.deleted) {
+        throw new Error("Customer deleted");
+      }
       return existingCustomerId;
     } catch {
       await prisma.workspace.update({
@@ -55,7 +63,10 @@ async function ensureCustomer(params: {
   const created = await stripe.customers.create({
     email: user.email || undefined,
     name: wsName || user.name || undefined,
-    metadata: { workspaceId: wsId, createdByUserId: user.id },
+    metadata: {
+      workspaceId: wsId,
+      createdByUserId: user.id,
+    },
   });
 
   await prisma.workspace.update({
@@ -69,7 +80,9 @@ async function ensureCustomer(params: {
 export async function POST(req: NextRequest) {
   try {
     const ctx = await requireWorkspace();
-    if (!ctx.ok) return NextResponse.json(ctx.error, { status: ctx.status });
+    if (!ctx.ok) {
+      return NextResponse.json(ctx.error, { status: ctx.status });
+    }
 
     const { userId, workspaceId, workspaceRole } = ctx;
 
@@ -78,13 +91,25 @@ export async function POST(req: NextRequest) {
     }
 
     const body = ((await req.json().catch(() => ({}))) || {}) as CheckoutBody;
+
     const planRaw = String(body.plan ?? "pro").toLowerCase();
     const plan: Plan = isPlan(planRaw) ? planRaw : "pro";
+
     const period: BillingPeriod = body.period === "annual" ? "annual" : "monthly";
 
     const foundingEnabled = (process.env.FOUNDING_PRO_ENABLED ?? "true") === "true";
     if (plan === "founding_pro" && !foundingEnabled) {
-      return NextResponse.json({ error: "Founding Pro is no longer available." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Founding Pro is no longer available." },
+        { status: 400 }
+      );
+    }
+
+    if (plan === "enterprise" && period === "annual") {
+      return NextResponse.json(
+        { error: "Enterprise annual is not available." },
+        { status: 400 }
+      );
     }
 
     const PRICES: Record<Exclude<Plan, "enterprise">, Record<BillingPeriod, string | undefined>> = {
@@ -105,49 +130,66 @@ export async function POST(req: NextRequest) {
     const ENTERPRISE_BASE_MONTHLY = process.env.STRIPE_ENTERPRISE_BASE_MONTHLY_PRICE_ID;
     const ENTERPRISE_SEAT_MONTHLY = process.env.STRIPE_ENTERPRISE_SEAT_MONTHLY_PRICE_ID;
 
-    if (plan === "enterprise" && period === "annual") {
-      return NextResponse.json({ error: "Enterprise annual is not available." }, { status: 400 });
-    }
-
-    const [ws, u] = await Promise.all([
+    const [ws, user] = await Promise.all([
       prisma.workspace.findUnique({
         where: { id: workspaceId },
-        select: { id: true, name: true, stripeCustomerId: true, type: true },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          stripeCustomerId: true,
+          stripeSubscriptionId: true,
+          subscriptionStatus: true,
+        },
       }),
       prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, email: true, name: true },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+        },
       }),
     ]);
 
-    if (!ws) return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
-    if (!u) return NextResponse.json({ error: "User not found." }, { status: 404 });
+    if (!ws) {
+      return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
+    }
 
-    // If Enterprise selected, upgrade workspace to TEAM immediately
-    if (plan === "enterprise" && ws.type !== "TEAM") {
-      await prisma.workspace.update({
-        where: { id: ws.id },
-        data: { type: "TEAM" as any },
-      });
+    if (!user) {
+      return NextResponse.json({ error: "User not found." }, { status: 404 });
+    }
+
+    // Prevent duplicate/live subscriptions from creating another checkout session.
+    if (
+      ws.stripeSubscriptionId &&
+      isLiveSubscriptionStatus(ws.subscriptionStatus ?? null)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This workspace already has a subscription. Please manage changes from the billing portal.",
+          redirectToPortal: true,
+        },
+        { status: 409 }
+      );
     }
 
     const stripeCustomerId = await ensureCustomer({
       wsId: ws.id,
       wsName: ws.name ?? null,
       existingCustomerId: ws.stripeCustomerId ?? null,
-      user: u,
+      user,
     });
 
     const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
-
-    // ✅ 14-day trial for EVERYTHING (solo + enterprise base + enterprise seats)
     const baseTrialDays = clampInt(process.env.STRIPE_BASE_TRIAL_DAYS ?? 14, 0, 90);
 
     const subscription_data: Stripe.Checkout.SessionCreateParams.SubscriptionData = {
       ...(baseTrialDays > 0 ? { trial_period_days: baseTrialDays } : {}),
       metadata: {
         workspaceId: ws.id,
-        createdByUserId: u.id,
+        createdByUserId: user.id,
         targetPlan: plan,
         period,
       },
@@ -157,19 +199,21 @@ export async function POST(req: NextRequest) {
 
     if (plan === "enterprise") {
       if (!ENTERPRISE_BASE_MONTHLY || !ENTERPRISE_SEAT_MONTHLY) {
-        return NextResponse.json({ error: "Enterprise Stripe prices not configured." }, { status: 500 });
+        return NextResponse.json(
+          { error: "Enterprise Stripe prices not configured." },
+          { status: 500 }
+        );
       }
 
       const includedSeats = 5;
       const requestedSeatLimit = clampInt(body.seatLimit, includedSeats, 500);
       const extraSeats = Math.max(0, requestedSeatLimit - includedSeats);
 
-      // ✅ One subscription with base + seat add-on (both trial together)
       line_items = [
         { price: ENTERPRISE_BASE_MONTHLY, quantity: 1 },
-        // quantity 0 is allowed by your logic; Stripe line_items generally expects >=1,
-        // so only include the seat item if extras > 0
-        ...(extraSeats > 0 ? [{ price: ENTERPRISE_SEAT_MONTHLY, quantity: extraSeats }] : []),
+        ...(extraSeats > 0
+          ? [{ price: ENTERPRISE_SEAT_MONTHLY, quantity: extraSeats }]
+          : []),
       ];
 
       subscription_data.metadata = {
@@ -181,7 +225,13 @@ export async function POST(req: NextRequest) {
       };
     } else {
       const priceId = PRICES[plan]?.[period];
-      if (!priceId) return NextResponse.json({ error: "Stripe price ID not configured." }, { status: 500 });
+      if (!priceId) {
+        return NextResponse.json(
+          { error: "Stripe price ID not configured." },
+          { status: 500 }
+        );
+      }
+
       line_items = [{ price: priceId, quantity: 1 }];
     }
 
@@ -196,9 +246,19 @@ export async function POST(req: NextRequest) {
       allow_promotion_codes: true,
     });
 
+    if (!checkoutSession.url) {
+      return NextResponse.json(
+        { error: "Stripe checkout session was created without a redirect URL." },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({ url: checkoutSession.url });
   } catch (err: any) {
     console.error("[stripe-checkout] error", err);
-    return NextResponse.json({ error: err?.message || "Unable to start checkout right now." }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Unable to start checkout right now." },
+      { status: 500 }
+    );
   }
 }

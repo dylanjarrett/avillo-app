@@ -98,7 +98,7 @@ function planFromSubscription(sub: Stripe.Subscription): {
   }
 
   // Fallback if none match (shouldn't happen if you only sell known prices)
-  return { plan: "STARTER", basePriceId: sub.items?.data?.[0]?.price?.id ?? null, seatPriceId: null };
+  throw new Error("Unknown Stripe price mapping for subscription.");
 }
 
 type VerifyBody = { sessionId?: string };
@@ -175,7 +175,11 @@ export async function POST(req: NextRequest) {
         stripeBasePriceId: basePriceId ?? null,
         stripeSeatPriceId: seatPriceId ?? null,
         ...(plan === "ENTERPRISE"
-          ? { includedSeats, seatLimit: seatLimit ?? includedSeats }
+          ? {
+              includedSeats,
+              seatLimit: seatLimit ?? includedSeats,
+              type: "TEAM" as any,
+            }
           : {}),
         updatedAt: new Date(),
       } as any,

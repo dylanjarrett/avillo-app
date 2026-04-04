@@ -145,6 +145,8 @@ export async function PATCH(req: Request) {
       appliedNextCycle: false,
       source: "stripe",
       trialing: isTrialing,
+      isIncrease: false,
+      isDecrease: false,
     });
   }
 
@@ -229,6 +231,24 @@ export async function PATCH(req: Request) {
       invoiceId = res.invoiceId;
       amountDue = res.amountDue;
     } catch (e: any) {
+      try {
+        const subAfterFailure = await fetchExpandedSubscription(sub0.id);
+        const seatItemAfterFailure = findSeatItem(subAfterFailure, seatPriceId);
+        const extraSeatsAfterFailure = Math.max(0, Number(seatItemAfterFailure?.quantity ?? 0));
+        const seatLimitAfterFailure = included + extraSeatsAfterFailure;
+
+        await prisma.workspace.update({
+          where: { id: ws.id },
+          data: {
+            seatLimit: seatLimitAfterFailure,
+            includedSeats: included,
+            updatedAt: new Date(),
+          } as any,
+        });
+      } catch {
+        // non-fatal; webhook/status should still self-heal
+      }
+
       return NextResponse.json(
         {
           error:
@@ -264,8 +284,10 @@ export async function PATCH(req: Request) {
     chargedNow,
     invoiceId,
     amountDue,
-    appliedNextCycle: !isIncrease, // decreases are next cycle; increases are immediate after trial
+    appliedNextCycle: false,
     source: "stripe",
     trialing: isTrialing,
+    isIncrease,
+    isDecrease: !isIncrease,
   });
 }

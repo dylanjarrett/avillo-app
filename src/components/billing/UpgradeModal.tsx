@@ -1,6 +1,7 @@
+// components/billing/UpgradeModal.tsx
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   Dialog,
   DialogPanel,
@@ -14,7 +15,6 @@ type Props = {
   open: boolean;
   onClose: () => void;
   feature?: string;
-  // Allow extra props (like source) without crashing
   [key: string]: any;
 };
 
@@ -25,6 +25,13 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!open) return;
+    setInterval("monthly");
+    setLoading(false);
+    setErr(null);
+  }, [open]);
+
   async function handleUpgrade() {
     try {
       setLoading(true);
@@ -34,8 +41,8 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          plan: "PRO",
-          interval, // "monthly" | "annual"
+          plan: "pro",
+          period: interval,
           feature: feature ?? null,
         }),
       });
@@ -43,18 +50,29 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
+        if (res.status === 409 && data?.redirectToPortal) {
+          const portalRes = await fetch("/api/stripe/portal", { method: "POST" });
+          const portalData = await portalRes.json().catch(() => null);
+
+          if (portalRes.ok && portalData?.url) {
+            window.location.href = portalData.url;
+            return;
+          }
+
+          throw new Error(
+            portalData?.error || data?.error || "Couldn’t open billing portal. Please try again."
+          );
+        }
+
         throw new Error(data?.error || "Couldn’t start checkout. Please try again.");
       }
 
-      // Common patterns your API might return:
-      // { url: "https://checkout.stripe.com/..." } OR { sessionUrl: ... }
       const url = data?.url || data?.sessionUrl;
       if (url) {
         window.location.href = url;
         return;
       }
 
-      // If your API returns nothing but 200, at least close modal
       onClose();
     } catch (e: any) {
       setErr(e?.message || "Couldn’t start checkout. Please try again.");
@@ -66,7 +84,6 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
   return (
     <Transition show={open} as={Fragment}>
       <Dialog onClose={onClose} className="relative z-[9999]">
-        {/* Backdrop */}
         <TransitionChild
           as={Fragment}
           enter="ease-out duration-150"
@@ -79,7 +96,6 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" />
         </TransitionChild>
 
-        {/* Panel */}
         <div className="fixed inset-0 flex items-center justify-center px-4 py-8">
           <TransitionChild
             as={Fragment}
@@ -91,10 +107,8 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
             leaveTo="opacity-0 translate-y-2 scale-[0.99]"
           >
             <DialogPanel className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-slate-700/70 bg-gradient-to-b from-slate-900/95 to-slate-950/95 shadow-[0_0_60px_rgba(15,23,42,0.85)]">
-              {/* Glow */}
               <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(244,210,106,0.18),transparent_55%)] opacity-70 blur-3xl" />
 
-              {/* Header */}
               <div className="flex items-start justify-between gap-4 px-6 pt-6">
                 <div>
                   <DialogTitle className="text-[15px] font-semibold text-[var(--avillo-cream)]">
@@ -102,8 +116,8 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
                   </DialogTitle>
                   <p className="mt-1 text-[11px] text-[var(--avillo-cream-muted)]">
                     {feature
-                      ? "This feature is part of Pro — built for leverage (less manual work, more done automatically)."
-                      : "Pro is built for leverage — less admin, more done automatically."}
+                      ? "This feature is part of Pro — where your workflow starts running itself."
+                      : "Pro is built for leverage — where your workflow starts running itself."}
                   </p>
                 </div>
 
@@ -116,9 +130,7 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
                 </button>
               </div>
 
-              {/* Content */}
-              <div className="px-6 pb-6 pt-4 space-y-5">
-                {/* Billing toggle (match Billing page) */}
+              <div className="space-y-5 px-6 pb-6 pt-4">
                 <div className="flex justify-center">
                   <div className="flex w-full max-w-sm rounded-full border border-slate-700 bg-slate-950/80 p-1 text-[11px] font-semibold text-slate-300 shadow-[0_0_24px_rgba(15,23,42,0.85)]">
                     <button
@@ -138,7 +150,7 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
                       type="button"
                       onClick={() => setInterval("annual")}
                       className={
-                        "flex-1 rounded-full px-3 py-1.5 transition text-center " +
+                        "flex-1 rounded-full px-3 py-1.5 text-center transition " +
                         (interval === "annual"
                           ? "bg-amber-100 text-slate-900 shadow-[0_0_22px_rgba(251,191,36,0.75)]"
                           : "text-slate-400")
@@ -152,7 +164,6 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
                   </div>
                 </div>
 
-                {/* Avillo Pro Card (match Billing page) */}
                 <div className="relative overflow-hidden rounded-2xl border border-amber-200/40 bg-slate-950/90 px-6 py-6 shadow-[0_0_55px_rgba(251,191,36,0.35)]">
                   <div className="pointer-events-none absolute inset-0 -z-10 blur-3xl opacity-40 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.25),transparent_60%)]" />
 
@@ -180,15 +191,14 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
                   </p>
 
                   <div className="mt-3 rounded-xl border border-amber-200/30 bg-amber-100/10 px-3 py-2 text-[11px] text-amber-50/90">
-                    30-day Pro trial included. Unlock Autopilot + saved prompts with
-                    listing/contact context.
+                    14-day free trial included.
                   </div>
 
                   <ul className="mt-5 space-y-2 text-xs text-amber-50">
-                    <li>• Autopilot (SMS, email & task automation)</li>
-                    <li>• Expanded AI usage + priority processing</li>
-                    <li>• Save AI engine prompts for reuse and iteration</li>
-                    <li>• Attach AI context to a listing or contact</li>
+                    <li>• Autopilot (SMS & task automation)</li>
+                    <li>• Built-in SMS and calling</li>
+                    <li>• Full Zora AI assistant</li>
+                    <li>• Continuous access to new capabilities</li>
                   </ul>
 
                   <button
@@ -200,16 +210,15 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
                     {loading
                       ? "Starting checkout…"
                       : interval === "monthly"
-                      ? "Start Pro (Monthly)"
-                      : "Start Pro (Yearly)"}
+                        ? "Start Pro (Monthly)"
+                        : "Start Pro (Yearly)"}
                   </button>
 
                   <p className="mt-3 text-[11px] text-slate-300/80">
-                    Pro is designed for leverage — less admin, more revenue time.
+                    Pro is designed for leverage — less admin, more closings.
                   </p>
                 </div>
 
-                {/* Error */}
                 {err && (
                   <div className="rounded-xl border border-rose-400/60 bg-rose-950/40 px-4 py-3 text-[11px] text-rose-50">
                     {err}
@@ -217,7 +226,7 @@ export default function UpgradeModal({ open, onClose, feature }: Props) {
                 )}
 
                 <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                  Starter = control. Pro = leverage. Manage or cancel anytime from Billing.
+                  Manage your plan anytime from the Billing page.
                 </p>
               </div>
             </DialogPanel>

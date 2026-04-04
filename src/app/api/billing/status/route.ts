@@ -45,16 +45,13 @@ function unixToIsoOrNull(x: unknown) {
   return new Date(x * 1000).toISOString();
 }
 
-/**
- * Stripe-truth resolver (prevents “Enterprise ➝ Starter” UI flips when DB is stale).
- * We infer plan + seats from subscription items (expanded).
- */
 function resolveFromSubscription(sub: Stripe.Subscription): {
-  plan: "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE";
+  plan: "STARTER" | "PRO" | "FOUNDING_PRO" | "ENTERPRISE" | null;
   basePriceId: string | null;
   seatPriceId: string | null;
   includedSeats: number;
   seatLimit: number;
+  unknown: boolean;
 } {
   const starterMonthly = process.env.STRIPE_STARTER_MONTHLY_PRICE_ID;
   const starterAnnual = process.env.STRIPE_STARTER_ANNUAL_PRICE_ID;
@@ -72,7 +69,6 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
   const ids = items.map((i) => i.price?.id).filter(Boolean) as string[];
   const has = (id?: string | null) => !!id && ids.includes(id);
 
-  // Enterprise
   if (has(enterpriseBaseMonthly)) {
     const includedSeats = 5;
     const seatItem = items.find((i) => i.price?.id === enterpriseSeatMonthly);
@@ -85,10 +81,10 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
       seatPriceId: enterpriseSeatMonthly ?? null,
       includedSeats,
       seatLimit,
+      unknown: false,
     };
   }
 
-  // Starter
   if (has(starterAnnual) || has(starterMonthly)) {
     return {
       plan: "STARTER",
@@ -96,10 +92,10 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
       seatPriceId: null,
       includedSeats: 1,
       seatLimit: 1,
+      unknown: false,
     };
   }
 
-  // Pro
   if (has(proAnnual) || has(proMonthly)) {
     return {
       plan: "PRO",
@@ -107,10 +103,10 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
       seatPriceId: null,
       includedSeats: 1,
       seatLimit: 1,
+      unknown: false,
     };
   }
 
-  // Founding Pro
   if (has(foundingAnnual) || has(foundingMonthly)) {
     return {
       plan: "FOUNDING_PRO",
@@ -118,16 +114,17 @@ function resolveFromSubscription(sub: Stripe.Subscription): {
       seatPriceId: null,
       includedSeats: 1,
       seatLimit: 1,
+      unknown: false,
     };
   }
 
-  // Fallback
   return {
-    plan: "STARTER",
+    plan: null,
     basePriceId: items[0]?.price?.id ?? null,
     seatPriceId: null,
     includedSeats: 1,
     seatLimit: 1,
+    unknown: true,
   };
 }
 
@@ -162,16 +159,18 @@ export async function GET() {
 
   const seatsUsed = Number(ws._count.members ?? 0);
 
-  // Default to DB truth
   let outPlan = ws.plan as any;
   let outStatus = ws.subscriptionStatus as any;
   let outTrialEndsAt = toIsoOrNull(ws.trialEndsAt);
   let outCurrentPeriodEnd = toIsoOrNull(ws.currentPeriodEnd);
+  let outAccessLevel = ws.accessLevel as any;
 
   let includedSeats = Math.max(1, Number(ws.includedSeats ?? (ws.plan === "ENTERPRISE" ? 5 : 1)));
   let seatLimit = Math.max(includedSeats, Number(ws.seatLimit ?? includedSeats));
 
   let stripeSource: "db" | "stripe" = "db";
+  let outStripeCustomerId = ws.stripeCustomerId;
+  let outStripeSubscriptionId = ws.stripeSubscriptionId;
 
   if (ws.stripeSubscriptionId) {
     try {
@@ -184,36 +183,88 @@ export async function GET() {
       const stripeTrialEndsAt = unixToIsoOrNull((sub as any).trial_end);
       const stripePeriodEnd = unixToIsoOrNull((sub as any).current_period_end);
 
-      outPlan = resolved.plan;
-      outStatus = stripeStatus;
-      outTrialEndsAt = stripeTrialEndsAt ?? null;
-      outCurrentPeriodEnd = stripePeriodEnd ?? null;
-
-      includedSeats = resolved.includedSeats;
-      seatLimit = resolved.seatLimit;
-
       stripeSource = "stripe";
+      outStripeCustomerId = ws.stripeCustomerId ?? getCustomerId(sub.customer as any) ?? null;
+      outStripeSubscriptionId = sub.id;
+
+      if (resolved.unknown || !resolved.plan) {
+        console.warn("[billing-status] Unknown Stripe price mapping", {
+          workspaceId: ws.id,
+          subscriptionId: sub.id,
+          priceIds: sub.items?.data?.map((i) => i.price?.id).filter(Boolean) ?? [],
+        });
+
+        outStatus = stripeStatus;
+        outTrialEndsAt = stripeTrialEndsAt ?? null;
+        outCurrentPeriodEnd = stripePeriodEnd ?? null;
+
+        if (stripeStatus === "TRIALING" || stripeStatus === "ACTIVE" || stripeStatus === "PAST_DUE") {
+          outAccessLevel = "PAID";
+        } else if (stripeStatus === "CANCELED") {
+          outAccessLevel = "EXPIRED";
+        }
+
+        const shouldUpdateUnknown =
+          String(ws.subscriptionStatus ?? "") !== String(stripeStatus ?? "") ||
+          String(ws.accessLevel ?? "") !== String(outAccessLevel ?? "") ||
+          String(ws.trialEndsAt ? ws.trialEndsAt.toISOString() : "") !== String(outTrialEndsAt ?? "") ||
+          String(ws.currentPeriodEnd ? ws.currentPeriodEnd.toISOString() : "") !== String(outCurrentPeriodEnd ?? "") ||
+          String(ws.stripeCustomerId ?? "") !== String(outStripeCustomerId ?? "");
+
+        if (shouldUpdateUnknown) {
+          await prisma.workspace.update({
+            where: { id: ws.id },
+            data: {
+              accessLevel: outAccessLevel as any,
+              subscriptionStatus: stripeStatus as any,
+              trialEndsAt: stripeTrialEndsAt ? new Date(stripeTrialEndsAt) : null,
+              currentPeriodEnd: stripePeriodEnd ? new Date(stripePeriodEnd) : null,
+              stripeCustomerId: outStripeCustomerId ?? null,
+              updatedAt: new Date(),
+            } as any,
+          });
+        }
+      } else {
+        outPlan = resolved.plan;
+        outStatus = stripeStatus;
+        outTrialEndsAt = stripeTrialEndsAt ?? null;
+        outCurrentPeriodEnd = stripePeriodEnd ?? null;
+
+        includedSeats = resolved.includedSeats;
+        seatLimit = resolved.seatLimit;
+
+        if (stripeStatus === "TRIALING" || stripeStatus === "ACTIVE" || stripeStatus === "PAST_DUE") {
+          outAccessLevel = "PAID";
+        } else if (stripeStatus === "CANCELED") {
+          outAccessLevel = "EXPIRED";
+        }
 
       const shouldUpdate =
         ws.plan !== resolved.plan ||
         String(ws.subscriptionStatus ?? "") !== String(stripeStatus ?? "") ||
+        String(ws.accessLevel ?? "") !== String(outAccessLevel ?? "") ||
+        String(ws.trialEndsAt ? ws.trialEndsAt.toISOString() : "") !== String(outTrialEndsAt ?? "") ||
+        String(ws.currentPeriodEnd ? ws.currentPeriodEnd.toISOString() : "") !== String(outCurrentPeriodEnd ?? "") ||
         Number(ws.includedSeats ?? 0) !== Number(resolved.includedSeats) ||
-        Number(ws.seatLimit ?? 0) !== Number(resolved.seatLimit);
+        Number(ws.seatLimit ?? 0) !== Number(resolved.seatLimit) ||
+        String(ws.stripeCustomerId ?? "") !== String(outStripeCustomerId ?? "");
 
-      if (shouldUpdate) {
-        await prisma.workspace.update({
-          where: { id: ws.id },
-          data: {
-            plan: resolved.plan as any,
-            subscriptionStatus: stripeStatus as any,
-            trialEndsAt: stripeTrialEndsAt ? new Date(stripeTrialEndsAt) : null,
-            currentPeriodEnd: stripePeriodEnd ? new Date(stripePeriodEnd) : null,
-            includedSeats: resolved.includedSeats,
-            seatLimit: resolved.seatLimit,
-            stripeCustomerId: ws.stripeCustomerId ?? getCustomerId(sub.customer as any) ?? null,
-            updatedAt: new Date(),
-          } as any,
-        });
+        if (shouldUpdate) {
+          await prisma.workspace.update({
+            where: { id: ws.id },
+            data: {
+              accessLevel: outAccessLevel as any,
+              plan: resolved.plan as any,
+              subscriptionStatus: stripeStatus as any,
+              trialEndsAt: stripeTrialEndsAt ? new Date(stripeTrialEndsAt) : null,
+              currentPeriodEnd: stripePeriodEnd ? new Date(stripePeriodEnd) : null,
+              includedSeats: resolved.includedSeats,
+              seatLimit: resolved.seatLimit,
+              stripeCustomerId: outStripeCustomerId ?? null,
+              updatedAt: new Date(),
+            } as any,
+          });
+        }
       }
     } catch {
       stripeSource = "db";
@@ -229,19 +280,18 @@ export async function GET() {
       id: ws.id,
       type: ws.type,
 
-      accessLevel: ws.accessLevel,
+      accessLevel: outAccessLevel,
       plan: outPlan,
       subscriptionStatus: outStatus,
       trialEndsAt: outTrialEndsAt,
       currentPeriodEnd: outCurrentPeriodEnd,
 
-      // ✅ return computed (Stripe-truth aware) values
       seatLimit,
       includedSeats,
       seatsUsed,
 
-      stripeCustomerId: ws.stripeCustomerId,
-      stripeSubscriptionId: ws.stripeSubscriptionId,
+      stripeCustomerId: outStripeCustomerId,
+      stripeSubscriptionId: outStripeSubscriptionId,
 
       flags: {
         isEnterprise,
