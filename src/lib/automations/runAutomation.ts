@@ -462,13 +462,22 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
           }
 
           case "TASK": {
-            const titleRaw =
-              step.config?.title ?? step.config?.taskTitle ?? step.config?.name ?? step.config?.text ?? "Task";
+            const titleTemplate =
+              step.config?.title ??
+              step.config?.taskTitle ??
+              step.config?.name ??
+              step.config?.text ??
+              "Task";
 
-            const title = String(titleRaw ?? "").trim();
+            const title = renderTemplate(String(titleTemplate ?? ""), templateVars).trim();
             if (!title) throw new Error("Task title is required.");
 
-            const notes = String(step.config?.notes ?? step.config?.description ?? "").trim() || null;
+            const notesTemplate =
+              step.config?.notes ??
+              step.config?.description ??
+              "";
+
+            const notes = renderTemplate(String(notesTemplate ?? ""), templateVars).trim() || null;
 
             // ✅ Canonical resolver (src/lib/time.ts)
             const resolved = computeTaskDueAtFromConfig(step.config, cursorTime);

@@ -91,14 +91,14 @@ const RECOMMENDED_TEMPLATES: {
 }[] = [
   {
     id: "new-contact-speed-to-lead",
-    label: "New online lead follow-up (same day)",
+    label: "New online lead follow-up",
     description:
-      "Requires SMS. Instantly texts a new lead, checks back in the same day, then reminds you to call.",
+      "Requires SMS. Instantly texts a new lead, then creates a next-day follow-up task for you.",
     trigger: "NEW_CONTACT",
     build: () => ({
-      name: "New online lead follow-up (same day)",
+      name: "New online lead follow-up",
       description:
-        "Automatically welcome new leads by text, send a same-day follow-up, and remind me to call within 24 hours.",
+        "Automatically welcome new leads by text, then create a task for me to follow up one day later.",
       trigger: "NEW_CONTACT",
       active: true,
       steps: [
@@ -113,20 +113,7 @@ const RECOMMENDED_TEMPLATES: {
         {
           id: crypto.randomUUID(),
           type: "WAIT",
-          config: { hours: 4, amount: 4, unit: "hours" },
-        },
-        {
-          id: crypto.randomUUID(),
-          type: "SMS",
-          config: {
-            text:
-              "Just checking back in, {{firstName}} — I’d be happy to help you map out next steps whenever you're ready.",
-          },
-        },
-        {
-          id: crypto.randomUUID(),
-          type: "WAIT",
-          config: { hours: 24, amount: 24, unit: "hours" },
+          config: { hours: 24, amount: 1, unit: "days" },
         },
         {
           id: crypto.randomUUID(),
