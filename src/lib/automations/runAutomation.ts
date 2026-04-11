@@ -4,7 +4,11 @@ import { sendAutomationEmail, sendAutomationSms } from "@/lib/automations/messag
 import { createAutopilotTask } from "@/lib/tasks/createAutopilotTask";
 import { requireEntitlement } from "@/lib/entitlements";
 import { computeTaskDueAtFromConfig, normalizeToMinute } from "@/lib/time";
-import { whereReadableContact, whereReadableListing, type VisibilityCtx } from "@/lib/visibility"; 
+import {
+  whereReadableContact,
+  whereReadableListing,
+  type VisibilityCtx,
+} from "@/lib/visibility";
 
 /* ------------------------------------
  * Types
@@ -30,10 +34,16 @@ type RunContext = {
   trigger: string;
   payload?: any;
 
-  idempotencyKey?: string;
+  idempotencyKey?: string | null;
+
+  // Continuation support
+  existingRunId?: string | null;
+  resumeOfPendingExecutionId?: string | null;
+  cursorTime?: Date | string | null;
 };
 
 type RunStatus = "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED";
+type ExecuteResult = "CONTINUE" | "STOP";
 
 /* ------------------------------------
  * Small helpers
@@ -48,6 +58,13 @@ function norm(v: any): string {
   return String(v ?? "").trim().toLowerCase();
 }
 
+function coerceDate(v: unknown): Date | null {
+  if (!v) return null;
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 async function canRunAutomations(workspaceId: string) {
   const gate = await requireEntitlement(workspaceId, "AUTOMATIONS_RUN");
   return gate.ok;
@@ -58,6 +75,56 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
   return String(template).replace(/{{\s*([\w.]+)\s*}}/g, (_, key) => {
     const val = vars[key];
     return typeof val === "string" ? val : "";
+  });
+}
+
+/**
+ * WAIT should only create a persisted continuation when downstream steps
+ * contain delayed side effects that must occur later in wall-clock time.
+ *
+ * We intentionally treat IF branches conservatively:
+ * if either branch contains SMS/EMAIL anywhere reachable, we queue continuation.
+ */
+function stepsRequireDelayedResume(steps: AutomationStep[]): boolean {
+  for (const step of steps) {
+    if (step.type === "SMS" || step.type === "EMAIL") return true;
+
+    if (step.type === "IF") {
+      if (stepsRequireDelayedResume(step.thenSteps ?? [])) return true;
+      if (stepsRequireDelayedResume(step.elseSteps ?? [])) return true;
+    }
+  }
+  return false;
+}
+
+async function queuePendingExecution(args: {
+  workspaceId: string;
+  automationId: string;
+  runId: string;
+  userId: string;
+  contactId?: string | null;
+  listingId?: string | null;
+  trigger: string;
+  triggerPayload?: any;
+  remainingSteps: AutomationStep[];
+  resumeAt: Date;
+  statusMessage?: string | null;
+}) {
+  return prisma.automationPendingExecution.create({
+    data: {
+      workspaceId: args.workspaceId,
+      automationId: args.automationId,
+      runId: args.runId,
+      userId: args.userId,
+      contactId: args.contactId ?? null,
+      listingId: args.listingId ?? null,
+      trigger: args.trigger,
+      triggerPayload: args.triggerPayload ?? {},
+      remainingSteps: args.remainingSteps as any,
+      resumeAt: args.resumeAt,
+      status: "PENDING",
+      statusMessage: args.statusMessage ?? null,
+    },
   });
 }
 
@@ -149,7 +216,13 @@ function normalizeIfConfig(raw: any): NormalizedIfConfig {
 
   return {
     join: "AND",
-    conditions: [{ field: String(raw.field), operator: String(raw.operator ?? "equals"), value: String(raw.value ?? "") }],
+    conditions: [
+      {
+        field: String(raw.field),
+        operator: String(raw.operator ?? "equals"),
+        value: String(raw.value ?? ""),
+      },
+    ],
   };
 }
 
@@ -190,15 +263,19 @@ function normalizeWait(config: any): { amount: number; unit: WaitUnit } | null {
 
 function addToDate(base: Date, amount: number, unit: WaitUnit): Date {
   const d = new Date(base);
+
   if (unit === "hours") return new Date(d.getTime() + amount * 60 * 60 * 1000);
+
   if (unit === "days") {
     d.setDate(d.getDate() + amount);
     return d;
   }
+
   if (unit === "weeks") {
     d.setDate(d.getDate() + amount * 7);
     return d;
   }
+
   d.setMonth(d.getMonth() + amount);
   return d;
 }
@@ -211,26 +288,41 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
   const userId = safeId(ctx.userId);
   const workspaceId = safeId(ctx.workspaceId);
   const automationId = safeId(automationIdRaw);
+  const existingRunId = safeId(ctx.existingRunId);
 
   if (!userId || !workspaceId || !automationId) return;
 
-  // Plan gate
-  if (!(await canRunAutomations(workspaceId))) return;
+  if (!(await canRunAutomations(workspaceId))) {
+    if (existingRunId) {
+      throw new Error("Workspace no longer entitled to run automations.");
+    }
+    return;
+  }
 
-  // Membership guard (must be active membership)
   const membership = await prisma.workspaceUser.findFirst({
     where: { workspaceId, userId, removedAt: null },
     select: { id: true },
   });
-  if (!membership) return;
 
-  // ✅ Workspace-first: automation must belong to workspace (no legacy userId scoping)
+  if (!membership) {
+    if (existingRunId) throw new Error("User is not an active member of this workspace.");
+    return;
+  }
+
   const automation = await prisma.automation.findFirst({
     where: { id: automationId, workspaceId },
     select: { id: true, name: true, active: true },
   });
-  if (!automation) return;
-  if (!automation.active) return;
+
+  if (!automation) {
+    if (existingRunId) throw new Error("Automation no longer exists in this workspace.");
+    return;
+  }
+
+  if (!automation.active) {
+    if (existingRunId) throw new Error("Automation is inactive.");
+    return;
+  }
 
   const contactId = safeId(ctx.contactId);
   const listingId = safeId(ctx.listingId);
@@ -251,14 +343,26 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
       : Promise.resolve(null),
   ]);
 
-  if (!user) return;
-  if (contactId && !contact) return;
-  if (listingId && !listing) return;
+  if (!user) {
+    if (existingRunId) throw new Error("Automation owner user no longer exists.");
+    return;
+  }
 
-  // HARD RULE: Partner contacts do not run automations.
-  if (contact && norm((contact as any).relationshipType) === "partner") return;
+  if (contactId && !contact) {
+    if (existingRunId) throw new Error("Resume failed: contact no longer readable.");
+    return;
+  }
 
-  // Derive idempotency key to avoid duplicates on retries
+  if (listingId && !listing) {
+    if (existingRunId) throw new Error("Resume failed: listing no longer readable.");
+    return;
+  }
+
+  if (contact && norm((contact as any).relationshipType) === "partner") {
+    if (existingRunId) throw new Error("Resume failed: partner contacts do not run automations.");
+    return;
+  }
+
   const lockId =
     safeId(ctx.idempotencyKey) ||
     [
@@ -271,21 +375,23 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
       safeId(JSON.stringify(ctx.payload ?? {}))?.slice(0, 120) ?? "no_payload",
     ].join(":");
 
-  // ✅ Idempotency should be tenant-aware
-  const existingRun = await prisma.automationRun.findFirst({
-    where: { workspaceId, automationId, lockId },
-    select: { id: true },
-    orderBy: { executedAt: "desc" },
-  });
-  if (existingRun) return;
+  if (!existingRunId) {
+    const existingRun = await prisma.automationRun.findFirst({
+      where: { workspaceId, automationId, lockId },
+      select: { id: true },
+      orderBy: { executedAt: "desc" },
+    });
 
-  // Template vars
+    if (existingRun) return;
+  }
+
   const contactFullName =
     (contact?.firstName && contact?.lastName ? `${contact.firstName} ${contact.lastName}` : "") ||
     (contact as any)?.name ||
     "";
 
-  const contactFirstName = contact?.firstName ?? (contactFullName ? String(contactFullName).split(" ")[0] : "") ?? "";
+  const contactFirstName =
+    contact?.firstName ?? (contactFullName ? String(contactFullName).split(" ")[0] : "") ?? "";
 
   const agentPhone = (user as any)?.phone ?? (user as any)?.phoneNumber ?? (user as any)?.mobile ?? "";
   const agentEmail = user?.email ?? "";
@@ -305,7 +411,6 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
   let toEmail: string | null = (contact as any)?.email ?? (contact as any)?.primaryEmail ?? null;
   let toPhone: string | null = (contact as any)?.phone ?? (contact as any)?.phoneNumber ?? null;
 
-  // Test mode: no contact => send to agent
   if (!contact) {
     toEmail = user?.email ?? null;
     toPhone = (user as any)?.phone ?? null;
@@ -314,26 +419,54 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
   let runStatus: RunStatus = "SUCCESS";
   let runMessage: string | null = null;
 
-  const run = await prisma.automationRun.create({
-    data: {
-      automationId,
-      workspaceId,
-      ownerUserId: userId, 
+  const run = existingRunId
+    ? await prisma.automationRun.findFirst({
+        where: {
+          id: existingRunId,
+          workspaceId,
+          automationId,
+        },
+        select: {
+          id: true,
+          executedAt: true,
+        },
+      })
+    : await prisma.automationRun.create({
+        data: {
+          automationId,
+          workspaceId,
+          ownerUserId: userId,
+          contactId: contactId ?? null,
+          listingId: listingId ?? null,
+          trigger: String(ctx.trigger ?? "UNKNOWN"),
+          triggerPayload: ctx.payload ?? {},
+          status: "RUNNING",
+          message: null,
+          lockId,
+        },
+        select: {
+          id: true,
+          executedAt: true,
+        },
+      });
 
-      contactId: contactId ?? null,
-      listingId: listingId ?? null,
+  if (!run) {
+    throw new Error("Unable to load or create automation run.");
+  }
 
-      trigger: String(ctx.trigger ?? "UNKNOWN"),
-      triggerPayload: ctx.payload ?? {},
+  if (existingRunId) {
+    await prisma.automationRun.update({
+      where: { id: run.id },
+      data: {
+        status: "RUNNING",
+        message: null,
+      },
+    });
+  }
 
-      status: "RUNNING",
-      message: null,
-
-      lockId,
-    },
-  });
-
-  let stepIndex = 0;
+  let stepIndex = existingRunId
+    ? await prisma.automationRunStep.count({ where: { runId: run.id } })
+    : 0;
 
   const recordStep = async (data: {
     stepId?: string;
@@ -355,13 +488,14 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
     });
   };
 
-  // Relative “cursor” time
-  let cursorTime = run.executedAt ?? new Date();
+  let cursorTime = coerceDate(ctx.cursorTime) ?? run.executedAt ?? new Date();
 
-  const executeSteps = async (stepsToRun: AutomationStep[]) => {
-    for (const step of stepsToRun) {
+  const executeSteps = async (stepsToRun: AutomationStep[]): Promise<ExecuteResult> => {
+    for (let i = 0; i < stepsToRun.length; i++) {
+      const step = stepsToRun[i];
+      const remainingSteps = stepsToRun.slice(i + 1);
+
       try {
-        // Mid-run downgrade safety
         if (!(await canRunAutomations(workspaceId))) {
           await recordStep({
             stepId: step.id,
@@ -369,14 +503,16 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
             status: "SKIPPED",
             message: "Skipped: plan no longer allows automations.",
           });
+
           runStatus = "FAILED";
           runMessage = "Automation stopped due to plan downgrade.";
-          return;
+          return "STOP";
         }
 
         switch (step.type) {
           case "SMS": {
             if (!toPhone) throw new Error("No phone number available for SMS.");
+
             const body = renderTemplate(step.config?.text ?? "", templateVars);
 
             const result = await sendAutomationSms({
@@ -390,9 +526,7 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
             });
 
             if (!result || (result as any).success === false) {
-              throw new Error(
-                (result as any)?.error || "Automation SMS failed to send."
-              );
+              throw new Error((result as any)?.error || "Automation SMS failed to send.");
             }
 
             await recordStep({
@@ -405,6 +539,7 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
                 automationRunId: run.id,
               },
             });
+
             break;
           }
 
@@ -412,7 +547,10 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
             if (!toEmail) throw new Error("No email available for Email step.");
 
             const subject = renderTemplate(step.config?.subject ?? "", templateVars);
-            const html = renderTemplate(String(step.config?.body ?? "").replace(/\n/g, "<br />"), templateVars);
+            const html = renderTemplate(
+              String(step.config?.body ?? "").replace(/\n/g, "<br />"),
+              templateVars
+            );
 
             await sendAutomationEmail({
               userId,
@@ -429,6 +567,7 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
               status: "SUCCESS",
               payload: { to: toEmail, subject },
             });
+
             break;
           }
 
@@ -436,29 +575,55 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
             const wait = normalizeWait(step.config);
             const before = cursorTime;
 
-            if (wait) {
-              cursorTime = addToDate(cursorTime, wait.amount, wait.unit);
-              await recordStep({
-                stepId: step.id,
-                stepType: "WAIT",
-                status: "SUCCESS",
-                message: `Advanced time by ${wait.amount} ${wait.unit}.`,
-                payload: {
-                  ...step.config,
-                  cursorBefore: before.toISOString(),
-                  cursorAfter: cursorTime.toISOString(),
-                },
-              });
-            } else {
-              await recordStep({
-                stepId: step.id,
-                stepType: "WAIT",
-                status: "SUCCESS",
-                message: "Wait recorded (missing amount/unit).",
-                payload: { ...step.config, cursorAt: cursorTime.toISOString() },
-              });
+            if (!wait) {
+              throw new Error("WAIT step is missing a valid amount/unit.");
             }
-            break;
+
+            cursorTime = addToDate(cursorTime, wait.amount, wait.unit);
+            const resumeAt = normalizeToMinute(cursorTime);
+
+            await recordStep({
+              stepId: step.id,
+              stepType: "WAIT",
+              status: "SUCCESS",
+              message: `Advanced time by ${wait.amount} ${wait.unit}.`,
+              payload: {
+                ...step.config,
+                cursorBefore: before.toISOString(),
+                cursorAfter: cursorTime.toISOString(),
+                resumeAt: resumeAt.toISOString(),
+              },
+            });
+
+            if (!remainingSteps.length) {
+              break;
+            }
+
+            // Critical nuance:
+            // WAIT -> TASK must remain the same as today.
+            // We only queue/delay when downstream delayed side effects exist.
+            const requiresResume = stepsRequireDelayedResume(remainingSteps);
+            if (!requiresResume) {
+              break;
+            }
+
+            await queuePendingExecution({
+              workspaceId,
+              automationId,
+              runId: run.id,
+              userId,
+              contactId: contactId ?? null,
+              listingId: listingId ?? null,
+              trigger: String(ctx.trigger ?? "UNKNOWN"),
+              triggerPayload: ctx.payload ?? {},
+              remainingSteps,
+              resumeAt,
+              statusMessage: `Waiting until ${resumeAt.toISOString()} before continuing automation.`,
+            });
+
+            runStatus = "SUCCESS";
+            runMessage = `Waiting until ${resumeAt.toISOString()} before continuing automation.`;
+            return "STOP";
           }
 
           case "TASK": {
@@ -472,14 +637,11 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
             const title = renderTemplate(String(titleTemplate ?? ""), templateVars).trim();
             if (!title) throw new Error("Task title is required.");
 
-            const notesTemplate =
-              step.config?.notes ??
-              step.config?.description ??
-              "";
-
+            const notesTemplate = step.config?.notes ?? step.config?.description ?? "";
             const notes = renderTemplate(String(notesTemplate ?? ""), templateVars).trim() || null;
 
-            // ✅ Canonical resolver (src/lib/time.ts)
+            // KEEP THIS BEHAVIOR:
+            // WAIT -> TASK still creates the task immediately, using cursorTime.
             const resolved = computeTaskDueAtFromConfig(step.config, cursorTime);
             const dueAt = resolved.dueAt ?? normalizeToMinute(cursorTime);
 
@@ -502,16 +664,16 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
               payload: {
                 taskId: created?.id ?? null,
                 dueAt: dueAt ? dueAt.toISOString() : null,
-                dueAtSource: resolved.source, // "absolute" | "relative" | "none"
+                dueAtSource: resolved.source,
                 cursorAt: cursorTime.toISOString(),
               },
             });
+
             break;
           }
 
           case "IF": {
             const result = evaluateIfGroup(step.config, contact, listing);
-
             const normalizedConfig = normalizeIfConfig(step.config);
 
             await recordStep({
@@ -540,7 +702,11 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
             });
 
             const branch = result ? step.thenSteps ?? [] : step.elseSteps ?? [];
-            if (branch.length) await executeSteps(branch);
+            if (branch.length) {
+              const branchResult = await executeSteps(branch);
+              if (branchResult === "STOP") return "STOP";
+            }
+
             break;
           }
 
@@ -551,9 +717,10 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
               status: "FAILED",
               message: `Unknown step type: ${String(step.type)}`,
             });
+
             runStatus = "FAILED";
             runMessage = `Unknown step type: ${String(step.type)}`;
-            return;
+            return "STOP";
           }
         }
       } catch (err: any) {
@@ -566,9 +733,12 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
           status: "FAILED",
           message: runMessage,
         });
-        return;
+
+        return "STOP";
       }
     }
+
+    return "CONTINUE";
   };
 
   try {
@@ -576,7 +746,10 @@ export async function runAutomation(automationIdRaw: string, steps: AutomationSt
   } finally {
     await prisma.automationRun.update({
       where: { id: run.id },
-      data: { status: runStatus, message: runMessage },
+      data: {
+        status: runStatus,
+        message: runMessage,
+      },
     });
   }
 }
