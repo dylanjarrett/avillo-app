@@ -184,6 +184,14 @@ enum ChatModerationAction {
   REMOVED
 }
 
+enum AutomationPendingExecutionStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+  SKIPPED
+}
+
 // ---------------------------
 // USER
 // ---------------------------
@@ -249,9 +257,10 @@ model User {
   createdAIArtifacts        AIArtifact[]        @relation("AIArtifactCreatedBy")
   createdAIContextSnapshots AIContextSnapshot[] @relation("AIContextSnapshotCreatedBy")
 
-  ownedIntelligenceOutputs IntelligenceOutput[] @relation("IntelligenceOwner")
-  ownedAutomationRuns      AutomationRun[]      @relation("AutomationRunOwner")
-  ownedAIArtifacts         AIArtifact[]         @relation("AIArtifactOwner")
+  ownedIntelligenceOutputs    IntelligenceOutput[]         @relation("IntelligenceOwner")
+  ownedAutomationRuns         AutomationRun[]              @relation("AutomationRunOwner")
+  automationPendingExecutions AutomationPendingExecution[] @relation("AutomationPendingExecutionUser")
+  ownedAIArtifacts            AIArtifact[]                 @relation("AIArtifactOwner")
 
   smsMessages          SmsMessage[]      @relation("SmsMessageCreatedBy")
   smsSuppressions      SmsSuppression[]  @relation("SmsSuppressionCreatedBy")
@@ -317,36 +326,37 @@ model Workspace {
   defaultedByUsers User[]          @relation("UserDefaultWorkspace")
 
   // Tenant-owned relations
-  contacts            Contact[]
-  listings            Listing[]
-  activities          Activity[]
-  crmActivity         CRMActivity[]
-  tasks               Task[]
-  intelligenceOutputs IntelligenceOutput[]
-  crmRecords          CRMRecord[]
-  automations         Automation[]
-  automationRuns      AutomationRun[]
-  conversations       Conversation[]
-  commEvents          CommEvent[]
-  commReadStates      CommReadState[]
-  phoneNumbers        UserPhoneNumber[]
-  calls               Call[]
-  smsMessages         SmsMessage[]
-  smsSuppressions     SmsSuppression[]
-  pins                Pin[]
-  contactPins         ContactPin[]
-  listingPins         ListingPin[]
-  invites             WorkspaceInvite[]
-  chatChannels        ChatChannel[]
-  chatMessages        ChatMessage[]
-  chatReadStates      ChatReadState[]
-  chatReactions       ChatReaction[]
-  chatAttachments     ChatAttachment[]
-  chatMentions        ChatMention[]
-  chatMembers         ChatChannelMember[]
-  aiArtifacts         AIArtifact[]
-  aiJobs              AIJob[]
-  aiContextSnapshots  AIContextSnapshot[]
+  contacts                    Contact[]
+  listings                    Listing[]
+  activities                  Activity[]
+  crmActivity                 CRMActivity[]
+  tasks                       Task[]
+  intelligenceOutputs         IntelligenceOutput[]
+  crmRecords                  CRMRecord[]
+  automations                 Automation[]
+  automationRuns              AutomationRun[]
+  automationPendingExecutions AutomationPendingExecution[]
+  conversations               Conversation[]
+  commEvents                  CommEvent[]
+  commReadStates              CommReadState[]
+  phoneNumbers                UserPhoneNumber[]
+  calls                       Call[]
+  smsMessages                 SmsMessage[]
+  smsSuppressions             SmsSuppression[]
+  pins                        Pin[]
+  contactPins                 ContactPin[]
+  listingPins                 ListingPin[]
+  invites                     WorkspaceInvite[]
+  chatChannels                ChatChannel[]
+  chatMessages                ChatMessage[]
+  chatReadStates              ChatReadState[]
+  chatReactions               ChatReaction[]
+  chatAttachments             ChatAttachment[]
+  chatMentions                ChatMention[]
+  chatMembers                 ChatChannelMember[]
+  aiArtifacts                 AIArtifact[]
+  aiJobs                      AIJob[]
+  aiContextSnapshots          AIContextSnapshot[]
 
   @@unique([stripeCustomerId])
   @@unique([stripeSubscriptionId])
@@ -1406,8 +1416,9 @@ model Automation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  steps AutomationStepGroup?
-  runs  AutomationRun[]
+  steps             AutomationStepGroup?
+  runs              AutomationRun[]
+  pendingExecutions AutomationPendingExecution[]
 
   @@index([workspaceId])
   @@index([workspaceId, active])
@@ -1453,7 +1464,8 @@ model AutomationRun {
   executedAt DateTime @default(now())
   lockId     String?
 
-  steps AutomationRunStep[]
+  steps             AutomationRunStep[]
+  pendingExecutions AutomationPendingExecution[]
 
   @@index([workspaceId, executedAt])
   @@index([workspaceId, automationId, executedAt])
@@ -1481,6 +1493,49 @@ model AutomationRunStep {
   @@index([runId])
   @@index([stepType])
   @@index([status])
+}
+
+model AutomationPendingExecution {
+  id String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  runId String
+  run   AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("AutomationPendingExecutionUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  contactId String?
+  listingId String?
+
+  trigger        String
+  triggerPayload Json?
+
+  remainingSteps Json
+  resumeAt       DateTime
+
+  status        AutomationPendingExecutionStatus @default(PENDING)
+  statusMessage String?
+  lockId        String?
+  attempts      Int                              @default(0)
+
+  processedAt DateTime?
+  failedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status, resumeAt])
+  @@index([status, resumeAt])
+  @@index([automationId, status, resumeAt])
+  @@index([runId])
+  @@index([userId])
+  @@index([workspaceId, userId, status, resumeAt])
 }
 
 // ---------------------------
