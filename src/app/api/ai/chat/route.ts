@@ -32,7 +32,7 @@ type ChatBody = {
   messages?: ClientMsg[];
   page?: string;
   pageContext?: PageContext;
-  tz?: string; // browser IANA tz, e.g. "America/Los_Angeles"
+  tz?: string;
 };
 
 type AIAction =
@@ -51,12 +51,137 @@ type AIAction =
 
 type AIResponse = { reply?: string; actions?: AIAction[] };
 
-/* ------------------------------------
- * Utilities
- * -----------------------------------*/
+type Intent =
+  | "tasks_overdue"
+  | "daily_brief"
+  | "followups"
+  | "pipeline"
+  | "listings"
+  | "drafting"
+  | "general";
+
+type HydratedFocus = {
+  task?: {
+    id: string;
+    title: string;
+    notes: string | null;
+    dueAt: Date | null;
+    dueAtLabel: string | null;
+    dueLabel: string | null;
+    dueLabelLong: string | null;
+    status: string;
+    source: string;
+    contact: {
+      id: string;
+      name: string | null;
+      stage: string | null;
+      clientRole: string | null;
+      relationshipType?: string | null;
+      phone?: string | null;
+      smsOptedOutAt?: Date | null;
+      smsConsentedAt?: Date | null;
+    } | null;
+    listing: {
+      id: string;
+      address: string;
+      status: string;
+      price: number | null;
+    } | null;
+  };
+  contact?: {
+    id: string;
+    name: string | null;
+    email?: string | null;
+    phone?: string | null;
+    relationshipType?: string | null;
+    stage?: string | null;
+    clientRole?: string | null;
+    label?: string | null;
+    notes?: string | null;
+    smsConsentedAt?: Date | null;
+    smsOptedOutAt?: Date | null;
+    isSmsSuppressed?: boolean;
+    pins?: Array<{
+      id: string;
+      pinId: string;
+      pinName: string;
+      createdAt: Date;
+      createdByUserId: string | null;
+    }>;
+    recentNotes?: Array<{
+      text: string;
+      reminderAt: Date | null;
+      reminderLabel: string | null;
+      createdAt: Date;
+    }>;
+    updatedAt?: Date;
+  };
+  listing?: {
+    id: string;
+    address: string;
+    status: string;
+    price: number | null;
+    description?: string | null;
+    seller?: { id: string; name: string | null } | null;
+    buyers?: Array<{ id: string; name: string | null; role: string | null }>;
+    photos?: Array<{ url: string; isCover: boolean }>;
+    pins?: Array<{
+      id: string;
+      pinId: string;
+      pinName: string;
+      createdAt: Date;
+      createdByUserId: string | null;
+    }>;
+    recentNotes?: Array<{
+      id: string;
+      text: string;
+      reminderAt: Date | null;
+      reminderLabel: string | null;
+      createdAt: Date;
+    }>;
+    updatedAt?: Date;
+  };
+  conversation?: {
+    id: string;
+    assignedToUserId: string;
+    phoneNumberId: string;
+    otherPartyE164: string;
+    displayName: string | null;
+    lastMessageAt: Date | null;
+    lastInboundAt: Date | null;
+    lastOutboundAt: Date | null;
+    zoraSummary: string | null;
+    zoraState: any;
+    updatedAt: Date;
+    contact: {
+      id: string;
+      name: string | null;
+      phone: string | null;
+      relationshipType: string | null;
+      stage: string | null;
+      clientRole: string | null;
+      smsConsentedAt?: Date | null;
+      smsOptedOutAt?: Date | null;
+      isSmsSuppressed?: boolean;
+    } | null;
+    listing: {
+      id: string;
+      address: string;
+      status: string;
+      price: number | null;
+    } | null;
+    recentMessages: Array<{
+      id: string;
+      direction: string;
+      body: string;
+      status: string | null;
+      source: string;
+      createdAt: Date;
+    }>;
+  };
+};
 
 function nowISO() {
-  // This is an absolute instant (UTC). Day boundaries are derived via dayBoundsForTZ().
   return new Date().toISOString();
 }
 
@@ -65,18 +190,6 @@ function clampStr(v: unknown, max = 4000) {
   const t = v.trim();
   if (!t) return "";
   return t.length > max ? t.slice(0, max) : t;
-}
-
-function serializeConversation(messages: ClientMsg[]) {
-  return messages
-    .slice(-12)
-    .map((m) => `${m.role.toUpperCase()}: ${m.text}`)
-    .join("\n");
-}
-
-function formatName(first?: string | null, last?: string | null) {
-  const out = [first, last].filter(Boolean).join(" ").trim();
-  return out || null;
 }
 
 function sanitizeId(v: unknown) {
@@ -95,64 +208,31 @@ function jsonError(status: number, error: string, extra?: Record<string, any>) {
   return NextResponse.json({ error, ...(extra || {}) }, { status });
 }
 
-/**
- * Intent inference (bias only)
- */
-function inferIntent(lastUserText: string) {
-  const t = lastUserText.toLowerCase();
-
-  if (/(overdue|past due|late)\b/.test(t)) return "tasks_overdue";
-  if (/(today|right now|what should i do|plan)\b/.test(t)) return "daily_brief";
-  if (/(follow[-\s]?up|check[-\s]?in|touch base|reach out)\b/.test(t)) return "followups";
-  if (/(pipeline|stage|hot|warm|new|past)\b/.test(t)) return "pipeline";
-  if (/(listing|mls|open house|price|photos?)\b/.test(t)) return "listings";
-  if (/(email|sms|text|message|draft|write)\b/.test(t)) return "drafting";
-  return "general";
-}
-
-/**
- * Conservative fuzzy helpers (v1)
- */
-function extractQuotedOrAfterKeywords(text: string) {
-  const out: { contact?: string; listing?: string; task?: string } = {};
-  const lower = text.toLowerCase();
-
-  const quoteMatch = text.match(/"([^"]{2,80})"/);
-  const quoted = quoteMatch?.[1]?.trim();
-
-  const pickAfter = (k: string) => {
-    const idx = lower.indexOf(k);
-    if (idx === -1) return null;
-    const slice = text.slice(idx + k.length).trim();
-    if (!slice) return null;
-    const line = slice.split("\n")[0]?.trim() || "";
-    return line.replace(/^[:\-–—]\s*/, "").slice(0, 80).trim() || null;
-  };
-
-  const contactHint = pickAfter("contact") || pickAfter("person");
-  const listingHint = pickAfter("listing") || pickAfter("address");
-  const taskHint = pickAfter("task");
-
-  if (contactHint) out.contact = contactHint;
-  if (listingHint) out.listing = listingHint;
-  if (taskHint) out.task = taskHint;
-
-  if (!out.contact && !out.listing && !out.task && quoted) out.contact = quoted;
-  return out;
-}
-
-/**
- * Context budget
- */
 function enforceBudget<T>(items: T[], max: number) {
   if (!Array.isArray(items)) return [];
   return items.length > max ? items.slice(0, max) : items;
 }
 
-/**
- * ✅ Deterministic date labels in a specific IANA zone (prevents UTC-vs-local drift)
- * We intentionally format on the server so the model never "infers" calendar dates from UTC instants.
- */
+function serializeConversation(messages: ClientMsg[]) {
+  return messages
+    .slice(-10)
+    .map((m) => `${m.role.toUpperCase()}: ${m.text}`)
+    .join("\n");
+}
+
+function serializeRecentAssistant(messages: ClientMsg[]) {
+  return messages
+    .filter((m) => m.role === "assistant")
+    .slice(-2)
+    .map((m) => m.text)
+    .join("\n---\n");
+}
+
+function formatName(first?: string | null, last?: string | null) {
+  const out = [first, last].filter(Boolean).join(" ").trim();
+  return out || null;
+}
+
 function formatDateInZone(d: Date | null, zone: string): string | null {
   if (!d) return null;
   try {
@@ -166,10 +246,6 @@ function formatDateInZone(d: Date | null, zone: string): string | null {
   }
 }
 
-/**
- * ✅ Deterministic datetime label (matches Tasks UI more closely)
- * Example: "Jan 30, 2026, 2:00 PM"
- */
 function formatDateTimeInZone(d: Date | null, zone: string): string | null {
   if (!d) return null;
   try {
@@ -200,88 +276,82 @@ function formatDateLongInZone(d: Date | null, zone: string): string | null {
   }
 }
 
+function inferIntent(lastUserText: string): Intent {
+  const t = lastUserText.toLowerCase();
+
+  if (/(overdue|past due|late)\b/.test(t)) return "tasks_overdue";
+  if (/(today|right now|what should i do|what should i focus on|plan my day)\b/.test(t)) return "daily_brief";
+  if (/(follow[-\s]?up|check[-\s]?in|touch base|reach out|who should i follow up with)\b/.test(t)) return "followups";
+  if (/(pipeline|stage|hot|warm|new|past)\b/.test(t)) return "pipeline";
+  if (/(listing|mls|open house|price|photos?)\b/.test(t)) return "listings";
+  if (/(email|sms|text|message|draft|write)\b/.test(t)) return "drafting";
+  return "general";
+}
+
+function dedupeById<T extends { id: string }>(items: T[]) {
+  return Array.from(new Map(items.map((x) => [x.id, x])).values());
+}
+
 function buildSystemPreamble() {
   return `
-You are Avillo AI — the Avillo workspace copilot for real estate operators.
+You are Zora — the Avillo workspace copilot for real estate operators.
 
-SCOPE (AVILLO-ONLY):
-- Help ONLY with Avillo + real estate workflow using the provided workspace context (tasks, contacts/people, listings, follow-ups, pipeline, activity, and drafting business messages).
-- If the user asks anything unrelated (general knowledge, schoolwork, coding unrelated to Avillo, personal advice, entertainment), refuse and redirect to an Avillo-relevant next step.
-- If partially related, answer only the Avillo/workflow portion and ask a clarifying question to connect it to Avillo context.
+SCOPE:
+- Help ONLY with Avillo + real estate workflow using the provided workspace context.
+- If the user asks for anything outside Avillo/workflow/real-estate operations, briefly refuse and redirect to an Avillo-relevant next step.
 
 MISSION:
-- Convert workspace context into clear next actions, prioritization, and execution help.
-- Be concise, tactical, and operator-oriented.
+- Convert workspace context into priorities, next actions, summaries, and drafting help.
+- Be concise, tactical, accurate, and useful.
 
-TRUTH + PRIVACY (NON-NEGOTIABLE):
-- Use ONLY the context included in this request. If it’s not in context, say you don’t have it.
-- Never invent counts, names, addresses, statuses, dates/times, or task items.
-- TASK PRIVACY: Tasks are private to the current user. Only discuss tasks provided under context.tasks.* (already filtered to assigned to the current user).
-- If asked about other users’ tasks/team workload, explain you can only see the user’s own tasks.
-- If required information is missing or unclear, say you don’t have enough context and ask 2–4 specific questions.
+TRUTH + GROUNDING:
+- Use ONLY the provided context.
+- If a fact is missing, say you do not have it.
+- Never invent names, IDs, addresses, counts, statuses, dates, times, listings, tasks, conversations, or pipeline facts.
+- Do not claim certainty where the context is partial.
+- If multiple records could match and the context does not identify one clearly, say you need the user to specify which record.
 
-WORKSPACE VISIBILITY:
-- Contacts and listings are workspace-visible within the current workspace.
-- Still: do not invent data; only use what’s in context.
+PRIVACY:
+- Tasks are private to the current user. Only discuss tasks included in context.tasks.* or context.focus.task.
+- Do not infer or speculate about other users’ work.
 
-TIMEZONE (CRITICAL):
-- dueAt/reminderAt are absolute instants (UTC).
-- When speaking about dates/times, ALWAYS use the provided labels:
-  - task.dueAtLabel (preferred; includes local time)
-  - task.dueLabel / task.dueLabelLong (date-only fallbacks)
-  - note.reminderLabel
-- Do NOT infer local dates/times from ISO timestamps.
-- Never output UTC times (e.g., "22:00 UTC").
+TIMEZONE:
+- dueAt/reminderAt are absolute instants.
+- Always use the provided labels when present:
+  - dueAtLabel
+  - dueLabel
+  - dueLabelLong
+  - reminderLabel
+- Do not convert raw ISO timestamps yourself.
+- Never output UTC times.
 
-COMPLIANCE (FAIR HOUSING / NAR):
-- Do NOT reference, target, prefer, exclude, or imply ANY protected class or demographic group.
-- Do NOT say who a home/neighborhood is "perfect for" based on demographic groups.
-- Avoid crime/safety claims; redirect to official resources if needed.
-- Avoid school quality rankings/superlatives; keep school mentions neutral and suggest verification.
+ANTI-REDUNDANCY:
+- Avoid repeating the same facts already stated in the last 2 assistant messages unless the user asks for a recap.
+- Avoid listing the same contact/listing/task twice if it appears in multiple context sections.
+- Prioritize net-new information and the single best next step.
 
-DRAFTING (EMAIL/SMS):
-- You may draft emails/texts ONLY when tied to Avillo context (a contact, conversation, listing, task, follow-up, or workflow described by the user).
-- For SMS, prefer focus.conversation and focus.contact when available.
-- Use recent conversation context when provided so the message feels like a natural continuation of the thread.
-- Keep SMS concise, natural, and ready to send.
-- Do not fabricate names, details, timelines, or outcomes.
-- If key details are missing, ask concise follow-up questions instead of inventing them.
+DRAFTING:
+- Draft email/SMS only when tied to Avillo context.
+- Keep drafts natural, concise, and ready for review.
+- Do not fabricate names, timelines, availability, outcomes, or prior commitments.
+- If SMS is unavailable or disallowed by context, explain why and do not return a draft_sms action.
 
-SMS ACTION CONTRACT:
-- If the user asks you to write, draft, or suggest a text message, you may return an action:
-  {
-    "type": "draft_sms",
-    "label": "Draft text",
-    "payload": {
-      "contactId": "contact id",
-      "conversationId": "conversation id if available",
-      "message": "draft text body"
-    }
-  }
-- Only return draft_sms if a valid contactId is available in the provided context.
-- If you can suggest SMS wording but no valid contactId is available, reply with the suggested draft in plain text only and do not return an action.
-- Never return draft_sms with an empty or placeholder message.
-- Do NOT send messages yourself. Only draft them for the user to review and edit before sending.
-- Never ask the user whether you should send a message.
-- Never say or imply that you can send, deliver, or text on the user's behalf in this chat flow.
-- When drafting SMS, present it as a draft for the user to review, edit, or place into the composer.
-- Prefer phrases like "Here’s a draft", "I drafted this for you", or "You can edit this before sending."
-- Do not use phrases like "Should I send it?", "Want me to send this?", or "I can send this now."
-- If context.comms.canText is false, explain that texting is unavailable and do not return draft_sms.
+SMS COMPLIANCE:
+- If context indicates sms opt-out or suppression, do not draft a text action.
+- If the user wants a text anyway, explain the compliance block and suggest another channel if appropriate.
 
-ACTIONS:
-- Only include actions when they map to Avillo UI behavior and are supported by provided IDs/context.
-- Allowed action types are: open_contact, open_listing, open_task, draft_sms.
-- Never invent action types or IDs.
+ACTION CONTRACT:
+- Allowed action types: open_contact, open_listing, open_task, draft_sms.
+- Only use IDs that are explicitly present in the provided context.
+- Never invent IDs.
+- Never invent action types.
 
 STYLE:
 - Lead with the best next step.
-- Use short sections and bullets when helpful.
-- Plain text only (NO markdown). Do not use **bold**, _italics_, backticks, headings, or code blocks.
-- Do not prefix with labels like "Answer:" or "Response:"; start directly with content.
-
-OFF-TOPIC HANDLING:
-- If off-topic: one sentence stating you can only help with Avillo/workspace + real estate workflow, then suggest 1–2 relevant prompts.
+- Plain text only.
+- No markdown code blocks.
+- No headings syntax.
+- No fluff.
 
 OUTPUT:
 Return ONLY valid JSON:
@@ -292,9 +362,136 @@ Return ONLY valid JSON:
 `.trim();
 }
 
-/* ------------------------------------
- * Route
- * -----------------------------------*/
+function buildAllowedActionIds(context: any) {
+  const contactIds = new Set<string>();
+  const listingIds = new Set<string>();
+  const taskIds = new Set<string>();
+
+  const add = (set: Set<string>, value: unknown) => {
+    const id = sanitizeId(value);
+    if (id) set.add(id);
+  };
+
+  if (context?.focus?.contact?.id) add(contactIds, context.focus.contact.id);
+  if (context?.focus?.listing?.id) add(listingIds, context.focus.listing.id);
+  if (context?.focus?.task?.id) add(taskIds, context.focus.task.id);
+  if (context?.focus?.task?.contact?.id) add(contactIds, context.focus.task.contact.id);
+  if (context?.focus?.task?.listing?.id) add(listingIds, context.focus.task.listing.id);
+  if (context?.focus?.conversation?.contact?.id) add(contactIds, context.focus.conversation.contact.id);
+  if (context?.focus?.conversation?.listing?.id) add(listingIds, context.focus.conversation.listing.id);
+
+  for (const p of context?.people?.myRecent || []) add(contactIds, p.id);
+  for (const c of context?.followups?.candidates || []) add(contactIds, c.id);
+  for (const l of context?.listings?.myRecent || []) add(listingIds, l.id);
+  for (const t of context?.tasks?.overdue || []) add(taskIds, t.id);
+  for (const t of context?.tasks?.dueToday || []) add(taskIds, t.id);
+  for (const t of context?.tasks?.dueThisWeek || []) add(taskIds, t.id);
+
+  return { contactIds, listingIds, taskIds };
+}
+
+function narrowContextByIntent(base: any, intent: Intent) {
+  const common = {
+    meta: base.meta,
+    comms: base.comms,
+    focus: base.focus,
+  };
+
+  switch (intent) {
+    case "tasks_overdue":
+      return {
+        ...common,
+        tasks: {
+          policy: base.tasks.policy,
+          counts: base.tasks.counts,
+          overdue: base.tasks.overdue,
+          dueToday: base.tasks.dueToday,
+        },
+      };
+
+    case "daily_brief":
+      return {
+        ...common,
+        tasks: base.tasks,
+        followups: {
+          candidates: (base.followups?.candidates || []).slice(0, 8),
+          notes: base.followups?.notes,
+        },
+        listings: {
+          myRecent: base.listings?.myRecent || [],
+          statusCounts: base.listings?.statusCounts || [],
+        },
+        activity: {
+          recentCRM: (base.activity?.recentCRM || []).slice(0, 8),
+        },
+      };
+
+    case "followups":
+      return {
+        ...common,
+        followups: base.followups,
+        activity: {
+          recentCRM: (base.activity?.recentCRM || []).slice(0, 8),
+        },
+      };
+
+    case "pipeline":
+      return {
+        ...common,
+        pipeline: base.pipeline,
+        listings: {
+          statusCounts: base.listings?.statusCounts || [],
+          myRecent: base.listings?.myRecent || [],
+        },
+        people: {
+          myRecent: base.people?.myRecent || [],
+        },
+        activity: {
+          recentCRM: (base.activity?.recentCRM || []).slice(0, 8),
+        },
+      };
+
+    case "listings":
+      return {
+        ...common,
+        listings: base.listings,
+        pipeline: {
+          statusCounts: base.listings?.statusCounts || [],
+        },
+      };
+
+    case "drafting":
+      return {
+        ...common,
+        followups: {
+          candidates: (base.followups?.candidates || []).slice(0, 6),
+          notes: base.followups?.notes,
+        },
+      };
+
+    case "general":
+    default:
+      return {
+        ...common,
+        tasks: {
+          counts: base.tasks?.counts,
+          overdue: (base.tasks?.overdue || []).slice(0, 5),
+          dueToday: (base.tasks?.dueToday || []).slice(0, 5),
+        },
+        followups: {
+          candidates: (base.followups?.candidates || []).slice(0, 6),
+          notes: base.followups?.notes,
+        },
+        listings: {
+          statusCounts: base.listings?.statusCounts || [],
+          myRecent: (base.listings?.myRecent || []).slice(0, 5),
+        },
+        people: {
+          myRecent: (base.people?.myRecent || []).slice(0, 5),
+        },
+      };
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -304,7 +501,9 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json().catch(() => null)) as ChatBody | null;
-    if (!body || typeof body !== "object") return jsonError(400, "Invalid JSON body.");
+    if (!body || typeof body !== "object") {
+      return jsonError(400, "Invalid JSON body.");
+    }
 
     const rawMessages = body.messages;
     const page = typeof body.page === "string" ? body.page : undefined;
@@ -315,34 +514,30 @@ export async function POST(req: Request) {
       return jsonError(400, "Missing messages.");
     }
 
-    // Validate + clamp
     const messages: ClientMsg[] = rawMessages
       .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.text === "string")
       .map((m) => ({ role: m.role, text: clampStr(m.text, 3000) }))
       .filter((m) => m.text.length > 0);
 
-    if (messages.length === 0) return jsonError(400, "Missing messages.");
+    if (!messages.length) {
+      return jsonError(400, "Missing messages.");
+    }
 
     const lastUser = [...messages].reverse().find((m) => m.role === "user")?.text || "";
     const intent = inferIntent(lastUser);
 
     const wsId = ctx.workspaceId;
     const userId = ctx.userId;
+
     const vctx: VisibilityCtx = {
       workspaceId: wsId,
       userId,
       isWorkspaceAdmin: false,
     };
 
-    // ----------------------------
-    // Time boundaries (browser tz preferred) — via canonical shared lib
-    // ----------------------------
     const browserTZ = safeIanaTZ(body.tz);
     const { zone, todayStart, tomorrowStart, in7Start } = dayBoundsForTZ(browserTZ);
 
-    // ----------------------------
-    // Page context (preferred) + fallback fuzzy focus
-    // ----------------------------
     const pageContext: PageContext = {
       contactId: sanitizeId(pageContextRaw?.contactId) ?? undefined,
       listingId: sanitizeId(pageContextRaw?.listingId) ?? undefined,
@@ -352,13 +547,6 @@ export async function POST(req: Request) {
       filters: pageContextRaw?.filters ?? undefined,
     };
 
-    const hints = extractQuotedOrAfterKeywords(lastUser);
-
-    // ----------------------------
-    // Privacy boundary for tasks (aligned with schema)
-    // - tasks are private to current user: assignedToUserId = userId
-    // - exclude deleted (deletedAt null)
-    // ----------------------------
     const taskWhereMe = {
       workspaceId: wsId,
       deletedAt: null as Date | null,
@@ -380,9 +568,6 @@ export async function POST(req: Request) {
       },
     });
 
-    // ----------------------------
-    // Parallel queries (lean + high value)
-    // ----------------------------
     const [
       taskCountsByStatus,
       overdueTasks,
@@ -393,8 +578,7 @@ export async function POST(req: Request) {
       recentCrmForMe,
       myRecentContacts,
       myRecentListings,
-      lastTouchByContact,
-      workspacePins, // ✅ NEW
+      workspacePins,
     ] = await Promise.all([
       prisma.task.groupBy({
         by: ["status"],
@@ -411,7 +595,19 @@ export async function POST(req: Request) {
           title: true,
           dueAt: true,
           source: true,
-          contact: { select: { id: true, firstName: true, lastName: true } },
+          contact: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              relationshipType: true,
+              stage: true,
+              clientRole: true,
+              phone: true,
+              smsConsentedAt: true,
+              smsOptedOutAt: true,
+            },
+          },
           listing: { select: { id: true, address: true, status: true } },
         },
       }),
@@ -425,12 +621,23 @@ export async function POST(req: Request) {
           title: true,
           dueAt: true,
           source: true,
-          contact: { select: { id: true, firstName: true, lastName: true } },
+          contact: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              relationshipType: true,
+              stage: true,
+              clientRole: true,
+              phone: true,
+              smsConsentedAt: true,
+              smsOptedOutAt: true,
+            },
+          },
           listing: { select: { id: true, address: true, status: true } },
         },
       }),
 
-      // NOTE: keep your prior behavior: "week" = tomorrow → +7 days (excludes today)
       prisma.task.findMany({
         where: { ...taskWhereMe, status: "OPEN", dueAt: { gte: tomorrowStart, lt: in7Start } },
         orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
@@ -440,7 +647,19 @@ export async function POST(req: Request) {
           title: true,
           dueAt: true,
           source: true,
-          contact: { select: { id: true, firstName: true, lastName: true } },
+          contact: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              relationshipType: true,
+              stage: true,
+              clientRole: true,
+              phone: true,
+              smsConsentedAt: true,
+              smsOptedOutAt: true,
+            },
+          },
           listing: { select: { id: true, address: true, status: true } },
         },
       }),
@@ -479,7 +698,7 @@ export async function POST(req: Request) {
           ownerUserId: userId,
         },
         orderBy: { updatedAt: "desc" },
-        take: 10,
+        take: 12,
         select: {
           id: true,
           firstName: true,
@@ -487,6 +706,9 @@ export async function POST(req: Request) {
           relationshipType: true,
           stage: true,
           clientRole: true,
+          phone: true,
+          smsConsentedAt: true,
+          smsOptedOutAt: true,
           updatedAt: true,
         },
       }),
@@ -498,19 +720,13 @@ export async function POST(req: Request) {
         },
         orderBy: { updatedAt: "desc" },
         take: 10,
-        select: { id: true, address: true, status: true, price: true, updatedAt: true },
-      }),
-
-      prisma.cRMActivity.groupBy({
-        by: ["contactId"],
-        where: {
-          ...whereReadableCRMActivity(vctx),
-          actorUserId: userId,
-          contactId: { not: null },
+        select: {
+          id: true,
+          address: true,
+          status: true,
+          price: true,
+          updatedAt: true,
         },
-        _max: { createdAt: true },
-        orderBy: { _max: { createdAt: "asc" } },
-        take: 20,
       }),
 
       prisma.pin.findMany({
@@ -530,7 +746,6 @@ export async function POST(req: Request) {
     const openCount = taskCountsByStatus.find((x) => x.status === "OPEN")?._count?._all ?? 0;
     const doneCount = taskCountsByStatus.find((x) => x.status === "DONE")?._count?._all ?? 0;
 
-    // Never touched: owned contacts with no CRMActivity by me
     const neverTouched = await prisma.contact.findMany({
       where: {
         ...whereReadableContact(vctx),
@@ -538,7 +753,7 @@ export async function POST(req: Request) {
         crmActivity: { none: { actorUserId: userId } },
       },
       orderBy: { updatedAt: "desc" },
-      take: 10,
+      take: 12,
       select: {
         id: true,
         firstName: true,
@@ -546,64 +761,190 @@ export async function POST(req: Request) {
         relationshipType: true,
         stage: true,
         clientRole: true,
+        phone: true,
+        smsConsentedAt: true,
+        smsOptedOutAt: true,
         updatedAt: true,
       },
     });
 
-    const lastTouchMap = new Map<string, Date | null>();
-    for (const row of lastTouchByContact) {
-      if (row.contactId) lastTouchMap.set(row.contactId, row._max.createdAt ?? null);
-    }
-
-    const followupsCandidates = [
+    const candidateContacts = dedupeById([
       ...neverTouched.map((c) => ({
         id: c.id,
-        name: formatName(c.firstName, c.lastName),
+        firstName: c.firstName,
+        lastName: c.lastName,
         relationshipType: c.relationshipType,
         stage: c.stage,
         clientRole: c.clientRole,
-        lastTouchAt: null as Date | null,
+        phone: c.phone,
+        smsConsentedAt: c.smsConsentedAt,
+        smsOptedOutAt: c.smsOptedOutAt,
         updatedAt: c.updatedAt,
         reason: "never_touched" as const,
       })),
-      ...myRecentContacts
-        .map((c) => {
-          const lastTouchAt = lastTouchMap.get(c.id) ?? null;
-          return {
-            id: c.id,
-            name: formatName(c.firstName, c.lastName),
-            relationshipType: c.relationshipType,
-            stage: c.stage,
-            clientRole: c.clientRole,
-            lastTouchAt,
-            updatedAt: c.updatedAt,
-            reason: (lastTouchAt ? "stale_touch" : "unknown") as "stale_touch" | "unknown",
-          };
-        })
-        .sort((a, b) => {
-          const aT = a.lastTouchAt ? new Date(a.lastTouchAt).getTime() : -1;
-          const bT = b.lastTouchAt ? new Date(b.lastTouchAt).getTime() : -1;
-          return aT - bT;
-        }),
-    ];
+      ...myRecentContacts.map((c) => ({
+        id: c.id,
+        firstName: c.firstName,
+        lastName: c.lastName,
+        relationshipType: c.relationshipType,
+        stage: c.stage,
+        clientRole: c.clientRole,
+        phone: c.phone,
+        smsConsentedAt: c.smsConsentedAt,
+        smsOptedOutAt: c.smsOptedOutAt,
+        updatedAt: c.updatedAt,
+        reason: "recent_contact" as const,
+      })),
+    ]);
 
-    const followups = enforceBudget(
-      Array.from(new Map(followupsCandidates.map((x) => [x.id, x])).values()).slice(0, 12),
-      12
-    );
+    const candidateContactIds = candidateContacts.map((c) => c.id);
 
-    // ----------------------------
-    // Focus hydration (pageContext ids first, then conservative fuzzy)
-    // ----------------------------
-    const focus: any = {};
-    const focusTaskId = pageContext.taskId;
-    const focusContactId = pageContext.contactId;
-    const focusListingId = pageContext.listingId;
-    const focusConversationId = pageContext.conversationId;
+    const [lastCrmTouch, lastSmsTouch, lastCallTouch, suppressedPhones] = await Promise.all([
+      candidateContactIds.length
+        ? prisma.cRMActivity.groupBy({
+            by: ["contactId"],
+            where: {
+              ...whereReadableCRMActivity(vctx),
+              actorUserId: userId,
+              contactId: { in: candidateContactIds },
+            },
+            _max: { createdAt: true },
+          })
+        : Promise.resolve([]),
 
-    if (focusTaskId) {
+      candidateContactIds.length
+        ? prisma.smsMessage.groupBy({
+            by: ["contactId"],
+            where: {
+              workspaceId: wsId,
+              assignedToUserId: userId,
+              contactId: { in: candidateContactIds },
+            },
+            _max: { createdAt: true },
+          })
+        : Promise.resolve([]),
+
+      candidateContactIds.length
+        ? prisma.call.groupBy({
+            by: ["contactId"],
+            where: {
+              workspaceId: wsId,
+              assignedToUserId: userId,
+              contactId: { in: candidateContactIds },
+            },
+            _max: { createdAt: true },
+          })
+        : Promise.resolve([]),
+
+      candidateContacts
+        .map((c) => c.phone)
+        .filter((v): v is string => !!v)
+        .length
+        ? prisma.smsSuppression.findMany({
+            where: {
+              workspaceId: wsId,
+              phone: { in: candidateContacts.map((c) => c.phone).filter((v): v is string => !!v) },
+            },
+            select: { phone: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const suppressedPhoneSet = new Set(suppressedPhones.map((x) => x.phone));
+
+    const touchMap = new Map<string, Date | null>();
+    const touchSourceMap = new Map<string, string[]>();
+
+    for (const row of lastCrmTouch) {
+      if (!row.contactId) continue;
+      const dt = row._max.createdAt ?? null;
+      if (!dt) continue;
+      const prev = touchMap.get(row.contactId);
+      if (!prev || dt > prev) touchMap.set(row.contactId, dt);
+      touchSourceMap.set(row.contactId, [...(touchSourceMap.get(row.contactId) || []), "crm"]);
+    }
+
+    for (const row of lastSmsTouch) {
+      if (!row.contactId) continue;
+      const dt = row._max.createdAt ?? null;
+      if (!dt) continue;
+      const prev = touchMap.get(row.contactId);
+      if (!prev || dt > prev) touchMap.set(row.contactId, dt);
+      touchSourceMap.set(row.contactId, [...(touchSourceMap.get(row.contactId) || []), "sms"]);
+    }
+
+    for (const row of lastCallTouch) {
+      if (!row.contactId) continue;
+      const dt = row._max.createdAt ?? null;
+      if (!dt) continue;
+      const prev = touchMap.get(row.contactId);
+      if (!prev || dt > prev) touchMap.set(row.contactId, dt);
+      touchSourceMap.set(row.contactId, [...(touchSourceMap.get(row.contactId) || []), "call"]);
+    }
+
+    const followups = candidateContacts
+      .map((c) => {
+        const lastTouchAt = touchMap.get(c.id) ?? null;
+        const daysSinceTouch = lastTouchAt
+          ? Math.floor((Date.now() - new Date(lastTouchAt).getTime()) / 86400000)
+          : null;
+
+        const isSmsSuppressed = !!(c.phone && suppressedPhoneSet.has(c.phone));
+        const reason =
+          c.reason === "never_touched"
+            ? "never_touched"
+            : !lastTouchAt
+              ? "no_recorded_touch"
+              : daysSinceTouch !== null && daysSinceTouch >= 14
+                ? "stale_touch"
+                : "recently_updated";
+
+        const score =
+          (reason === "never_touched" ? 100 : 0) +
+          (reason === "no_recorded_touch" ? 80 : 0) +
+          (reason === "stale_touch" ? 60 : 0) +
+          ((c.stage === "HOT" ? 25 : c.stage === "WARM" ? 10 : 0) || 0) +
+          ((c.clientRole === "BUYER" || c.clientRole === "SELLER" || c.clientRole === "BOTH" ? 8 : 0) || 0);
+
+        return {
+          id: c.id,
+          name: formatName(c.firstName, c.lastName),
+          relationshipType: c.relationshipType,
+          stage: c.stage,
+          clientRole: c.clientRole,
+          phone: c.phone ?? null,
+          smsConsentedAt: c.smsConsentedAt ?? null,
+          smsOptedOutAt: c.smsOptedOutAt ?? null,
+          isSmsSuppressed,
+          lastTouchAt,
+          updatedAt: c.updatedAt,
+          daysSinceTouch,
+          touchSources: Array.from(new Set(touchSourceMap.get(c.id) || [])),
+          reason,
+          score,
+        };
+      })
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+
+        const aT = a.lastTouchAt ? new Date(a.lastTouchAt).getTime() : 0;
+        const bT = b.lastTouchAt ? new Date(b.lastTouchAt).getTime() : 0;
+        if (aT !== bT) return aT - bT;
+
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      })
+      .slice(0, 12);
+
+    const focus: HydratedFocus = {};
+
+    if (pageContext.taskId) {
       const task = await prisma.task.findFirst({
-        where: { id: focusTaskId, workspaceId: wsId, assignedToUserId: userId, deletedAt: null },
+        where: {
+          id: pageContext.taskId,
+          workspaceId: wsId,
+          assignedToUserId: userId,
+          deletedAt: null,
+        },
         select: {
           id: true,
           title: true,
@@ -612,13 +953,39 @@ export async function POST(req: Request) {
           status: true,
           source: true,
           contact: {
-            select: { id: true, firstName: true, lastName: true, stage: true, clientRole: true },
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              relationshipType: true,
+              stage: true,
+              clientRole: true,
+              phone: true,
+              smsConsentedAt: true,
+              smsOptedOutAt: true,
+            },
           },
-          listing: { select: { id: true, address: true, status: true, price: true } },
+          listing: {
+            select: {
+              id: true,
+              address: true,
+              status: true,
+              price: true,
+            },
+          },
         },
       });
 
       if (task) {
+        let isSmsSuppressed = false;
+        if (task.contact?.phone) {
+          const suppression = await prisma.smsSuppression.findFirst({
+            where: { workspaceId: wsId, phone: task.contact.phone },
+            select: { id: true },
+          });
+          isSmsSuppressed = !!suppression;
+        }
+
         focus.task = {
           id: task.id,
           title: task.title,
@@ -633,8 +1000,12 @@ export async function POST(req: Request) {
             ? {
                 id: task.contact.id,
                 name: formatName(task.contact.firstName, task.contact.lastName),
+                relationshipType: task.contact.relationshipType,
                 stage: task.contact.stage,
                 clientRole: task.contact.clientRole,
+                phone: task.contact.phone ?? null,
+                smsConsentedAt: task.contact.smsConsentedAt ?? null,
+                smsOptedOutAt: task.contact.smsOptedOutAt ?? null,
               }
             : null,
           listing: task.listing
@@ -646,12 +1017,40 @@ export async function POST(req: Request) {
               }
             : null,
         };
+
+        if (focus.task.contact) {
+          focus.task.contact.smsOptedOutAt = task.contact?.smsOptedOutAt ?? null;
+          focus.task.contact.smsConsentedAt = task.contact?.smsConsentedAt ?? null;
+        }
+
+        if (!focus.contact && task.contact) {
+          focus.contact = {
+            id: task.contact.id,
+            name: formatName(task.contact.firstName, task.contact.lastName),
+            phone: task.contact.phone ?? null,
+            relationshipType: task.contact.relationshipType,
+            stage: task.contact.stage,
+            clientRole: task.contact.clientRole,
+            smsConsentedAt: task.contact.smsConsentedAt ?? null,
+            smsOptedOutAt: task.contact.smsOptedOutAt ?? null,
+            isSmsSuppressed,
+          };
+        }
+
+        if (!focus.listing && task.listing) {
+          focus.listing = {
+            id: task.listing.id,
+            address: task.listing.address,
+            status: task.listing.status,
+            price: task.listing.price ?? null,
+          };
+        }
       }
     }
 
-    if (focusContactId) {
+    if (pageContext.contactId) {
       const c = await prisma.contact.findFirst({
-        where: { id: focusContactId, ...whereReadableContact(vctx) },
+        where: { id: pageContext.contactId, ...whereReadableContact(vctx) },
         select: {
           id: true,
           firstName: true,
@@ -664,13 +1063,13 @@ export async function POST(req: Request) {
           label: true,
           notes: true,
           updatedAt: true,
+          smsConsentedAt: true,
+          smsOptedOutAt: true,
           contactNotes: {
             orderBy: { createdAt: "desc" },
             take: 5,
             select: { text: true, reminderAt: true, createdAt: true },
           },
-
-          // ✅ PINS
           pins: {
             orderBy: { createdAt: "desc" },
             take: 12,
@@ -685,6 +1084,13 @@ export async function POST(req: Request) {
       });
 
       if (c) {
+        const suppression = c.phone
+          ? await prisma.smsSuppression.findFirst({
+              where: { workspaceId: wsId, phone: c.phone },
+              select: { id: true },
+            })
+          : null;
+
         focus.contact = {
           id: c.id,
           name: formatName(c.firstName, c.lastName),
@@ -695,8 +1101,9 @@ export async function POST(req: Request) {
           clientRole: c.clientRole,
           label: c.label ?? null,
           notes: c.notes ?? null,
-
-          // ✅ PINS
+          smsConsentedAt: c.smsConsentedAt ?? null,
+          smsOptedOutAt: c.smsOptedOutAt ?? null,
+          isSmsSuppressed: !!suppression,
           pins: c.pins.map((cp) => ({
             id: cp.id,
             pinId: cp.pin.id,
@@ -704,7 +1111,6 @@ export async function POST(req: Request) {
             createdAt: cp.createdAt,
             createdByUserId: cp.createdByUserId ?? null,
           })),
-
           recentNotes: c.contactNotes.map((n) => ({
             text: n.text,
             reminderAt: n.reminderAt ?? null,
@@ -716,9 +1122,9 @@ export async function POST(req: Request) {
       }
     }
 
-    if (focusListingId) {
+    if (pageContext.listingId) {
       const l = await prisma.listing.findFirst({
-        where: { id: focusListingId, ...whereReadableListing(vctx) },
+        where: { id: pageContext.listingId, ...whereReadableListing(vctx) },
         select: {
           id: true,
           address: true,
@@ -732,8 +1138,6 @@ export async function POST(req: Request) {
             select: { contact: { select: { id: true, firstName: true, lastName: true } }, role: true },
           },
           photos: { take: 6, orderBy: { sortOrder: "asc" }, select: { url: true, isCover: true } },
-
-          // ✅ NEW: listing pins
           pins: {
             orderBy: { createdAt: "desc" },
             take: 12,
@@ -744,8 +1148,6 @@ export async function POST(req: Request) {
               pin: { select: { id: true, name: true } },
             },
           },
-
-          // ✅ NEW: listing notes
           listingNotes: {
             orderBy: { createdAt: "desc" },
             take: 8,
@@ -761,15 +1163,15 @@ export async function POST(req: Request) {
           status: l.status,
           price: l.price ?? null,
           description: l.description ?? null,
-          seller: l.seller ? { id: l.seller.id, name: formatName(l.seller.firstName, l.seller.lastName) } : null,
+          seller: l.seller
+            ? { id: l.seller.id, name: formatName(l.seller.firstName, l.seller.lastName) }
+            : null,
           buyers: l.buyers.map((b) => ({
             id: b.contact.id,
             name: formatName(b.contact.firstName, b.contact.lastName),
             role: b.role ?? null,
           })),
           photos: l.photos.map((p) => ({ url: p.url, isCover: p.isCover })),
-
-          // ✅ NEW: listing pins
           pins: l.pins.map((lp) => ({
             id: lp.id,
             pinId: lp.pin.id,
@@ -777,8 +1179,6 @@ export async function POST(req: Request) {
             createdAt: lp.createdAt,
             createdByUserId: lp.createdByUserId ?? null,
           })),
-
-          // ✅ NEW: listing notes
           recentNotes: l.listingNotes.map((n) => ({
             id: n.id,
             text: n.text,
@@ -786,16 +1186,15 @@ export async function POST(req: Request) {
             reminderLabel: formatDateLongInZone(n.reminderAt ?? null, zone),
             createdAt: n.createdAt,
           })),
-
           updatedAt: l.updatedAt,
         };
       }
     }
 
-    if (focusConversationId) {
+    if (pageContext.conversationId) {
       const convo = await prisma.conversation.findFirst({
         where: {
-          id: focusConversationId,
+          id: pageContext.conversationId,
           workspaceId: wsId,
           assignedToUserId: userId,
         },
@@ -820,6 +1219,8 @@ export async function POST(req: Request) {
               relationshipType: true,
               stage: true,
               clientRole: true,
+              smsConsentedAt: true,
+              smsOptedOutAt: true,
             },
           },
           listing: {
@@ -850,6 +1251,14 @@ export async function POST(req: Request) {
       });
 
       if (convo) {
+        const suppression =
+          convo.contact?.phone
+            ? await prisma.smsSuppression.findFirst({
+                where: { workspaceId: wsId, phone: convo.contact.phone },
+                select: { id: true },
+              })
+            : null;
+
         focus.conversation = {
           id: convo.id,
           assignedToUserId: convo.assignedToUserId,
@@ -870,6 +1279,9 @@ export async function POST(req: Request) {
                 relationshipType: convo.contact.relationshipType,
                 stage: convo.contact.stage,
                 clientRole: convo.contact.clientRole,
+                smsConsentedAt: convo.contact.smsConsentedAt ?? null,
+                smsOptedOutAt: convo.contact.smsOptedOutAt ?? null,
+                isSmsSuppressed: !!suppression,
               }
             : null,
           listing: convo.listing
@@ -901,6 +1313,9 @@ export async function POST(req: Request) {
             relationshipType: convo.contact.relationshipType,
             stage: convo.contact.stage,
             clientRole: convo.contact.clientRole,
+            smsConsentedAt: convo.contact.smsConsentedAt ?? null,
+            smsOptedOutAt: convo.contact.smsOptedOutAt ?? null,
+            isSmsSuppressed: !!suppression,
           };
         }
 
@@ -915,109 +1330,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // Fuzzy focus only if no explicit ids and nothing hydrated yet
-    if (
-      !focus.task &&
-      !focus.contact &&
-      !focus.listing &&
-      !focus.conversation &&
-      !focusTaskId &&
-      !focusContactId &&
-      !focusListingId &&
-      !focusConversationId
-    ) {     
-      const hintTask = hints.task?.slice(0, 80) || null;
-      const hintContact = hints.contact?.slice(0, 80) || null;
-      const hintListing = hints.listing?.slice(0, 80) || null;
-
-      if (hintTask) {
-        const t = await prisma.task.findFirst({
-          where: {
-            ...taskWhereMe,
-            deletedAt: null,
-            OR: [{ title: { contains: hintTask, mode: "insensitive" } }],
-          },
-          select: { id: true, title: true, dueAt: true, status: true },
-        });
-        if (t) {
-          focus.task = {
-            id: t.id,
-            title: t.title,
-            dueAt: t.dueAt ?? null,
-            dueAtLabel: formatDateTimeInZone(t.dueAt ?? null, zone),
-            dueLabel: formatDateInZone(t.dueAt ?? null, zone),
-            dueLabelLong: formatDateLongInZone(t.dueAt ?? null, zone),
-            status: t.status,
-          };
-        }
-      }
-
-      if (!focus.contact && hintContact) {
-        const parts = hintContact
-          .split(/\s+/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .slice(0, 3);
-
-        const p0 = parts[0] ?? "";
-        const p1 = parts[1] ?? "";
-
-        const OR: any[] = [
-          { firstName: { contains: hintContact, mode: "insensitive" } },
-          { lastName: { contains: hintContact, mode: "insensitive" } },
-        ];
-
-        if (p0 && p1) {
-          OR.push({
-            AND: [
-              { firstName: { contains: p0, mode: "insensitive" } },
-              { lastName: { contains: p1, mode: "insensitive" } },
-            ],
-          });
-        }
-
-        const c = await prisma.contact.findFirst({
-          where: {
-            ...whereReadableContact(vctx),
-            OR,
-          },
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            stage: true,
-            clientRole: true,
-            relationshipType: true,
-          },
-        });
-
-        if (c) {
-          focus.contact = {
-            id: c.id,
-            name: formatName(c.firstName, c.lastName),
-            relationshipType: c.relationshipType,
-            stage: c.stage,
-            clientRole: c.clientRole,
-          };
-        }
-      }
-
-      if (!focus.listing && hintListing) {
-        const l = await prisma.listing.findFirst({
-          where: {
-            ...whereReadableListing(vctx),
-            address: { contains: hintListing, mode: "insensitive" },
-          },
-          select: { id: true, address: true, status: true, price: true },
-        });
-        if (l) focus.listing = { id: l.id, address: l.address, status: l.status, price: l.price ?? null };
-      }
-    }
-
-    // ----------------------------
-    // Build context
-    // ----------------------------
-    const context = {
+    const contextBase = {
       meta: {
         now: nowISO(),
         page: page || null,
@@ -1028,7 +1341,7 @@ export async function POST(req: Request) {
         workspaceRole: ctx.workspaceRole,
         workspace: ctx.workspace,
         time: {
-          zone, // IANA zone or UTC (canonical)
+          zone,
           todayStart: todayStart.toISOString(),
           tomorrowStart: tomorrowStart.toISOString(),
           in7Start: in7Start.toISOString(),
@@ -1050,7 +1363,6 @@ export async function POST(req: Request) {
 
       focus: Object.keys(focus).length ? focus : null,
 
-      // ✅ NEW: workspace pin bank summary
       pins: {
         workspaceRecent: enforceBudget(
           workspacePins.map((p) => ({
@@ -1078,9 +1390,25 @@ export async function POST(req: Request) {
             dueLabel: formatDateInZone(t.dueAt ?? null, zone),
             dueLabelLong: formatDateLongInZone(t.dueAt ?? null, zone),
             source: t.source,
-            contactName: t.contact ? formatName(t.contact.firstName, t.contact.lastName) : null,
-            listingAddress: t.listing?.address ?? null,
-            listingStatus: t.listing?.status ?? null,
+            contact: t.contact
+              ? {
+                  id: t.contact.id,
+                  name: formatName(t.contact.firstName, t.contact.lastName),
+                  relationshipType: t.contact.relationshipType,
+                  stage: t.contact.stage,
+                  clientRole: t.contact.clientRole,
+                  phone: t.contact.phone ?? null,
+                  smsConsentedAt: t.contact.smsConsentedAt ?? null,
+                  smsOptedOutAt: t.contact.smsOptedOutAt ?? null,
+                }
+              : null,
+            listing: t.listing
+              ? {
+                  id: t.listing.id,
+                  address: t.listing.address,
+                  status: t.listing.status,
+                }
+              : null,
           })),
           8
         ),
@@ -1093,9 +1421,25 @@ export async function POST(req: Request) {
             dueLabel: formatDateInZone(t.dueAt ?? null, zone),
             dueLabelLong: formatDateLongInZone(t.dueAt ?? null, zone),
             source: t.source,
-            contactName: t.contact ? formatName(t.contact.firstName, t.contact.lastName) : null,
-            listingAddress: t.listing?.address ?? null,
-            listingStatus: t.listing?.status ?? null,
+            contact: t.contact
+              ? {
+                  id: t.contact.id,
+                  name: formatName(t.contact.firstName, t.contact.lastName),
+                  relationshipType: t.contact.relationshipType,
+                  stage: t.contact.stage,
+                  clientRole: t.contact.clientRole,
+                  phone: t.contact.phone ?? null,
+                  smsConsentedAt: t.contact.smsConsentedAt ?? null,
+                  smsOptedOutAt: t.contact.smsOptedOutAt ?? null,
+                }
+              : null,
+            listing: t.listing
+              ? {
+                  id: t.listing.id,
+                  address: t.listing.address,
+                  status: t.listing.status,
+                }
+              : null,
           })),
           8
         ),
@@ -1108,9 +1452,25 @@ export async function POST(req: Request) {
             dueLabel: formatDateInZone(t.dueAt ?? null, zone),
             dueLabelLong: formatDateLongInZone(t.dueAt ?? null, zone),
             source: t.source,
-            contactName: t.contact ? formatName(t.contact.firstName, t.contact.lastName) : null,
-            listingAddress: t.listing?.address ?? null,
-            listingStatus: t.listing?.status ?? null,
+            contact: t.contact
+              ? {
+                  id: t.contact.id,
+                  name: formatName(t.contact.firstName, t.contact.lastName),
+                  relationshipType: t.contact.relationshipType,
+                  stage: t.contact.stage,
+                  clientRole: t.contact.clientRole,
+                  phone: t.contact.phone ?? null,
+                  smsConsentedAt: t.contact.smsConsentedAt ?? null,
+                  smsOptedOutAt: t.contact.smsOptedOutAt ?? null,
+                }
+              : null,
+            listing: t.listing
+              ? {
+                  id: t.listing.id,
+                  address: t.listing.address,
+                  status: t.listing.status,
+                }
+              : null,
           })),
           8
         ),
@@ -1123,12 +1483,19 @@ export async function POST(req: Request) {
           relationshipType: c.relationshipType,
           stage: c.stage,
           clientRole: c.clientRole,
+          phone: c.phone,
+          smsConsentedAt: c.smsConsentedAt,
+          smsOptedOutAt: c.smsOptedOutAt,
+          isSmsSuppressed: c.isSmsSuppressed,
           lastTouchAt: c.lastTouchAt ? new Date(c.lastTouchAt).toISOString() : null,
           updatedAt: c.updatedAt ? new Date(c.updatedAt).toISOString() : null,
+          daysSinceTouch: c.daysSinceTouch,
+          touchSources: c.touchSources,
           reason: c.reason,
+          score: c.score,
         })),
         notes:
-          "These are my owned contacts prioritized by oldest/never touch. Use for 'who should I follow up with' or daily planning.",
+          "These are my owned contacts prioritized for follow-up using my recent contacts plus never-touched contacts, ranked by last touch, stage, and recency.",
       },
 
       pipeline: {
@@ -1161,6 +1528,9 @@ export async function POST(req: Request) {
             relationshipType: c.relationshipType,
             stage: c.stage,
             clientRole: c.clientRole,
+            phone: c.phone ?? null,
+            smsConsentedAt: c.smsConsentedAt ?? null,
+            smsOptedOutAt: c.smsOptedOutAt ?? null,
             updatedAt: c.updatedAt,
           })),
           8
@@ -1181,20 +1551,23 @@ export async function POST(req: Request) {
       },
     };
 
-    // ----------------------------
-    // OpenAI (strict JSON)
-    // ----------------------------
+    const context = narrowContextByIntent(contextBase, intent);
+    const allowedIds = buildAllowedActionIds(contextBase);
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.22,
+      temperature: 0.15,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: buildSystemPreamble() },
         {
           role: "user",
           content: [
-            "WORKSPACE CONTEXT (authoritative, do not assume beyond this):",
+            "WORKSPACE CONTEXT (authoritative):",
             JSON.stringify(context, null, 2),
+            "",
+            "RECENT ASSISTANT OUTPUTS (avoid repeating unless needed):",
+            serializeRecentAssistant(messages) || "(none)",
             "",
             "CONVERSATION (last messages):",
             serializeConversation(messages),
@@ -1214,41 +1587,85 @@ export async function POST(req: Request) {
       return jsonError(502, "AI returned invalid JSON.", { rawSnippet: raw.slice(0, 500) });
     }
 
-    const reply = typeof parsed.reply === "string" && parsed.reply.trim() ? parsed.reply.trim() : null;
+    const reply =
+      typeof parsed.reply === "string" && parsed.reply.trim() ? parsed.reply.trim() : null;
+
     if (!reply) {
       return jsonError(502, "AI returned empty reply.", { rawSnippet: raw.slice(0, 500) });
     }
 
     const allowedActionTypes = new Set(["open_contact", "open_listing", "open_task", "draft_sms"]);
 
+    const canDraftSms =
+      !!myActivePhoneNumber &&
+      !contextBase?.focus?.contact?.smsOptedOutAt &&
+      !contextBase?.focus?.contact?.isSmsSuppressed &&
+      !contextBase?.focus?.conversation?.contact?.smsOptedOutAt &&
+      !contextBase?.focus?.conversation?.contact?.isSmsSuppressed;
+
     const actions =
       Array.isArray(parsed.actions) && parsed.actions.length
         ? parsed.actions
             .filter((a) => a && typeof a.type === "string" && allowedActionTypes.has(a.type))
             .map((a) => {
+              if (a.type === "open_contact") {
+                const id = sanitizeId(a.id);
+                if (!id || !allowedIds.contactIds.has(id)) return null;
+                return {
+                  type: "open_contact" as const,
+                  id,
+                  ...(typeof a.label === "string" ? { label: clampStr(a.label, 80) } : {}),
+                };
+              }
+
+              if (a.type === "open_listing") {
+                const id = sanitizeId(a.id);
+                if (!id || !allowedIds.listingIds.has(id)) return null;
+                return {
+                  type: "open_listing" as const,
+                  id,
+                  ...(typeof a.label === "string" ? { label: clampStr(a.label, 80) } : {}),
+                };
+              }
+
+              if (a.type === "open_task") {
+                const id = sanitizeId(a.id);
+                if (!id || !allowedIds.taskIds.has(id)) return null;
+                return {
+                  type: "open_task" as const,
+                  id,
+                  ...(typeof a.label === "string" ? { label: clampStr(a.label, 80) } : {}),
+                };
+              }
+
               if (a.type === "draft_sms") {
                 const payload = a.payload && typeof a.payload === "object" ? a.payload : null;
                 const contactId = sanitizeId(payload?.contactId);
                 const conversationId = sanitizeId(payload?.conversationId);
                 const message = sanitizeDraftMessage(payload?.message);
 
-                if (!contactId || !message || !myActivePhoneNumber) return null;
+                if (!contactId || !message || !canDraftSms) return null;
+                if (!allowedIds.contactIds.has(contactId)) return null;
 
                 const focusedConversationId =
-                  focus?.conversation?.id && typeof focus.conversation.id === "string"
-                    ? focus.conversation.id
+                  contextBase?.focus?.conversation?.id &&
+                  typeof contextBase.focus.conversation.id === "string"
+                    ? contextBase.focus.conversation.id
                     : null;
 
                 const focusedConversationContactId =
-                  focus?.conversation?.contact?.id && typeof focus.conversation.contact.id === "string"
-                    ? focus.conversation.contact.id
+                  contextBase?.focus?.conversation?.contact?.id &&
+                  typeof contextBase.focus.conversation.contact.id === "string"
+                    ? contextBase.focus.conversation.contact.id
                     : null;
 
                 if (focusedConversationId) {
                   if (!conversationId || conversationId !== focusedConversationId) return null;
                 }
 
-                if (focusedConversationContactId && contactId !== focusedConversationContactId) return null;
+                if (focusedConversationContactId && contactId !== focusedConversationContactId) {
+                  return null;
+                }
 
                 return {
                   type: "draft_sms" as const,
@@ -1258,17 +1675,6 @@ export async function POST(req: Request) {
                     ...(conversationId ? { conversationId } : {}),
                     message,
                   },
-                };
-              }
-
-              if (a.type === "open_contact" || a.type === "open_listing" || a.type === "open_task") {
-                const id = sanitizeId(a.id);
-                if (!id) return null;
-
-                return {
-                  type: a.type,
-                  id,
-                  ...(typeof a.label === "string" ? { label: clampStr(a.label, 80) } : {}),
                 };
               }
 
