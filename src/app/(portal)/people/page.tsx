@@ -2281,6 +2281,152 @@ function AutopilotActivityCard({
   const hasRuns = Array.isArray(items) && items.length > 0;
   const hasTasks = Array.isArray(tasks) && tasks.length > 0;
 
+  function formatWhen(value?: string | null) {
+    if (!value) return "Logged activity";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "Logged activity";
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  function formatRunMessage(message?: string | null) {
+    if (!message) return "";
+
+    const raw = String(message).trim();
+
+    const waitMatch = raw.match(
+      /Waiting until (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) before continuing automation\.?/i
+    );
+
+    if (waitMatch?.[1]) {
+      const d = new Date(waitMatch[1]);
+      if (!Number.isNaN(d.getTime())) {
+        return `Next step scheduled for ${d.toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })}.`;
+      }
+    }
+
+    return raw;
+  }
+
+  function formatStepLabel(step: any, idx: number) {
+    const raw = String(
+      step?.label ||
+        step?.name ||
+        step?.stepType ||
+        step?.type ||
+        `Step ${idx + 1}`
+    ).toUpperCase();
+
+    if (raw === "SMS") return "Text sent";
+    if (raw === "EMAIL") return "Email sent";
+    if (raw === "WAIT") return "Wait";
+    if (raw === "TASK") return "Task created";
+    if (raw === "IF") return "Condition check";
+
+    return String(
+      step?.label ||
+        step?.name ||
+        step?.stepType ||
+        step?.type ||
+        `Step ${idx + 1}`
+    );
+  }
+
+  function formatStepMessage(step: any) {
+    const message = String(step?.message || step?.summary || "").trim();
+    if (!message) return "";
+
+    const stepType = String(step?.stepType || step?.type || "").toUpperCase();
+
+    if (stepType === "WAIT") {
+      const advancedMatch = message.match(/Advanced time by\s+(.+?)\./i);
+      if (advancedMatch?.[1]) {
+        return `Paused for ${advancedMatch[1]}.`;
+      }
+    }
+
+    if (stepType === "SMS" && /^success$/i.test(String(step?.status || ""))) {
+      return "Message sent successfully.";
+    }
+
+    if (stepType === "EMAIL" && /^success$/i.test(String(step?.status || ""))) {
+      return "Email sent successfully.";
+    }
+
+    if (stepType === "TASK" && /^task created\.?$/i.test(message)) {
+      return "Task created successfully.";
+    }
+
+    return message;
+  }
+
+  function getRunTone(statusRaw: string) {
+    const normalized = String(statusRaw || "").toUpperCase();
+
+    if (
+      normalized === "SUCCESS" ||
+      normalized === "OK" ||
+      normalized === "COMPLETED"
+    ) {
+      return {
+        label: "Success",
+        className:
+          "border-emerald-200/70 bg-emerald-500/10 text-emerald-100",
+      };
+    }
+
+    if (normalized === "FAILED" || normalized === "ERROR") {
+      return {
+        label: "Failed",
+        className:
+          "border-rose-200/70 bg-rose-500/10 text-rose-100",
+      };
+    }
+
+    if (normalized === "RUNNING" || normalized === "PROCESSING") {
+      return {
+        label: "Running",
+        className:
+          "border-sky-200/70 bg-sky-500/10 text-sky-100",
+      };
+    }
+
+    if (normalized === "SKIPPED") {
+      return {
+        label: "Skipped",
+        className:
+          "border-slate-400/70 bg-slate-700/40 text-slate-200",
+      };
+    }
+
+    return {
+      label: normalized
+        ? normalized.charAt(0) + normalized.slice(1).toLowerCase()
+        : "Logged",
+      className:
+        "border-amber-200/70 bg-amber-500/10 text-amber-100",
+    };
+  }
+
+  function getTaskTone(statusRaw: string) {
+    const normalized = String(statusRaw || "").toUpperCase();
+
+    if (normalized === "DONE" || normalized === "COMPLETED") {
+      return "border-emerald-200/60 bg-emerald-500/10 text-emerald-100";
+    }
+
+    return "border-amber-200/50 bg-amber-500/5 text-amber-100";
+  }
+
   return (
     <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-4 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -2289,42 +2435,40 @@ function AutopilotActivityCard({
             Autopilot activity
           </p>
           <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-            When automations run on this contact, you’ll see it logged here.
+            Automation runs and tasks tied to this contact.
           </p>
         </div>
       </div>
 
       {loading && (
-        <p className="mt-3 text-[11px] text-[var(--avillo-cream-muted)]">
-          Loading Autopilot activity…
-        </p>
+        <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
+          <p className="text-[11px] text-[var(--avillo-cream-muted)]">
+            Loading activity…
+          </p>
+        </div>
       )}
 
       {!loading && !hasRuns && !hasTasks && (
         <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
           <p className="text-[11px] italic text-[var(--avillo-cream-muted)]">
-            No Autopilot activity yet for this contact.
+            No Autopilot activity yet.
           </p>
           <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-            Once an automation runs with this contact, it will appear here.
+            Once an automation runs on this contact, it will show up here.
           </p>
         </div>
       )}
 
       {!loading && hasRuns && (
-  <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
-    {(items ?? []).slice(0, 50).map((run: any) => {
+        <div className="mt-3 space-y-2">
+          {(items ?? []).slice(0, 20).map((run: any) => {
             const runId = String(
-              run?.id ?? run?.runId ?? `${run?.automationName ?? "run"}-${run?.executedAt ?? ""}`
+              run?.id ??
+                run?.runId ??
+                `${run?.automationName ?? "run"}-${run?.executedAt ?? ""}`
             );
+
             const expanded = !!expandedRuns[runId];
-
-            const statusRaw = String(run?.status ?? "").toUpperCase();
-            const ok =
-              statusRaw === "SUCCESS" ||
-              statusRaw === "OK" ||
-              statusRaw === "COMPLETED";
-
             const steps = Array.isArray(run?.steps) ? run.steps : [];
             const totalSteps =
               typeof run?.totalSteps === "number" ? run.totalSteps : steps.length;
@@ -2332,103 +2476,108 @@ function AutopilotActivityCard({
             const failedSteps =
               typeof run?.failedSteps === "number"
                 ? run.failedSteps
-                : steps.filter((s: any) => String(s?.status ?? "").toUpperCase() === "FAILED").length;
+                : steps.filter(
+                    (s: any) => String(s?.status ?? "").toUpperCase() === "FAILED"
+                  ).length;
 
-            const executedAt = run?.executedAt ? new Date(run.executedAt) : null;
+            const tone = getRunTone(String(run?.status ?? ""));
+            const automationName =
+              run?.automationName || run?.name || "Automation run";
+            const formattedMessage = formatRunMessage(run?.message);
 
             return (
               <div
                 key={runId}
-                className="rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-2"
+                className="rounded-lg border border-slate-800/80 bg-slate-950/50 px-3 py-3"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-[11px] font-semibold text-slate-50">
-                      {run?.automationName || run?.name || "Automation run"}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-[11px] font-semibold text-slate-50">
+                        {automationName}
+                      </p>
+
+                      <span
+                        className={
+                          "shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] " +
+                          tone.className
+                        }
+                      >
+                        {tone.label}
+                      </span>
+                    </div>
+
+                    <p className="mt-1 text-[10px] text-[var(--avillo-cream-muted)]">
+                      {formatWhen(run?.executedAt)}
+                      {totalSteps > 0
+                        ? ` • ${totalSteps} step${totalSteps === 1 ? "" : "s"}`
+                        : ""}
+                      {failedSteps > 0 ? ` • ${failedSteps} failed` : ""}
                     </p>
 
-                    <p className="mt-0.5 text-[10px] text-[var(--avillo-cream-muted)]">
-                      {executedAt
-                        ? executedAt.toLocaleString(undefined, {
-                            month: "short",
-                            day: "numeric",
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })
-                        : "Logged activity"}
-                      {totalSteps ? (
-                        <>
-                          {" "}
-                          • {totalSteps} step{totalSteps === 1 ? "" : "s"}
-                          {failedSteps ? ` • ${failedSteps} failed` : ""}
-                        </>
-                      ) : null}
-                    </p>
-
-                    {run?.message ? (
-                      <p className="mt-1 line-clamp-1 text-[10px] text-[var(--avillo-cream-soft)]">
-                        {run.message}
+                    {formattedMessage ? (
+                      <p className="mt-1 text-[10px] text-[var(--avillo-cream-soft)]">
+                        {formattedMessage}
                       </p>
                     ) : null}
                   </div>
 
-                  <div className="flex shrink-0 flex-col items-end gap-2">
-                    <span
-                      className={
-                        "rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] " +
-                        (ok
-                          ? "border-emerald-200/70 bg-emerald-500/10 text-emerald-100"
-                          : "border-amber-200/70 bg-amber-500/10 text-amber-100")
+                  {steps.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedRuns((prev) => ({
+                          ...prev,
+                          [runId]: !prev[runId],
+                        }))
                       }
+                      className="shrink-0 rounded-full border border-slate-700/80 bg-slate-900/70 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50"
                     >
-                      {ok ? "Success" : statusRaw ? statusRaw.toLowerCase() : "Logged"}
-                    </span>
-
-                    {steps.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setExpandedRuns((prev) => ({ ...prev, [runId]: !prev[runId] }))
-                        }
-                        className="rounded-full border border-slate-700/80 bg-slate-900/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--avillo-cream-muted)] hover:border-amber-100/70 hover:text-amber-50"
-                      >
-                        {expanded ? "Hide steps" : "View steps"}
-                      </button>
-                    )}
-                  </div>
+                      {expanded ? "Hide details" : "View details"}
+                    </button>
+                  )}
                 </div>
 
                 {expanded && steps.length > 0 && (
-                <div className="mt-2">
-                  <div className="max-h-40 space-y-1 overflow-y-auto pr-1 overscroll-contain">
+                  <div className="mt-3 space-y-1.5 border-t border-slate-800/70 pt-3">
                     {steps.map((s: any, idx: number) => {
-                      const label =
-                        s?.label ||
-                        s?.name ||
-                        s?.stepType ||
-                        s?.type ||
-                        `Step ${idx + 1}`;
-
-                      const msg = s?.message || s?.summary || "";
+                      const stepLabel = formatStepLabel(s, idx);
+                      const stepStatus = String(s?.status ?? "").toUpperCase();
+                      const stepMessage = formatStepMessage(s);
+                      const stepFailed = stepStatus === "FAILED";
 
                       return (
                         <div
                           key={`${runId}-step-${idx}`}
-                          className="rounded-md border border-slate-800/70 bg-slate-900/40 px-2 py-1.5"
+                          className="rounded-md border border-slate-800/70 bg-slate-900/40 px-2.5 py-2"
                         >
-                          <p className="text-[10px] font-semibold text-slate-50">
-                            {String(label)}
-                          </p>
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-[10px] font-semibold text-slate-50">
+                              {stepLabel}
+                            </p>
 
-                          {msg ? (
-                            <p className="mt-0.5 whitespace-pre-wrap text-[10px] text-[var(--avillo-cream-muted)]">
-                              {String(msg)}
+                            {stepStatus ? (
+                              <span
+                                className={
+                                  "shrink-0 rounded-full px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.14em] " +
+                                  (stepFailed
+                                    ? "bg-rose-500/10 text-rose-200"
+                                    : "bg-slate-700/40 text-slate-300")
+                                }
+                              >
+                                {stepFailed ? "failed" : "success"}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          {stepMessage ? (
+                            <p className="mt-1 whitespace-pre-wrap text-[10px] text-[var(--avillo-cream-muted)]">
+                              {stepMessage}
                             </p>
                           ) : null}
                         </div>
                       );
-                     })}
-                     </div>
+                    })}
                   </div>
                 )}
               </div>
@@ -2438,49 +2587,68 @@ function AutopilotActivityCard({
       )}
 
       {!loading && hasTasks && (
-        <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
-            Tasks created by Autopilot
-          </p>
+        <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--avillo-cream-muted)]">
+              Autopilot tasks
+            </p>
+            <p className="text-[10px] text-[var(--avillo-cream-muted)]">
+              {(tasks ?? []).length} total
+            </p>
+          </div>
 
-          <div className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">
-            {(tasks ?? []).slice(0, 3).map((t: any) => (
-              <div
-                key={String(t?.id ?? `${t?.title ?? "task"}-${t?.dueAt ?? t?.createdAt ?? ""}`)}
-                className="flex items-center justify-between gap-3 rounded-md border border-slate-800/70 bg-slate-900/40 px-2 py-1.5"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-[11px] text-slate-50">
-                    {t?.title || "Task"}
-                  </p>
-                  {(t?.dueAt || t?.createdAt) && (
-                    <p className="text-[10px] text-[var(--avillo-cream-muted)]">
-                      {t?.dueAt
-                        ? `Due ${new Date(t.dueAt).toLocaleString(undefined, {
+          <div className="mt-2 space-y-1.5">
+            {(tasks ?? []).slice(0, 3).map((t: any) => {
+              const status = String(t?.status || "OPEN").toUpperCase();
+              const dueAt = t?.dueAt ? new Date(t.dueAt) : null;
+              const createdAt = t?.createdAt ? new Date(t.createdAt) : null;
+
+              return (
+                <div
+                  key={String(
+                    t?.id ?? `${t?.title ?? "task"}-${t?.dueAt ?? t?.createdAt ?? ""}`
+                  )}
+                  className="flex items-start justify-between gap-3 rounded-md border border-slate-800/70 bg-slate-900/40 px-2.5 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-[11px] text-slate-50">
+                      {t?.title || "Task"}
+                    </p>
+
+                    <p className="mt-0.5 text-[10px] text-[var(--avillo-cream-muted)]">
+                      {dueAt && !Number.isNaN(dueAt.getTime())
+                        ? `Due ${dueAt.toLocaleString(undefined, {
                             month: "short",
                             day: "numeric",
                             hour: "numeric",
                             minute: "2-digit",
                           })}`
-                        : `Created ${new Date(t.createdAt).toLocaleString(undefined, {
+                        : createdAt && !Number.isNaN(createdAt.getTime())
+                        ? `Created ${createdAt.toLocaleString(undefined, {
                             month: "short",
                             day: "numeric",
                             hour: "numeric",
                             minute: "2-digit",
-                          })}`}
+                          })}`
+                        : "Task logged"}
                     </p>
-                  )}
-                </div>
+                  </div>
 
-                <span className="shrink-0 rounded-full border border-amber-200/70 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-100">
-                  {String(t?.status || "OPEN").toLowerCase()}
-                </span>
-              </div>
-            ))}
+                  <span
+                    className={
+                      "shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] " +
+                      getTaskTone(status)
+                    }
+                  >
+                    {status.toLowerCase()}
+                  </span>
+                </div>
+              );
+            })}
 
             {(tasks ?? []).length > 3 && (
               <p className="pt-1 text-[10px] text-[var(--avillo-cream-muted)]">
-                +{(tasks ?? []).length - 3} more task{(tasks ?? []).length - 3 === 1 ? "" : "s"}
+                +{(tasks ?? []).length - 3} more
               </p>
             )}
           </div>
