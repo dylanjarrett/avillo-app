@@ -897,9 +897,7 @@ async function reloadContacts(options?: { preserveSelection?: boolean }) {
 
   async function handleDelete() {
     if (!activeContact?.id) {
-      // Unsaved new contact
-      setActiveContact(null);
-      setSelectedId(contacts[0]?.id ?? null);
+      clearSelection();
 
       if (typeof window !== "undefined" && window.innerWidth < 1024) {
         backToListAndClearSelection();
