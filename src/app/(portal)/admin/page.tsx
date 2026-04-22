@@ -3,7 +3,13 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/layout/page-header";
-import type { UserRole, WorkspaceRole, AccessLevel, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
+import type {
+  UserRole,
+  WorkspaceRole,
+  AccessLevel,
+  SubscriptionPlan,
+  SubscriptionStatus,
+} from "@prisma/client";
 
 type WorkspaceBillingSnapshot = {
   accessLevel: AccessLevel | string | null;
@@ -19,8 +25,6 @@ type WorkspaceBillingSnapshot = {
 
   seatLimit: number | null;
   includedSeats: number | null;
-
-  // computed / derived if your API provides it
   seatsUsed: number | null;
 };
 
@@ -63,6 +67,22 @@ type Metrics = {
   revenue: { mrrUsd: number };
 };
 
+type WorkspaceTierMode = "SOLO" | "ENTERPRISE_STRIPE" | "ENTERPRISE_MANUAL";
+
+type SortKey =
+  | "name"
+  | "email"
+  | "role"
+  | "tier"
+  | "workspace"
+  | "access"
+  | "plan"
+  | "status"
+  | "lastLoginAt"
+  | "createdAt";
+
+type SortDirection = "asc" | "desc";
+
 const EMPTY_BILLING: WorkspaceBillingSnapshot = {
   accessLevel: null,
   plan: null,
@@ -104,8 +124,8 @@ function toneBadge(tone: "good" | "warn" | "bad") {
   return tone === "good"
     ? "bg-emerald-500/10 text-emerald-200 border-emerald-400/30"
     : tone === "warn"
-    ? "bg-amber-500/10 text-amber-200 border-amber-400/30"
-    : "bg-red-500/10 text-red-200 border-red-400/30";
+      ? "bg-amber-500/10 text-amber-200 border-amber-400/30"
+      : "bg-red-500/10 text-red-200 border-red-400/30";
 }
 
 function seatsLabel(used: number | null, included: number | null) {
@@ -153,18 +173,15 @@ function stripeSyncBadgeForWorkspace(b?: WorkspaceBillingSnapshot | null) {
 
 function primaryMembership(u: AdminUser) {
   if (!u.memberships?.length) return null;
-  const byDefault = u.defaultWorkspaceId ? u.memberships.find((m) => m.workspaceId === u.defaultWorkspaceId) : null;
+  const byDefault = u.defaultWorkspaceId
+    ? u.memberships.find((m) => m.workspaceId === u.defaultWorkspaceId)
+    : null;
   return byDefault ?? u.memberships[0] ?? null;
 }
 
 function isAccessLevel(v: unknown): v is AccessLevel {
   const s = String(v ?? "").toUpperCase();
   return s === "BETA" || s === "PAID" || s === "EXPIRED";
-}
-
-function isSubscriptionStatus(v: unknown): v is SubscriptionStatus {
-  const s = String(v ?? "").toUpperCase();
-  return s === "NONE" || s === "TRIALING" || s === "ACTIVE" || s === "PAST_DUE" || s === "CANCELED";
 }
 
 function normalizeUsersPayload(raw: any): AdminUser[] {
@@ -189,7 +206,6 @@ function normalizeUsersPayload(raw: any): AdminUser[] {
 
         seatLimit: typeof m?.seatLimit === "number" ? m.seatLimit : null,
         includedSeats: typeof m?.includedSeats === "number" ? m.includedSeats : null,
-
         seatsUsed: typeof m?.seatsUsed === "number" ? m.seatsUsed : null,
       };
 
@@ -200,13 +216,22 @@ function normalizeUsersPayload(raw: any): AdminUser[] {
               ...billingNested,
               accessLevel: billingNested.accessLevel ?? billingNested.workspaceAccessLevel ?? null,
               plan: billingNested.plan ?? billingNested.workspacePlan ?? null,
-              subscriptionStatus: billingNested.subscriptionStatus ?? billingNested.workspaceSubscriptionStatus ?? null,
+              subscriptionStatus:
+                billingNested.subscriptionStatus ??
+                billingNested.workspaceSubscriptionStatus ??
+                null,
               trialEndsAt: billingNested.trialEndsAt ?? billingNested.workspaceTrialEndsAt ?? null,
-              currentPeriodEnd: billingNested.currentPeriodEnd ?? billingNested.workspaceCurrentPeriodEnd ?? null,
+              currentPeriodEnd:
+                billingNested.currentPeriodEnd ?? billingNested.workspaceCurrentPeriodEnd ?? null,
               stripeSeatPriceId: billingNested.stripeSeatPriceId ?? null,
-              seatLimit: typeof billingNested.seatLimit === "number" ? billingNested.seatLimit : null,
-              includedSeats: typeof billingNested.includedSeats === "number" ? billingNested.includedSeats : null,
-              seatsUsed: typeof billingNested.seatsUsed === "number" ? billingNested.seatsUsed : null,
+              seatLimit:
+                typeof billingNested.seatLimit === "number" ? billingNested.seatLimit : null,
+              includedSeats:
+                typeof billingNested.includedSeats === "number"
+                  ? billingNested.includedSeats
+                  : null,
+              seatsUsed:
+                typeof billingNested.seatsUsed === "number" ? billingNested.seatsUsed : null,
             }
           : flattened;
 
@@ -247,17 +272,17 @@ function normalizeMetricsPayload(raw: any): Metrics | null {
     typeof totals.totalSeats === "number"
       ? totals.totalSeats
       : typeof totals.activeMemberships === "number"
-      ? totals.activeMemberships
-      : typeof totals.totalMemberships === "number"
-      ? totals.totalMemberships
-      : 0;
+        ? totals.activeMemberships
+        : typeof totals.totalMemberships === "number"
+          ? totals.totalMemberships
+          : 0;
 
   const activePaidCount =
     typeof totals.activePaidCount === "number"
       ? totals.activePaidCount
       : typeof totals.activePaidWorkspaceCount === "number"
-      ? totals.activePaidWorkspaceCount
-      : 0;
+        ? totals.activePaidWorkspaceCount
+        : 0;
 
   const mrrUsd =
     typeof rev.mrrUsd === "number" ? rev.mrrUsd : typeof rev.baseMrrUsd === "number" ? rev.baseMrrUsd : 0;
@@ -275,8 +300,6 @@ function normalizeMetricsPayload(raw: any): Metrics | null {
   };
 }
 
-type WorkspaceTierMode = "SOLO" | "ENTERPRISE_STRIPE" | "ENTERPRISE_MANUAL";
-
 function currentTierMode(m: WorkspaceMembership): WorkspaceTierMode {
   const b = billingOf(m);
   const plan = safeStr(b.plan).toUpperCase();
@@ -286,6 +309,110 @@ function currentTierMode(m: WorkspaceMembership): WorkspaceTierMode {
     return "ENTERPRISE_STRIPE";
   }
   return "SOLO";
+}
+
+function dateMs(value: string | null | undefined) {
+  if (!value) return 0;
+  const ms = new Date(value).getTime();
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+function compareValues(a: unknown, b: unknown, direction: SortDirection) {
+  const dir = direction === "asc" ? 1 : -1;
+
+  if (typeof a === "number" && typeof b === "number") {
+    return (a - b) * dir;
+  }
+
+  return (
+    String(a ?? "").localeCompare(String(b ?? ""), undefined, {
+      sensitivity: "base",
+      numeric: true,
+    }) * dir
+  );
+}
+
+function sortValueForUser(user: AdminUser, key: SortKey) {
+  const primary = primaryMembership(user);
+  const billing = billingOf(primary);
+
+  switch (key) {
+    case "name":
+      return user.name || "";
+    case "email":
+      return user.email || "";
+    case "role":
+      return user.role || "";
+    case "tier":
+      return primary ? workspaceTypeLabel(primary) : "";
+    case "workspace":
+      return primary?.workspaceName || "";
+    case "access":
+      return safeStr(billing.accessLevel).toUpperCase();
+    case "plan":
+      return safeStr(billing.plan).toUpperCase();
+    case "status":
+      return safeStr(billing.subscriptionStatus).toUpperCase();
+    case "lastLoginAt":
+      return dateMs(user.lastLoginAt);
+    case "createdAt":
+      return dateMs(user.createdAt);
+    default:
+      return "";
+  }
+}
+
+function FilterPill({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold " +
+        (active
+          ? "border-sky-400/30 bg-sky-500/10 text-sky-200"
+          : "border-slate-700 bg-slate-900 text-slate-400")
+      }
+    >
+      {children}
+    </span>
+  );
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  activeSortKey,
+  sortDirection,
+  onSort,
+  className = "",
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeSortKey: SortKey;
+  sortDirection: SortDirection;
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = activeSortKey === sortKey;
+  const arrow = active ? (sortDirection === "asc" ? "↑" : "↓") : "↕";
+
+  return (
+    <th className={`px-4 py-2 ${className}`}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="inline-flex items-center gap-1 whitespace-nowrap text-left text-[11px] uppercase tracking-[0.22em] text-slate-400 transition hover:text-slate-200"
+      >
+        <span>{label}</span>
+        <span className={active ? "text-slate-200" : "text-slate-600"}>{arrow}</span>
+      </button>
+    </th>
+  );
 }
 
 export default function AdminPage() {
@@ -300,15 +427,37 @@ export default function AdminPage() {
   const [syncingWorkspaceId, setSyncingWorkspaceId] = useState<string | null>(null);
   const [patchingWorkspaceId, setPatchingWorkspaceId] = useState<string | null>(null);
 
-  const [closingBeta, setClosingBeta] = useState(false);
-
   const [query, setQuery] = useState("");
   const [expandedUserIds, setExpandedUserIds] = useState<Record<string, boolean>>({});
 
   const [tierFilter, setTierFilter] = useState<"all" | "solo" | "team">("all");
   const [statusFilter, setStatusFilter] = useState<
-    "all" | "access_paid" | "access_beta" | "access_expired" | "sub_active" | "sub_trialing" | "sub_past_due" | "sub_canceled"
+    | "all"
+    | "access_paid"
+    | "access_beta"
+    | "access_expired"
+    | "sub_active"
+    | "sub_trialing"
+    | "sub_past_due"
+    | "sub_canceled"
   >("all");
+
+  const [sortKey, setSortKey] = useState<SortKey>("createdAt");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
+  function handleSort(nextKey: SortKey) {
+    setSortKey((prevKey) => {
+      if (prevKey === nextKey) {
+        setSortDirection((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+        return prevKey;
+      }
+
+      setSortDirection(
+        nextKey === "name" || nextKey === "email" || nextKey === "workspace" ? "asc" : "desc"
+      );
+      return nextKey;
+    });
+  }
 
   async function loadUsers() {
     try {
@@ -407,7 +556,6 @@ export default function AdminPage() {
         if (statusFilter === "access_paid") return access === "PAID";
         if (statusFilter === "access_beta") return access === "BETA";
         if (statusFilter === "access_expired") return access === "EXPIRED";
-
         if (statusFilter === "sub_active") return sub === "ACTIVE";
         if (statusFilter === "sub_trialing") return sub === "TRIALING";
         if (statusFilter === "sub_past_due") return sub === "PAST_DUE";
@@ -417,8 +565,12 @@ export default function AdminPage() {
       });
     }
 
-    return result;
-  }, [users, query, tierFilter, statusFilter]);
+    return [...result].sort((a, b) => {
+      const av = sortValueForUser(a, sortKey);
+      const bv = sortValueForUser(b, sortKey);
+      return compareValues(av, bv, sortDirection);
+    });
+  }, [users, query, tierFilter, statusFilter, sortKey, sortDirection]);
 
   const admins = useMemo(() => filteredUsers.filter((u) => u.role === "ADMIN"), [filteredUsers]);
   const nonAdmins = useMemo(() => filteredUsers.filter((u) => u.role !== "ADMIN"), [filteredUsers]);
@@ -479,8 +631,8 @@ export default function AdminPage() {
       mode === "ENTERPRISE_MANUAL"
         ? "Grant ENTERPRISE (Manual)?\n\nSets access=PAID, plan=ENTERPRISE, status=ACTIVE, includedSeats=5, seatLimit=5."
         : mode === "ENTERPRISE_STRIPE"
-        ? "Set ENTERPRISE (Stripe)?\n\nSets plan=ENTERPRISE and seats to 5. Stripe billing is expected to manage status."
-        : "Set SOLO?\n\nSets plan=STARTER and seats to 1."
+          ? "Set ENTERPRISE (Stripe)?\n\nSets plan=ENTERPRISE and seats to 5. Stripe billing is expected to manage status."
+          : "Set SOLO?\n\nSets plan=STARTER and seats to 1."
     );
     if (!ok) return;
 
@@ -518,8 +670,8 @@ export default function AdminPage() {
       accessLevel === "EXPIRED"
         ? "Set access to EXPIRED?\n\nThis will block the workspace and show upgrade everywhere."
         : accessLevel === "BETA"
-        ? "Set access to BETA?\n\nThis will allow access under beta gates."
-        : "Set access to PAID?\n\nThis will allow access under paid gates."
+          ? "Set access to BETA?\n\nThis will allow access under beta gates."
+          : "Set access to PAID?\n\nThis will allow access under paid gates."
     );
     if (!ok) return;
 
@@ -570,55 +722,58 @@ export default function AdminPage() {
     }
   }
 
-  async function closeBetaGlobally() {
-    const ok = window.confirm("Close beta globally?\n\nThis will move ALL BETA workspaces/users to EXPIRED.");
-    if (!ok) return;
-
-    setClosingBeta(true);
-    setError(null);
-
-    try {
-      const res = await fetch("/api/admin/beta/close", { method: "POST" });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || "Failed to close beta");
-
-      await loadUsers();
-      await loadMetrics();
-
-      alert(data?.message || "Beta closed.");
-    } catch (err: any) {
-      console.error("Close beta error", err);
-      setError(err.message || "Failed to close beta.");
-    } finally {
-      setClosingBeta(false);
-    }
+  function clearFilters() {
+    setQuery("");
+    setTierFilter("all");
+    setStatusFilter("all");
+    setSortKey("createdAt");
+    setSortDirection("desc");
   }
+
+  const hasActiveFilters =
+    query.trim().length > 0 ||
+    tierFilter !== "all" ||
+    statusFilter !== "all" ||
+    sortKey !== "createdAt" ||
+    sortDirection !== "desc";
 
   return (
     <div className="space-y-8">
       <PageHeader
         eyebrow="Admin"
         title="Avillo control panel"
-        subtitle="Workspace-first access + billing + user management."
+        subtitle="Workspace-first access, billing, and user management."
       />
 
       <section className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4">
           <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Total users</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{loadingMetrics ? "…" : metrics?.totals.totalUsers ?? "—"}</p>
-          <p className="mt-1 text-[11px] text-slate-400">Admins: {loadingMetrics ? "…" : metrics?.totals.adminCount ?? "—"}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">
+            {loadingMetrics ? "…" : metrics?.totals.totalUsers ?? "—"}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Admins: {loadingMetrics ? "…" : metrics?.totals.adminCount ?? "—"}
+          </p>
         </div>
 
         <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4">
           <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Workspaces</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{loadingMetrics ? "…" : metrics?.totals.totalWorkspaces ?? "—"}</p>
-          <p className="mt-1 text-[11px] text-slate-400">Seats: {loadingMetrics ? "…" : metrics?.totals.totalSeats ?? "—"}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">
+            {loadingMetrics ? "…" : metrics?.totals.totalWorkspaces ?? "—"}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Seats: {loadingMetrics ? "…" : metrics?.totals.totalSeats ?? "—"}
+          </p>
         </div>
 
         <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4">
           <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Active paid</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{loadingMetrics ? "…" : metrics?.totals.activePaidCount ?? "—"}</p>
-          <p className="mt-1 text-[11px] text-slate-400">Trialing: {loadingMetrics ? "…" : metrics?.statuses?.TRIALING ?? 0}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">
+            {loadingMetrics ? "…" : metrics?.totals.activePaidCount ?? "—"}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Trialing: {loadingMetrics ? "…" : metrics?.statuses?.TRIALING ?? 0}
+          </p>
         </div>
 
         <div className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-5 py-4">
@@ -630,71 +785,120 @@ export default function AdminPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-6 py-6 shadow-[0_0_40px_rgba(15,23,42,0.9)]">
-        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Users &amp; workspaces</p>
-            <p className="mt-1 text-[11px] text-slate-300/80">
-              Search name/email/brokerage/workspace/plan/status/stripe ids. Filters target the user’s primary workspace.
-            </p>
+      <section className="rounded-2xl border border-slate-700/70 bg-slate-950/80 px-4 py-5 shadow-[0_0_40px_rgba(15,23,42,0.9)] sm:px-6 sm:py-6">
+        <div className="mb-4 flex flex-col gap-4">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
+                Users &amp; workspaces
+              </p>
+              <p className="mt-1 text-[11px] text-slate-300/80">
+                Search name, email, brokerage, workspace, plan, status, or Stripe IDs.
+                Filters target the user’s primary workspace.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <FilterPill active={!!query.trim()}>Search</FilterPill>
+              <FilterPill active={tierFilter !== "all"}>Tier</FilterPill>
+              <FilterPill active={statusFilter !== "all"}>Status</FilterPill>
+              <FilterPill active={sortKey !== "createdAt" || sortDirection !== "desc"}>
+                Sort: {sortKey} {sortDirection}
+              </FilterPill>
+              <FilterPill active>{filteredUsers.length} shown</FilterPill>
+            </div>
           </div>
 
-          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search…" className="avillo-input w-full sm:w-96" />
+          <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between">
+            <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(280px,1fr)_180px_220px]">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search users, workspaces, plans, statuses, Stripe IDs…"
+                className="avillo-input w-full"
+              />
 
-            <select
-              value={tierFilter}
-              onChange={(e) => setTierFilter(e.target.value as any)}
-              className="rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] text-slate-200"
-              title="Tier filter (primary workspace)"
-            >
-              <option value="all">All tiers</option>
-              <option value="solo">Solo</option>
-              <option value="team">Team / Enterprise</option>
-            </select>
+              <select
+                value={tierFilter}
+                onChange={(e) => setTierFilter(e.target.value as "all" | "solo" | "team")}
+                className="h-10 w-full rounded-full border border-slate-700 bg-slate-900 px-3 text-[11px] text-slate-200"
+                title="Tier filter (primary workspace)"
+              >
+                <option value="all">All tiers</option>
+                <option value="solo">Solo</option>
+                <option value="team">Team / Enterprise</option>
+              </select>
 
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] text-slate-200"
-              title="Status filter (primary workspace)"
-            >
-              <option value="all">All statuses</option>
-              <option value="access_paid">PAID (access)</option>
-              <option value="access_beta">BETA (access)</option>
-              <option value="access_expired">EXPIRED (access)</option>
-              <option value="sub_active">ACTIVE (subscription)</option>
-              <option value="sub_trialing">TRIALING</option>
-              <option value="sub_past_due">PAST_DUE</option>
-              <option value="sub_canceled">CANCELED</option>
-            </select>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+                className="h-10 w-full rounded-full border border-slate-700 bg-slate-900 px-3 text-[11px] text-slate-200"
+                title="Status filter (primary workspace)"
+              >
+                <option value="all">All statuses</option>
+                <option value="access_paid">PAID (access)</option>
+                <option value="access_beta">BETA (access)</option>
+                <option value="access_expired">EXPIRED (access)</option>
+                <option value="sub_active">ACTIVE (subscription)</option>
+                <option value="sub_trialing">TRIALING</option>
+                <option value="sub_past_due">PAST_DUE</option>
+                <option value="sub_canceled">CANCELED</option>
+              </select>
+            </div>
 
-            <button
-              type="button"
-              onClick={closeBetaGlobally}
-              disabled={closingBeta}
-              className={
-                "rounded-full border px-4 py-2 text-[11px] font-semibold " +
-                (closingBeta
-                  ? "border-slate-700 bg-slate-900/60 text-slate-400 cursor-not-allowed"
-                  : "border-rose-300/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20")
-              }
-            >
-              {closingBeta ? "Closing beta…" : "Close beta globally"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void loadUsers();
+                  void loadMetrics();
+                }}
+                disabled={loading || loadingMetrics}
+                className={
+                  "h-10 rounded-full border px-4 text-[11px] font-semibold whitespace-nowrap " +
+                  (loading || loadingMetrics
+                    ? "cursor-not-allowed border-slate-700 bg-slate-900/60 text-slate-400"
+                    : "border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800")
+                }
+              >
+                {loading || loadingMetrics ? "Refreshing…" : "Refresh"}
+              </button>
 
-            {loading && <span className="text-[11px] text-slate-400 text-right">Loading…</span>}
+              <button
+                type="button"
+                onClick={clearFilters}
+                disabled={!hasActiveFilters}
+                className={
+                  "h-10 rounded-full border px-4 text-[11px] font-semibold whitespace-nowrap " +
+                  (!hasActiveFilters
+                    ? "cursor-not-allowed border-slate-700 bg-slate-900/60 text-slate-500"
+                    : "border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800")
+                }
+              >
+                Clear filters
+              </button>
+
+              {loading && <span className="text-[11px] text-slate-400">Loading…</span>}
+            </div>
           </div>
         </div>
 
         {error && <p className="mb-3 text-[11px] text-red-300">{error}</p>}
 
-        {!loading && !error && users.length === 0 && <p className="text-[11px] text-slate-400">No users found yet.</p>}
+        {!loading && !error && users.length === 0 && (
+          <p className="text-[11px] text-slate-400">No users found yet.</p>
+        )}
 
         {!loading && users.length > 0 && (
           <div className="space-y-8">
             <div>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-200">Admin accounts</p>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-200">
+                  Admin accounts
+                </p>
+                <p className="text-[11px] text-slate-400">{admins.length} total</p>
+              </div>
+
               {admins.length === 0 ? (
                 <p className="text-[11px] text-slate-400">No admins match this search.</p>
               ) : (
@@ -710,12 +914,23 @@ export default function AdminPage() {
                   onSyncWorkspace={syncWorkspaceFromStripe}
                   onSetWorkspaceTier={setWorkspaceTier}
                   onSetWorkspaceAccess={setWorkspaceAccess}
+                  sortKey={sortKey}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
                 />
               )}
             </div>
 
             <div>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">User accounts</p>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
+                  User accounts
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  {nonAdmins.length} total
+                </p>
+              </div>
+
               {nonAdmins.length === 0 ? (
                 <p className="text-[11px] text-slate-400">No users match this search.</p>
               ) : (
@@ -731,6 +946,10 @@ export default function AdminPage() {
                   onSyncWorkspace={syncWorkspaceFromStripe}
                   onSetWorkspaceTier={setWorkspaceTier}
                   onSetWorkspaceAccess={setWorkspaceAccess}
+                  sortKey={sortKey}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
+                  maxBodyHeightClass="max-h-[620px]"
                 />
               )}
             </div>
@@ -753,6 +972,10 @@ function UserTable({
   onSyncWorkspace,
   onSetWorkspaceTier,
   onSetWorkspaceAccess,
+  sortKey,
+  sortDirection,
+  onSort,
+  maxBodyHeightClass,
 }: {
   users: AdminUser[];
   expandedUserIds: Record<string, boolean>;
@@ -765,26 +988,80 @@ function UserTable({
   onSyncWorkspace: (workspaceId: string) => void;
   onSetWorkspaceTier: (workspaceId: string, mode: WorkspaceTierMode) => void;
   onSetWorkspaceAccess: (workspaceId: string, access: AccessLevel) => void;
+  sortKey: SortKey;
+  sortDirection: SortDirection;
+  onSort: (key: SortKey) => void;
+  maxBodyHeightClass?: string;
 }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/60">
+    <div
+      className={`overflow-auto rounded-xl border border-slate-800/80 bg-slate-950/60 ${maxBodyHeightClass ?? ""}`}
+    >
       <table className="min-w-[2680px] w-full text-left text-sm text-slate-200">
         <thead>
-          <tr className="text-[11px] uppercase text-slate-400 border-b border-slate-800/80 bg-slate-950/80">
-            <th className="px-4 py-2">User</th>
-            <th className="px-4 py-2">Email</th>
+          <tr className="sticky top-0 z-10 border-b border-slate-800/80 bg-slate-950/95 text-[11px] uppercase text-slate-400 backdrop-blur">
+            <SortHeader
+              label="User"
+              sortKey="name"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortHeader
+              label="Email"
+              sortKey="email"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
             <th className="px-4 py-2">Brokerage</th>
-            <th className="px-4 py-2">Role</th>
+            <SortHeader
+              label="Role"
+              sortKey="role"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
 
-            <th className="px-4 py-2">Tier</th>
-            <th className="px-4 py-2">Workspace</th>
+            <SortHeader
+              label="Tier"
+              sortKey="tier"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortHeader
+              label="Workspace"
+              sortKey="workspace"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
             <th className="px-4 py-2">Ws role</th>
 
-            <th className="px-4 py-2">Access</th>
+            <SortHeader
+              label="Access"
+              sortKey="access"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
             <th className="px-4 py-2">Access grant</th>
 
-            <th className="px-4 py-2">Plan</th>
-            <th className="px-4 py-2">Status</th>
+            <SortHeader
+              label="Plan"
+              sortKey="plan"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortHeader
+              label="Status"
+              sortKey="status"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
             <th className="px-4 py-2">Trial ends</th>
             <th className="px-4 py-2">Period end</th>
 
@@ -796,8 +1073,20 @@ function UserTable({
 
             <th className="px-4 py-2">Workspaces</th>
             <th className="px-4 py-2">Tokens</th>
-            <th className="px-4 py-2">Last login</th>
-            <th className="px-4 py-2">Created</th>
+            <SortHeader
+              label="Last login"
+              sortKey="lastLoginAt"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
+            <SortHeader
+              label="Created"
+              sortKey="createdAt"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSort={onSort}
+            />
           </tr>
         </thead>
 
@@ -808,20 +1097,28 @@ function UserTable({
             const pb = billingOf(primary);
 
             const tier = primary ? workspaceTypeLabel(primary) : "—";
-            const access = primary ? workspaceAccessBadge(pb.accessLevel) : { label: "—", tone: "warn" as const };
+            const access = primary
+              ? workspaceAccessBadge(pb.accessLevel)
+              : { label: "—", tone: "warn" as const };
             const accessClass = toneBadge(access.tone);
 
             const seats = primary ? seatsLabel(pb.seatsUsed, pb.includedSeats) : "—";
-            const seatsCls = primary ? toneBadge(seatsTone(pb.seatsUsed, pb.includedSeats)) : toneBadge("warn");
+            const seatsCls = primary
+              ? toneBadge(seatsTone(pb.seatsUsed, pb.includedSeats))
+              : toneBadge("warn");
 
-            const stripeBadge = primary ? stripeSyncBadgeForWorkspace(pb) : { label: "—", tone: "warn" as const };
+            const stripeBadge = primary
+              ? stripeSyncBadgeForWorkspace(pb)
+              : { label: "—", tone: "warn" as const };
             const stripeBadgeClass = toneBadge(stripeBadge.tone);
 
             const plan = pb.plan ?? "—";
             const status = pb.subscriptionStatus ?? "—";
 
             const busyPrimary =
-              !!primary && (patchingWorkspaceId === primary.workspaceId || syncingWorkspaceId === primary.workspaceId);
+              !!primary &&
+              (patchingWorkspaceId === primary.workspaceId ||
+                syncingWorkspaceId === primary.workspaceId);
 
             const currentAccess = isAccessLevel(pb.accessLevel)
               ? (String(pb.accessLevel).toUpperCase() as AccessLevel)
@@ -837,23 +1134,25 @@ function UserTable({
                     (idx % 2 === 0 ? "bg-slate-950/40" : "bg-slate-950/20")
                   }
                 >
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2 align-top">
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-900"
-                        onClick={() => setExpandedUserIds((prev) => ({ ...prev, [u.id]: !prev[u.id] }))}
+                        onClick={() =>
+                          setExpandedUserIds((prev) => ({ ...prev, [u.id]: !prev[u.id] }))
+                        }
                       >
                         {isExpanded ? "–" : "+"}
                       </button>
-                      <span>{u.name || "—"}</span>
+                      <span className="font-medium text-slate-100">{u.name || "—"}</span>
                     </div>
                   </td>
 
-                  <td className="px-4 py-2">{u.email}</td>
-                  <td className="px-4 py-2">{u.brokerage || "—"}</td>
+                  <td className="px-4 py-2 align-top">{u.email}</td>
+                  <td className="px-4 py-2 align-top">{u.brokerage || "—"}</td>
 
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2 align-top">
                     <select
                       disabled={savingUserId === u.id}
                       value={u.role}
@@ -865,18 +1164,21 @@ function UserTable({
                     </select>
                   </td>
 
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2 align-top">
                     <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-200">
                       {tier}
                     </span>
                   </td>
 
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2 align-top">
                     {primary ? (
                       <div>
-                        <p className="text-[12px] font-semibold text-slate-100">{primary.workspaceName}</p>
+                        <p className="text-[12px] font-semibold text-slate-100">
+                          {primary.workspaceName}
+                        </p>
                         <p className="text-[10px] text-slate-500">
-                          ws: …{primary.workspaceId.slice(-8)} • created {formatDateOnly(primary.workspaceCreatedAt)}
+                          ws: …{primary.workspaceId.slice(-8)} • created{" "}
+                          {formatDateOnly(primary.workspaceCreatedAt)}
                         </p>
                       </div>
                     ) : (
@@ -884,7 +1186,7 @@ function UserTable({
                     )}
                   </td>
 
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2 align-top">
                     {primary ? (
                       <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-200">
                         {primary.role}
@@ -894,18 +1196,22 @@ function UserTable({
                     )}
                   </td>
 
-                  <td className="px-4 py-2">
-                    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold ${accessClass}`}>
+                  <td className="px-4 py-2 align-top">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-semibold ${accessClass}`}
+                    >
                       {access.label}
                     </span>
                   </td>
 
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2 align-top">
                     {primary ? (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <select
                           value={currentAccess}
-                          onChange={(e) => onSetWorkspaceAccess(primary.workspaceId, e.target.value as AccessLevel)}
+                          onChange={(e) =>
+                            onSetWorkspaceAccess(primary.workspaceId, e.target.value as AccessLevel)
+                          }
                           disabled={busyPrimary}
                           className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px]"
                         >
@@ -913,32 +1219,42 @@ function UserTable({
                           <option value="PAID">PAID</option>
                           <option value="EXPIRED">EXPIRED</option>
                         </select>
-                        {busyPrimary ? <span className="text-[11px] text-slate-500">Saving…</span> : null}
+                        {busyPrimary ? (
+                          <span className="text-[11px] text-slate-500">Saving…</span>
+                        ) : null}
                       </div>
                     ) : (
                       <span className="text-slate-500">—</span>
                     )}
                   </td>
 
-                  <td className="px-4 py-2">{String(plan)}</td>
-                  <td className="px-4 py-2">{String(status)}</td>
-                  <td className="px-4 py-2">{formatDateTime(pb.trialEndsAt ?? null)}</td>
-                  <td className="px-4 py-2">{formatDateTime(pb.currentPeriodEnd ?? null)}</td>
-
-                  <td className="px-4 py-2">
-                    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${seatsCls}`}>{seats}</span>
+                  <td className="px-4 py-2 align-top">{String(plan)}</td>
+                  <td className="px-4 py-2 align-top">{String(status)}</td>
+                  <td className="px-4 py-2 align-top">{formatDateTime(pb.trialEndsAt ?? null)}</td>
+                  <td className="px-4 py-2 align-top">
+                    {formatDateTime(pb.currentPeriodEnd ?? null)}
                   </td>
 
-                  <td className="px-4 py-2">{seatLimit == null ? "—" : seatLimit}</td>
+                  <td className="px-4 py-2 align-top">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${seatsCls}`}
+                    >
+                      {seats}
+                    </span>
+                  </td>
 
-                  <td className="px-4 py-2">
-                    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${stripeBadgeClass}`}>
+                  <td className="px-4 py-2 align-top">{seatLimit == null ? "—" : seatLimit}</td>
+
+                  <td className="px-4 py-2 align-top">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] ${stripeBadgeClass}`}
+                    >
                       {stripeBadge.label}
                     </span>
                   </td>
 
-                  <td className="px-4 py-2">
-                    <div className="flex items-center gap-2">
+                  <td className="px-4 py-2 align-top">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         onClick={() => onOpenStripe(pb.stripeCustomerId ?? null)}
                         disabled={!pb.stripeCustomerId}
@@ -946,7 +1262,7 @@ function UserTable({
                           "rounded px-2 py-1 text-[11px] font-semibold border " +
                           (pb.stripeCustomerId
                             ? "bg-indigo-500/10 text-indigo-200 border-indigo-400/30 hover:bg-indigo-500/20"
-                            : "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed")
+                            : "cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-500")
                         }
                       >
                         Portal
@@ -958,8 +1274,8 @@ function UserTable({
                         className={
                           "rounded px-2 py-1 text-[11px] font-semibold border " +
                           (!primary || syncingWorkspaceId === primary.workspaceId
-                            ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
-                            : "bg-sky-500/10 text-sky-200 border-sky-400/30 hover:bg-sky-500/20")
+                            ? "cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-500"
+                            : "border-sky-400/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20")
                         }
                       >
                         {primary && syncingWorkspaceId === primary.workspaceId ? "Syncing…" : "Sync"}
@@ -971,16 +1287,18 @@ function UserTable({
                     </div>
                   </td>
 
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2 align-top">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[12px] text-slate-200">{u.workspaceCount}</span>
-                      <span className="text-[10px] text-slate-500">{u.workspaceCount === 1 ? "workspace" : "workspaces"}</span>
+                      <span className="text-[10px] text-slate-500">
+                        {u.workspaceCount === 1 ? "workspace" : "workspaces"}
+                      </span>
                     </div>
                   </td>
 
-                  <td className="px-4 py-2">{u.openAITokensUsed}</td>
-                  <td className="px-4 py-2">{formatDateTime(u.lastLoginAt)}</td>
-                  <td className="px-4 py-2">{formatDateOnly(u.createdAt)}</td>
+                  <td className="px-4 py-2 align-top">{u.openAITokensUsed}</td>
+                  <td className="px-4 py-2 align-top">{formatDateTime(u.lastLoginAt)}</td>
+                  <td className="px-4 py-2 align-top">{formatDateOnly(u.createdAt)}</td>
                 </tr>
 
                 {isExpanded && (
@@ -988,7 +1306,9 @@ function UserTable({
                     <td colSpan={22} className="px-4 py-3">
                       <div className="rounded-xl border border-slate-800/80 bg-slate-950/40 px-4 py-3">
                         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                          <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Workspace memberships</p>
+                          <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">
+                            Workspace memberships
+                          </p>
                         </div>
 
                         {u.memberships.length === 0 ? (
@@ -997,31 +1317,39 @@ function UserTable({
                           <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                             {u.memberships.map((m) => {
                               const b = billingOf(m);
-                              const access = workspaceAccessBadge(b.accessLevel);
+                              const accessBadge = workspaceAccessBadge(b.accessLevel);
                               const stripe = stripeSyncBadgeForWorkspace(b);
-                              const tier = workspaceTypeLabel(m);
+                              const tierLabel = workspaceTypeLabel(m);
                               const seats = seatsLabel(b.seatsUsed, b.includedSeats);
 
                               const tierMode = currentTierMode(m);
-                              const busy = patchingWorkspaceId === m.workspaceId || syncingWorkspaceId === m.workspaceId;
+                              const busy =
+                                patchingWorkspaceId === m.workspaceId ||
+                                syncingWorkspaceId === m.workspaceId;
 
                               const curAccess = isAccessLevel(b.accessLevel)
                                 ? (String(b.accessLevel).toUpperCase() as AccessLevel)
                                 : ("BETA" as AccessLevel);
 
                               return (
-                                <div key={`${u.id}:${m.workspaceId}:${m.role}`} className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2">
-                                  <div className="flex items-center justify-between gap-3">
+                                <div
+                                  key={`${u.id}:${m.workspaceId}:${m.role}`}
+                                  className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-3"
+                                >
+                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div>
-                                      <p className="text-[12px] font-semibold text-slate-100">{m.workspaceName}</p>
+                                      <p className="text-[12px] font-semibold text-slate-100">
+                                        {m.workspaceName}
+                                      </p>
                                       <p className="text-[10px] text-slate-500">
-                                        ws: …{m.workspaceId.slice(-8)} • created {formatDateOnly(m.workspaceCreatedAt)}
+                                        ws: …{m.workspaceId.slice(-8)} • created{" "}
+                                        {formatDateOnly(m.workspaceCreatedAt)}
                                       </p>
                                     </div>
 
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
                                       <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-200">
-                                        {tier}
+                                        {tierLabel}
                                       </span>
                                       <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-200">
                                         {m.role}
@@ -1030,12 +1358,19 @@ function UserTable({
                                   </div>
 
                                   <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                    <div className="text-[10px] text-slate-400 uppercase tracking-[0.22em]">Access</div>
+                                    <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400">
+                                      Access
+                                    </div>
 
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
                                       <select
                                         value={curAccess}
-                                        onChange={(e) => onSetWorkspaceAccess(m.workspaceId, e.target.value as AccessLevel)}
+                                        onChange={(e) =>
+                                          onSetWorkspaceAccess(
+                                            m.workspaceId,
+                                            e.target.value as AccessLevel
+                                          )
+                                        }
                                         disabled={busy}
                                         className="rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] text-slate-200"
                                       >
@@ -1043,31 +1378,48 @@ function UserTable({
                                         <option value="PAID">PAID</option>
                                         <option value="EXPIRED">EXPIRED</option>
                                       </select>
-                                      {busy ? <span className="text-[11px] text-slate-400">Saving…</span> : null}
+                                      {busy ? (
+                                        <span className="text-[11px] text-slate-400">Saving…</span>
+                                      ) : null}
                                     </div>
                                   </div>
 
                                   <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                    <div className="text-[10px] text-slate-400 uppercase tracking-[0.22em]">Tier</div>
+                                    <div className="text-[10px] uppercase tracking-[0.22em] text-slate-400">
+                                      Tier
+                                    </div>
 
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
                                       <select
                                         value={tierMode}
-                                        onChange={(e) => onSetWorkspaceTier(m.workspaceId, e.target.value as WorkspaceTierMode)}
+                                        onChange={(e) =>
+                                          onSetWorkspaceTier(
+                                            m.workspaceId,
+                                            e.target.value as WorkspaceTierMode
+                                          )
+                                        }
                                         disabled={busy}
                                         className="rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] text-slate-200"
                                       >
                                         <option value="SOLO">SOLO</option>
-                                        <option value="ENTERPRISE_STRIPE">ENTERPRISE (Stripe)</option>
-                                        <option value="ENTERPRISE_MANUAL">ENTERPRISE (Manual)</option>
+                                        <option value="ENTERPRISE_STRIPE">
+                                          ENTERPRISE (Stripe)
+                                        </option>
+                                        <option value="ENTERPRISE_MANUAL">
+                                          ENTERPRISE (Manual)
+                                        </option>
                                       </select>
-                                      {busy ? <span className="text-[11px] text-slate-400">Saving…</span> : null}
+                                      {busy ? (
+                                        <span className="text-[11px] text-slate-400">Saving…</span>
+                                      ) : null}
                                     </div>
                                   </div>
 
                                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
-                                    <span className={`inline-flex items-center rounded-full border px-2 py-1 font-semibold ${toneBadge(access.tone)}`}>
-                                      {access.label}
+                                    <span
+                                      className={`inline-flex items-center rounded-full border px-2 py-1 font-semibold ${toneBadge(accessBadge.tone)}`}
+                                    >
+                                      {accessBadge.label}
                                     </span>
 
                                     <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-1 font-semibold text-slate-200">
@@ -1086,7 +1438,9 @@ function UserTable({
                                       Seats: {seats}
                                     </span>
 
-                                    <span className={`inline-flex items-center rounded-full border px-2 py-1 font-semibold ${toneBadge(stripe.tone)}`}>
+                                    <span
+                                      className={`inline-flex items-center rounded-full border px-2 py-1 font-semibold ${toneBadge(stripe.tone)}`}
+                                    >
                                       {stripe.label}
                                     </span>
 
@@ -1097,7 +1451,7 @@ function UserTable({
                                     ) : null}
                                   </div>
 
-                                  <div className="mt-2 flex items-center gap-2">
+                                  <div className="mt-3 flex flex-wrap items-center gap-2">
                                     <button
                                       onClick={() => onOpenStripe(b.stripeCustomerId ?? null)}
                                       disabled={!b.stripeCustomerId}
@@ -1105,7 +1459,7 @@ function UserTable({
                                         "rounded px-2 py-1 text-[11px] font-semibold border " +
                                         (b.stripeCustomerId
                                           ? "bg-indigo-500/10 text-indigo-200 border-indigo-400/30 hover:bg-indigo-500/20"
-                                          : "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed")
+                                          : "cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-500")
                                       }
                                     >
                                       Portal
@@ -1117,14 +1471,16 @@ function UserTable({
                                       className={
                                         "rounded px-2 py-1 text-[11px] font-semibold border " +
                                         (syncingWorkspaceId === m.workspaceId
-                                          ? "bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed"
-                                          : "bg-sky-500/10 text-sky-200 border-sky-400/30 hover:bg-sky-500/20")
+                                          ? "cursor-not-allowed border-slate-700 bg-slate-800/50 text-slate-500"
+                                          : "border-sky-400/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20")
                                       }
                                     >
                                       {syncingWorkspaceId === m.workspaceId ? "Syncing…" : "Sync"}
                                     </button>
 
-                                    <div className="ml-auto text-[10px] text-slate-500">Joined: {m.joinedAt ? formatDateTime(m.joinedAt) : "—"}</div>
+                                    <div className="ml-auto text-[10px] text-slate-500">
+                                      Joined: {m.joinedAt ? formatDateTime(m.joinedAt) : "—"}
+                                    </div>
                                   </div>
 
                                   <div className="mt-2 grid grid-cols-1 gap-1 text-[10px] text-slate-500">
@@ -1132,7 +1488,9 @@ function UserTable({
                                     <div>Period end: {formatDateTime(b.currentPeriodEnd)}</div>
                                     <div>
                                       Stripe: {b.stripeCustomerId ? `cus_…${b.stripeCustomerId.slice(-6)}` : "—"}{" "}
-                                      {b.stripeSubscriptionId ? `• sub_…${b.stripeSubscriptionId.slice(-6)}` : ""}
+                                      {b.stripeSubscriptionId
+                                        ? `• sub_…${b.stripeSubscriptionId.slice(-6)}`
+                                        : ""}
                                     </div>
                                   </div>
                                 </div>
